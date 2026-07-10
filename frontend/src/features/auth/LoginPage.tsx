@@ -252,7 +252,7 @@ const badges = [
   },
 ];
 
-function FigmaLogo({ className = "" }: { className?: string }) {
+export function FigmaLogo({ className = "" }: { className?: string }) {
   return (
     <div
       className={`relative h-[34px] w-[193px] shrink-0 overflow-hidden ${className}`}
