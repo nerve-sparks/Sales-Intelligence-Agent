@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
 
-type AuthMode = "login" | "forgot";
+type AuthMode = "login" | "forgot" | "mfa";
 
 const asset = (name: string) =>
   new URL(`../../assets/figma/login/${name}`, import.meta.url).href;
@@ -123,6 +123,12 @@ const screenCopy = {
     description:
       "Enter your registered email address and we'll send you a secure link to reset your password.",
   },
+  mfa: {
+    headline: ["One more step", "to secure your account"],
+    accent: "Security. Built in.",
+    description:
+      "We've sent a verification code to your device. Enter the code below to continue.",
+  },
 };
 
 const featureSets = {
@@ -172,6 +178,32 @@ const featureSets = {
       text: "We never share your information with anyone.",
     },
   ],
+  mfa: [
+    {
+      icon: icons[8],
+      bg: "#ffffff",
+      title: "Enterprise-grade security",
+      text: "Your data is protected with advanced encryption and access controls.",
+    },
+    {
+      icon: icons[9],
+      bg: "#ffffff",
+      title: "Only authorized access",
+      text: "Multi-factor authentication ensures that only you can access your account.",
+    },
+    {
+      icon: icons[5],
+      bg: "#ffffff",
+      title: "Secure. Private. Trusted.",
+      text: "We follow industry best practices to keep your information safe.",
+    },
+    {
+      icon: icons[3],
+      bg: "#ffffff",
+      title: "You're in control",
+      text: "Manage your security preferences anytime from account settings.",
+    },
+  ],
 };
 
 const formCopy = {
@@ -185,6 +217,11 @@ const formCopy = {
     subtitle: "No worries! Enter your email and we'll send you a link to reset it.",
     submit: "Send Reset Link",
   },
+  mfa: {
+    title: "Verify Your Identity",
+    subtitle: "Enter the 6-digit code sent to",
+    submit: "Verify Code",
+  },
 };
 
 function getInitialMode(): AuthMode {
@@ -192,9 +229,15 @@ function getInitialMode(): AuthMode {
     return "login";
   }
 
-  return window.location.pathname.includes("forgot-password")
-    ? "forgot"
-    : "login";
+  if (window.location.pathname.includes("mfa-verification")) {
+    return "mfa";
+  }
+
+  if (window.location.pathname.includes("forgot-password")) {
+    return "forgot";
+  }
+
+  return "login";
 }
 
 const badges = [
@@ -269,6 +312,139 @@ function FeatureList({ mode }: { mode: AuthMode }) {
   );
 }
 
+function MfaVerificationBody() {
+  const [code, setCode] = useState(Array(6).fill(""));
+  const inputRefs = useRef<Array<HTMLInputElement | null>>([]);
+
+  const handleCodeChange = (
+    index: number,
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const value = event.target.value.replace(/\D/g, "").slice(-1);
+    const nextCode = [...code];
+    nextCode[index] = value;
+    setCode(nextCode);
+
+    if (value && index < inputRefs.current.length - 1) {
+      inputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleCodeKeyDown = (
+    index: number,
+    event: KeyboardEvent<HTMLInputElement>,
+  ) => {
+    if (event.key === "Backspace" && !code[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus();
+    }
+  };
+
+  return (
+    <>
+      <div className="flex w-full flex-col items-center gap-[8px]">
+        <div className="relative h-[51px] w-[52px]">
+          <img
+            alt=""
+            className="absolute left-[-34.62%] top-[-35.29%] h-[170.58%] w-[169.23%] max-w-none"
+            src={container}
+          />
+        </div>
+        <h2 className="m-0 pt-[clamp(0.75rem,2vh,22px)] text-center font-['IBM_Plex_Sans'] text-[clamp(1.875rem,2.5vw,34px)] font-bold leading-[1.2] text-[#0f172a]">
+          Verify Your Identity
+        </h2>
+        <div className="text-center font-['IBM_Plex_Sans'] text-[clamp(0.95rem,1.25vw,17px)] leading-[25px] text-[#64748b]">
+          <p className="m-0">Enter the 6-digit code sent to</p>
+          <p className="m-0">
+            <span className="font-medium text-[#005bff]">
+              arjun.kumar@xsparks.ai
+            </span>
+            <span className="mx-[14px] text-[#cbd5e1]">|</span>
+            <button
+              className="bg-transparent p-0 font-medium text-[#005bff]"
+              type="button"
+            >
+              Change
+            </button>
+          </p>
+        </div>
+      </div>
+
+      <form
+        className="flex w-full flex-col items-center gap-[clamp(1rem,2vh,24px)]"
+        onSubmit={(event) => event.preventDefault()}
+      >
+        <div className="grid w-full max-w-[448px] grid-cols-6 gap-[clamp(0.4rem,0.8vw,0.75rem)]">
+          {code.map((digit, index) => (
+            <input
+              aria-label={`Verification code digit ${index + 1}`}
+              autoComplete={index === 0 ? "one-time-code" : "off"}
+              className="aspect-square min-w-0 rounded-[10px] border border-[#dbe4f0] bg-white text-center font-['IBM_Plex_Sans'] text-[clamp(1.35rem,2vw,30px)] font-medium leading-none text-[#005bff] outline-none shadow-[0px_1px_2px_rgba(15,23,42,0.03)] focus:border-[#005bff] focus:ring-2 focus:ring-[#005bff]/15"
+              inputMode="numeric"
+              key={`mfa-code-${index}`}
+              maxLength={1}
+              onChange={(event) => handleCodeChange(index, event)}
+              onKeyDown={(event) => handleCodeKeyDown(index, event)}
+              ref={(element) => {
+                inputRefs.current[index] = element;
+              }}
+              type="text"
+              value={digit}
+            />
+          ))}
+        </div>
+
+        <p className="m-0 font-['IBM_Plex_Sans'] text-[clamp(1rem,1.3vw,19px)] font-medium leading-[28px] text-[#64748b]">
+          Code expires in{" "}
+          <span className="font-normal text-[#f75317]">02:48</span>
+        </p>
+
+        <button
+          className="flex h-[54px] w-full max-w-[448px] items-center justify-center gap-[8px] rounded-[10px] bg-gradient-to-r from-[#ff5a18] via-[#c331d1] to-[#005bff] px-[16px] py-[12px] shadow-[0px_10px_15px_-3px_rgba(249,115,22,0.2),0px_4px_6px_-4px_rgba(249,115,22,0.2)]"
+          type="submit"
+        >
+          <span className="font-['IBM_Plex_Sans'] text-[17px] font-bold leading-[24px] text-white">
+            Verify Code
+          </span>
+          <img alt="" className="size-[22px]" src={icons[7]} />
+        </button>
+      </form>
+
+      <div className="flex w-full max-w-[448px] items-center gap-[16px] self-center">
+        <div className="h-px flex-1 bg-[#e2e8f0]" />
+        <span className="whitespace-nowrap font-['IBM_Plex_Sans'] text-[15px] font-bold leading-[22px] text-[#64748b]">
+          Didn't receive the code?
+        </span>
+        <div className="h-px flex-1 bg-[#e2e8f0]" />
+      </div>
+
+      <div className="flex w-full flex-wrap items-center justify-center gap-x-[clamp(1.5rem,3.2vw,3rem)] gap-y-3 font-['IBM_Plex_Sans'] text-[16px] font-bold leading-[24px]">
+        <button
+          className="flex items-center gap-[12px] bg-transparent p-0 text-[#005bff]"
+          type="button"
+        >
+          <img alt="" className="size-[22px]" src={icons[10]} />
+          Resend Code
+        </button>
+        <button
+          className="flex items-center gap-[12px] bg-transparent p-0 text-[#0f172a]"
+          type="button"
+        >
+          <img alt="" className="size-[22px]" src={icons[5]} />
+          Use Backup Code
+        </button>
+      </div>
+
+      <div className="mt-auto flex flex-wrap items-center justify-center gap-x-2 gap-y-1 pt-[clamp(0.75rem,2.5vh,2rem)] font-['IBM_Plex_Sans'] text-[clamp(0.95rem,1.2vw,17px)] leading-[24px]">
+        <img alt="" className="size-[18px]" src={icons[5]} />
+        <span className="text-[#475569]">Having trouble?</span>
+        <a className="font-bold text-[#005bff] no-underline" href="/support">
+          Contact support
+        </a>
+      </div>
+    </>
+  );
+}
+
 function LoginForm({
   mode,
   onBack,
@@ -279,18 +455,30 @@ function LoginForm({
   onForgot: () => void;
 }) {
   const isForgot = mode === "forgot";
+  const isMfa = mode === "mfa";
   const copy = formCopy[mode];
+  const cardClassName = isMfa
+    ? "flex min-h-[clamp(610px,63vh,660px)] w-full max-w-[560px] flex-col gap-[23px] rounded-[24px] border border-[#f1f5f9] bg-white p-[clamp(1.875rem,3.25vw,56px)] shadow-[0px_20px_25px_rgba(0,0,0,0.05)]"
+    : "flex min-h-[clamp(610px,63vh,660px)] w-full max-w-[560px] flex-col gap-[23px] rounded-[24px] border border-[#f1f5f9] bg-white p-[clamp(1.875rem,3.25vw,56px)] shadow-[0px_20px_25px_rgba(0,0,0,0.05)]";
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    if (!isForgot) {
+    if (!isForgot && !isMfa) {
       onForgot();
     }
   };
 
+  if (isMfa) {
+    return (
+      <div className={cardClassName}>
+        <MfaVerificationBody />
+      </div>
+    );
+  }
+
   return (
-    <div className="flex min-h-[clamp(610px,63vh,660px)] w-full max-w-[560px] flex-col gap-[23px] rounded-[24px] border border-[#f1f5f9] bg-white p-[clamp(1.875rem,3.25vw,56px)] shadow-[0px_20px_25px_rgba(0,0,0,0.05)]">
+    <div className={cardClassName}>
       <div className="flex w-full flex-col items-center gap-[8px]">
         <div className="relative h-[51px] w-[52px]">
           <img
@@ -465,6 +653,9 @@ function TrustBadges() {
 export function LoginPage() {
   const [mode, setMode] = useState<AuthMode>(getInitialMode);
   const copy = screenCopy[mode];
+  const isMfa = mode === "mfa";
+  const sectionClassName =
+    "relative z-10 grid flex-1 items-center gap-[clamp(1.25rem,3.4vw,4rem)] pb-[clamp(1rem,2vh,2rem)] pt-0 lg:grid-cols-[minmax(0,1fr)_minmax(460px,560px)]";
 
   const goToLogin = () => {
     setMode("login");
@@ -486,7 +677,7 @@ export function LoginPage() {
           <FigmaLogo className="origin-left -translate-x-[clamp(0.5rem,0.9vw,1rem)] translate-y-[clamp(0.95rem,1.8vh,1.35rem)] scale-105 sm:scale-125" />
         </header>
 
-        <section className="relative z-10 grid flex-1 items-center gap-[clamp(1.25rem,3.4vw,4rem)] pb-[clamp(1rem,2vh,2rem)] pt-0 lg:grid-cols-[minmax(0,1fr)_minmax(460px,560px)]">
+        <section className={sectionClassName}>
           <div className="relative min-h-0 md:min-h-[600px] 2xl:min-h-[690px]">
             <div className="relative z-10 max-w-[620px] translate-y-[clamp(-3.25rem,-5vh,)]">
               <h1 className="m-0 font-['IBM_Plex_Sans'] text-[clamp(2.35rem,4vw,54px)] font-bold leading-[1.05] tracking-normal text-[#0f172a]">
@@ -522,7 +713,7 @@ export function LoginPage() {
               onBack={goToLogin}
               onForgot={goToForgot}
             />
-            <TrustBadges />
+            {!isMfa && <TrustBadges />}
           </div>
         </section>
       </div>
