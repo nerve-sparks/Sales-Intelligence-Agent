@@ -6,6 +6,7 @@ Inserts sample data for 50 US Manufacturing Companies across all 5 tables:
   - company_intent
   - company_news
   - company_scoop
+  
 
 Usage:
     python seeddata.py

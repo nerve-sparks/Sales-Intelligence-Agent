@@ -1,9 +1,14 @@
 from fastapi import FastAPI
 from sqlalchemy import text
 
+from app.controllers import icp, scores, signals
 from app.core.db import async_session_maker
 
 app = FastAPI(title="SIGNAL Backend")
+
+app.include_router(signals.router)
+app.include_router(scores.router)
+app.include_router(icp.router)
 
 
 @app.get("/health")
