@@ -2117,7 +2117,7 @@ function OnboardingCard() {
   };
 
   return (
-    <section className="relative z-20 flex min-h-[747px] w-full max-w-[749px] flex-col rounded-[24px] bg-white px-[40px] pb-[20px] pt-[40px] shadow-[0px_4px_12px_rgba(0,0,0,0.04)]">
+    <section className="relative z-20 flex min-h-[720px] w-full flex-col bg-white px-[36px] pb-[18px] pt-[34px]">
       <OnboardingStepper activeStep={stepperStep} />
 
       <div className="mt-[39px]">
@@ -2260,34 +2260,52 @@ function OnboardingCard() {
 export function OnboardingPage() {
   return (
     <main
-      className="min-h-screen overflow-x-hidden"
+      className="min-h-screen overflow-x-hidden px-[16px] py-[18px] lg:px-[28px] lg:py-[32px]"
       style={{ backgroundImage: pageBackground }}
     >
-      <div className="relative mx-auto min-h-screen w-full max-w-[1280px] overflow-hidden lg:min-h-[840px] lg:origin-top lg:scale-[1.04] xl:scale-[1.08] 2xl:scale-[1.13]">
-        <section className="relative z-10 min-h-[390px] px-[24px] pt-[32px] lg:absolute lg:bottom-[164px] lg:left-[2.5%] lg:right-1/2 lg:top-0 lg:min-h-0 lg:px-0 lg:pt-0">
+      <div className="relative mx-auto grid min-h-[720px] w-full max-w-[1440px] overflow-hidden rounded-[24px] bg-white shadow-[0px_18px_45px_rgba(15,23,42,0.10)] lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[350px_minmax(0,1fr)]">
+        <section className="relative z-10 flex min-h-[360px] flex-col overflow-hidden bg-[#eef2ff] px-[28px] py-[30px] lg:min-h-0 lg:px-[38px] lg:py-[42px]">
           <img
             alt=""
-            className="pointer-events-none absolute left-1/2 top-[175px] z-0 w-[760px] max-w-none -translate-x-1/2 select-none object-cover opacity-80 sm:top-[140px] lg:left-[-345px] lg:top-[156px] lg:h-[681px] lg:w-[1022px] lg:translate-x-0 lg:opacity-100"
+            className="pointer-events-none absolute inset-0 z-0 h-full w-full select-none object-cover object-bottom opacity-95"
             draggable={false}
             src={heroImage}
           />
-          <FigmaLogo className="relative z-10 origin-left scale-95 lg:absolute lg:left-0 lg:top-[48px] lg:scale-100" />
+          <div className="pointer-events-none absolute inset-0 z-0 bg-gradient-to-b from-white/90 via-white/55 via-[34%] to-white/10" />
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[52%] bg-white/25 backdrop-blur-[1px]" />
+          <FigmaLogo className="relative z-10 origin-left scale-95 lg:scale-100" />
 
-          <div className="relative z-10 mt-[44px] max-w-[420px] lg:absolute lg:left-[40px] lg:right-[240px] lg:top-[120px] lg:mt-0">
-            <h1 className="m-0 font-['Inter'] text-[clamp(2.25rem,4vw,36px)] font-bold leading-[1.25] text-[#1e293b]">
+          <div className="relative z-10 mt-[42px] max-w-[360px] lg:mt-[58px]">
+            <h1 className="m-0 font-['Inter'] text-[clamp(2rem,3.4vw,34px)] font-bold leading-[1.2] text-[#1e293b]">
               <span className="block">Let's personalize</span>
               <span className="block bg-gradient-to-r from-[#ff6b35] to-[#0d00e9] bg-clip-text text-transparent">
                 your experience
               </span>
             </h1>
-            <p className="m-0 mt-[24px] max-w-[384px] font-['Inter'] text-[18px] font-normal leading-[29.25px] text-[#64748b]">
+            <p className="m-0 mt-[22px] max-w-[300px] font-['Inter'] text-[16px] font-normal leading-[26px] text-[#64748b]">
               Help us understand your goals so we can tailor Xsparks.ai to
               deliver the most relevant insights and opportunities.
             </p>
           </div>
+
+          <div className="relative z-10 flex-1" />
+
+          <div className="relative z-10 mt-[22px] flex items-center gap-[12px] rounded-[12px] bg-white/78 p-[12px] shadow-[0px_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-sm">
+            <div className="flex size-[34px] shrink-0 items-center justify-center rounded-[8px] bg-[#eef2ff]">
+              <img alt="" className="size-[20px]" src={icons.secure} />
+            </div>
+            <div className="min-w-0">
+              <p className="m-0 font-['Inter'] text-[12px] font-bold leading-[17px] text-[#334155]">
+                Enterprise-grade security
+              </p>
+              <p className="m-0 font-['Inter'] text-[11px] font-normal leading-[16px] text-[#64748b]">
+                Your data is safe with us
+              </p>
+            </div>
+          </div>
         </section>
 
-        <div className="relative z-20 flex justify-center px-[16px] pb-[28px] lg:absolute lg:left-[495px] lg:top-[35px] lg:block lg:px-0 lg:pb-0">
+        <div className="relative z-20 min-w-0 border-t border-[#e2e8f0] lg:border-l lg:border-t-0">
           <OnboardingCard />
         </div>
       </div>
