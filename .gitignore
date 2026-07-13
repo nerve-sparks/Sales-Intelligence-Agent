@@ -13,6 +13,10 @@ env/
 # Alembic
 backend/alembic/versions/__pycache__/
 
+# Node (frontend)
+node_modules/
+.vite/
+
 # IDE
 .vscode/
 .idea/
