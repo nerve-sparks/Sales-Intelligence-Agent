@@ -2260,10 +2260,10 @@ function OnboardingCard() {
 export function OnboardingPage() {
   return (
     <main
-      className="min-h-screen overflow-x-hidden px-[16px] py-[18px] lg:px-[28px] lg:py-[32px]"
+      className="min-h-screen overflow-x-hidden px-[clamp(1.5rem,4vw,3rem)] py-[clamp(1.125rem,2.4vh,2rem)]"
       style={{ backgroundImage: pageBackground }}
     >
-      <div className="relative mx-auto grid min-h-[720px] w-full max-w-[1440px] overflow-hidden rounded-[24px] bg-white shadow-[0px_18px_45px_rgba(15,23,42,0.10)] lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[350px_minmax(0,1fr)]">
+      <div className="relative mx-auto grid min-h-[720px] w-full max-w-[1440px] overflow-hidden rounded-[24px] bg-white shadow-[0px_18px_45px_rgba(15,23,42,0.10)] lg:grid-cols-[clamp(300px,26vw,350px)_minmax(0,1fr)]">
         <section className="relative z-10 flex min-h-[360px] flex-col overflow-hidden bg-[#eef2ff] px-[28px] py-[30px] lg:min-h-0 lg:px-[38px] lg:py-[42px]">
           <img
             alt=""

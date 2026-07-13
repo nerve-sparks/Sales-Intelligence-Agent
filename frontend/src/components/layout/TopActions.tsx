@@ -1,0 +1,105 @@
+import { Bell, ChevronDown, Scan, Sparkles } from "lucide-react";
+import type { ComponentType } from "react";
+import { cn } from "../../lib/cn";
+
+/* Reusable header/top-bar controls shared across feature pages. */
+
+export function DetectionPill({
+  icon: Icon = Scan,
+  className = "",
+}: {
+  icon?: ComponentType<{ className?: string }>;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-[10px] rounded-[12px] border border-[#e9edf5] bg-white px-[16px] py-[9px]",
+        className,
+      )}
+    >
+      <span className="relative flex size-[8px] items-center justify-center">
+        <span className="absolute inline-flex size-full animate-ping rounded-full bg-[#22c55e] opacity-60" />
+        <span className="relative inline-flex size-[8px] rounded-full bg-[#16a34a]" />
+      </span>
+      <div className="leading-tight">
+        <p className="m-0 text-[13px] font-bold text-[#0f172a]">
+          Detection Engine Active
+        </p>
+        <p className="m-0 text-[12px] text-[#64748b]">
+          128 sources scanning in real-time
+        </p>
+      </div>
+      <Icon className="ml-[6px] size-[18px] text-[#94a3b8]" />
+    </div>
+  );
+}
+
+export function AIAssistantButton() {
+  return (
+    <button
+      className="flex items-center gap-[8px] rounded-[12px] border border-[#e9edf5] bg-white px-[16px] py-[11px] text-[14px] font-semibold text-[#005bff]"
+      type="button"
+    >
+      <Sparkles className="size-[18px] text-[#7c3aed]" />
+      <span className="hidden sm:inline">AI Assistant</span>
+    </button>
+  );
+}
+
+export function NotificationBell({ count = 12 }: { count?: number }) {
+  return (
+    <button
+      aria-label="Notifications"
+      className="relative flex size-[46px] items-center justify-center rounded-[12px] border border-[#e9edf5] bg-white"
+      type="button"
+    >
+      <Bell className="size-[19px] text-[#64748b]" />
+      <span className="absolute -right-[6px] -top-[6px] flex min-w-[20px] items-center justify-center rounded-full bg-[#ef4444] px-[5px] text-[11px] font-bold text-white">
+        {count}
+      </span>
+    </button>
+  );
+}
+
+export function UserMenu({
+  initials = "AK",
+  name = "Arjun Kumar",
+  role = "Founder",
+}: {
+  initials?: string;
+  name?: string;
+  role?: string;
+}) {
+  return (
+    <button
+      className="flex items-center gap-[10px] rounded-[12px] py-[6px] pl-[6px] pr-[10px] transition hover:bg-[#f6f7fb]"
+      type="button"
+    >
+      <span className="flex size-[38px] items-center justify-center rounded-full bg-[#0f172a] text-[13px] font-bold text-white">
+        {initials}
+      </span>
+      <span className="hidden text-left leading-tight sm:block">
+        <span className="block text-[14px] font-bold text-[#0f172a]">{name}</span>
+        <span className="block text-[12px] text-[#64748b]">{role}</span>
+      </span>
+      <ChevronDown className="size-[16px] text-[#94a3b8]" />
+    </button>
+  );
+}
+
+/* Convenience grouping used by pages without a search bar in the header. */
+export function TopActions({
+  detectionIcon,
+}: {
+  detectionIcon?: ComponentType<{ className?: string }>;
+}) {
+  return (
+    <div className="flex items-center gap-[12px]">
+      <DetectionPill className="hidden md:flex" icon={detectionIcon} />
+      <AIAssistantButton />
+      <NotificationBell />
+      <UserMenu />
+    </div>
+  );
+}
