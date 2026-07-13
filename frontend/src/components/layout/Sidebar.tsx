@@ -12,6 +12,7 @@ import {
   Radio,
   Settings,
   Users,
+  Zap,
 } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 import { FigmaLogo } from "../../features/auth/LoginPage";
@@ -28,6 +29,18 @@ type NavEntry = {
 
 const navItems: NavEntry[] = [
   { icon: Home, label: "Dashboard", href: "/dashboard" },
+  {
+    icon: Zap,
+    label: "Trigger Intelligence",
+    href: "/trigger-library",
+    children: [
+      { label: "Trigger Library", href: "/trigger-library" },
+      { label: "Active Triggers" },
+      { label: "Trigger Builder" },
+      { label: "Trigger Templates" },
+      { label: "Trigger Performance" },
+    ],
+  },
   {
     icon: Radio,
     label: "Signal Intelligence",
