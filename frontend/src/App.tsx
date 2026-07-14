@@ -7,9 +7,34 @@ import { SignalDetailPage } from "./features/signal-intelligence/SignalDetailPag
 import { SignalAnalyticsPage } from "./features/signal-intelligence/SignalAnalyticsPage";
 import { TriggerLibraryPage } from "./features/trigger-intelligence/TriggerLibraryPage";
 import { TriggerDetailPage } from "./features/trigger-intelligence/TriggerDetailPage";
+import { TriggerEditorPage } from "./features/trigger-intelligence/TriggerEditorPage";
+import { EnterpriseListPage } from "./features/crm-intelligence/EnterpriseListPage";
+import { EnterpriseDetailPage } from "./features/crm-intelligence/EnterpriseDetailPage";
+import { BuyingCommitteePage } from "./features/crm-intelligence/BuyingCommitteePage";
+import { MemberDetailPage } from "./features/crm-intelligence/MemberDetailPage";
 
 export default function App() {
   const pathname = typeof window === "undefined" ? "" : window.location.pathname;
+
+  if (pathname.includes("member-detail")) {
+    return <MemberDetailPage />;
+  }
+
+  if (pathname.includes("buying-committee")) {
+    return <BuyingCommitteePage />;
+  }
+
+  if (pathname.includes("enterprise-detail")) {
+    return <EnterpriseDetailPage />;
+  }
+
+  if (pathname.includes("enterprise-list")) {
+    return <EnterpriseListPage />;
+  }
+
+  if (pathname.includes("trigger-editor")) {
+    return <TriggerEditorPage />;
+  }
 
   if (pathname.includes("trigger-details")) {
     return <TriggerDetailPage />;

@@ -18,12 +18,14 @@ import {
   ShieldCheck,
   TrendingUp,
   UserPlus,
+  Zap,
 } from "lucide-react";
-import type { ComponentType } from "react";
+import { useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Donut } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
+import { getTriggers, type SavedTrigger } from "../../lib/triggers";
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -101,6 +103,9 @@ function LibraryHeader() {
           </button>
           <button
             className="flex h-[44px] items-center gap-[8px] rounded-[10px] bg-[#fa5a1e] px-[18px] text-[14px] font-semibold text-white shadow-[0px_10px_20px_-6px_rgba(250,90,30,0.5)]"
+            onClick={() => {
+              window.location.href = "/trigger-editor";
+            }}
             type="button"
           >
             <Plus className="size-[17px]" />
@@ -213,6 +218,94 @@ function CategoryGrid() {
       {categories.map((c) => (
         <CategoryCard category={c} key={c.name} />
       ))}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* User-created triggers                                               */
+/* ------------------------------------------------------------------ */
+
+function categoryStyle(cat: string): { icon: IconType; color: string; bg: string } {
+  const c = cat.toLowerCase();
+  if (c.includes("fund")) return { icon: Banknote, color: "#7c3aed", bg: "#f3e9ff" };
+  if (c.includes("hir")) return { icon: UserPlus, color: "#f97316", bg: "#fff1e3" };
+  if (c.includes("product")) return { icon: Package, color: "#2563eb", bg: "#e6f0ff" };
+  if (c.includes("expansion")) return { icon: Building2, color: "#16a34a", bg: "#e7f8ef" };
+  if (c.includes("partner")) return { icon: Heart, color: "#ec4899", bg: "#fdeaf4" };
+  if (c.includes("campaign") || c.includes("marketing")) return { icon: Megaphone, color: "#f59e0b", bg: "#fff7e6" };
+  if (c.includes("financ")) return { icon: LineChart, color: "#06b6d4", bg: "#e6fafd" };
+  if (c.includes("regul") || c.includes("compliance")) return { icon: ShieldCheck, color: "#8b5cf6", bg: "#f1ecff" };
+  if (c.includes("market") || c.includes("industry")) return { icon: Globe, color: "#f43f5e", bg: "#ffe9ee" };
+  return { icon: Zap, color: "#5b3df5", bg: "#eef1ff" };
+}
+
+function TriggerCard({ trigger }: { trigger: SavedTrigger }) {
+  const style = categoryStyle(trigger.category);
+  const Icon = style.icon;
+  const active = trigger.status === "active";
+
+  return (
+    <div
+      className="flex cursor-pointer flex-col rounded-[16px] border border-[#eef1f6] bg-white p-[16px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)] transition hover:border-[#d7dcff] hover:shadow-[0px_8px_20px_-8px_rgba(91,61,245,0.25)]"
+      onClick={() => {
+        window.location.href = "/trigger-details";
+      }}
+      role="button"
+      tabIndex={0}
+    >
+      <span
+        className="flex size-[48px] items-center justify-center rounded-[12px]"
+        style={{ backgroundColor: style.bg, color: style.color }}
+      >
+        <Icon className="size-[24px]" />
+      </span>
+      <h3 className="m-0 mt-[14px] truncate text-[15px] font-bold text-[#0f172a]">
+        {trigger.name}
+      </h3>
+      <p className="m-0 mt-[6px] line-clamp-2 min-h-[36px] text-[12px] leading-[18px] text-[#64748b]">
+        {trigger.description || "Custom trigger"}
+      </p>
+      <span
+        className={cn(
+          "mt-[12px] inline-flex w-fit items-center gap-[6px] rounded-[7px] px-[10px] py-[4px] text-[12px] font-semibold",
+          active ? "bg-[#e7f8ef] text-[#16a34a]" : "bg-[#f1f5f9] text-[#64748b]",
+        )}
+      >
+        <span className={cn("size-[7px] rounded-full", active ? "bg-[#16a34a]" : "bg-[#94a3b8]")} />
+        {active ? "Active" : "Draft"}
+      </span>
+
+      <div className="mt-[12px] grid grid-cols-3 gap-[6px] border-t border-[#f1f5f9] pt-[10px]">
+        {[
+          ["Signals (30D)", "New"],
+          ["Companies", "—"],
+          ["Avg. Score", "—"],
+        ].map(([label, value]) => (
+          <div key={label}>
+            <p className="m-0 min-h-[20px] text-[8px] font-medium uppercase leading-[10px] tracking-[0.01em] text-[#94a3b8]">
+              {label}
+            </p>
+            <p className="m-0 mt-[2px] text-[13px] font-bold text-[#0f172a]">{value}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function YourTriggers({ triggers }: { triggers: SavedTrigger[] }) {
+  if (triggers.length === 0) {
+    return null;
+  }
+  return (
+    <div>
+      <h2 className="m-0 mb-[14px] text-[18px] font-bold text-[#0f172a]">Your Triggers</h2>
+      <div className="grid grid-cols-2 gap-[16px] md:grid-cols-3 xl:grid-cols-5">
+        {triggers.map((t) => (
+          <TriggerCard key={t.id} trigger={t} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -399,6 +492,8 @@ function QuickActionsCard() {
 /* ------------------------------------------------------------------ */
 
 export function TriggerLibraryPage() {
+  const [saved] = useState<SavedTrigger[]>(() => getTriggers());
+
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Trigger Intelligence" activeSub="Trigger Library" />
@@ -412,6 +507,7 @@ export function TriggerLibraryPage() {
           <div className="mt-[22px] grid grid-cols-1 gap-[24px] xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="flex flex-col gap-[20px]">
               <SummaryCards />
+              <YourTriggers triggers={saved} />
               <CategoryGrid />
               <DistributionOverview />
             </div>
