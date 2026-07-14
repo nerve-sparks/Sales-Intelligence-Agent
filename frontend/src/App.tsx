@@ -12,9 +12,19 @@ import { EnterpriseListPage } from "./features/crm-intelligence/EnterpriseListPa
 import { EnterpriseDetailPage } from "./features/crm-intelligence/EnterpriseDetailPage";
 import { BuyingCommitteePage } from "./features/crm-intelligence/BuyingCommitteePage";
 import { MemberDetailPage } from "./features/crm-intelligence/MemberDetailPage";
+import { ScoreBreakdownPage } from "./features/crm-intelligence/ScoreBreakdownPage";
+import { ScoreHistoryPage } from "./features/crm-intelligence/ScoreHistoryPage";
 
 export default function App() {
   const pathname = typeof window === "undefined" ? "" : window.location.pathname;
+
+  if (pathname.includes("score-history")) {
+    return <ScoreHistoryPage />;
+  }
+
+  if (pathname.includes("score-breakdown")) {
+    return <ScoreBreakdownPage />;
+  }
 
   if (pathname.includes("member-detail")) {
     return <MemberDetailPage />;

@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Contact,
   FileText,
+  Gauge,
   Home,
   ListFilter,
   MessageSquare,
@@ -75,6 +76,7 @@ const navItems: NavEntry[] = [
   { icon: FileText, label: "Reports" },
   { icon: Blocks, label: "Integrations" },
   { icon: Bell, label: "Alerts" },
+  { icon: Gauge, label: "Score Breakdown", href: "/score-breakdown" },
 ];
 
 const itemClass = (isActive: boolean) =>
