@@ -1,14 +1,12 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.services.icp_filter import create_icp, filter_companies, get_icp
 from app.views.icp_view import serialize_company, serialize_icp
-
-router = APIRouter(prefix="/icp", tags=["icp"])
 
 
 class IcpCreate(BaseModel):
@@ -23,13 +21,11 @@ class IcpCreate(BaseModel):
     buying_committee_personas: list[str] | None = None
 
 
-@router.post("")
 async def create(payload: IcpCreate, db: AsyncSession = Depends(get_db)):
     icp = await create_icp(db, payload.model_dump())
     return serialize_icp(icp)
 
 
-@router.get("/{icp_id}/companies")
 async def companies(icp_id: UUID, db: AsyncSession = Depends(get_db)):
     icp = await get_icp(db, icp_id)
     if icp is None:

@@ -1,14 +1,12 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.services.trigger_matcher import create_trigger, detect_trigger_events, get_trigger
 from app.views.trigger_view import serialize_trigger, serialize_trigger_event
-
-router = APIRouter(prefix="/triggers", tags=["triggers"])
 
 
 class TriggerCreate(BaseModel):
@@ -17,13 +15,11 @@ class TriggerCreate(BaseModel):
     signal_categories: list[str] | None = None
 
 
-@router.post("")
 async def create(payload: TriggerCreate, db: AsyncSession = Depends(get_db)):
     trigger = await create_trigger(db, payload.model_dump())
     return serialize_trigger(trigger)
 
 
-@router.get("/{trigger_id}/events")
 async def events(trigger_id: UUID, db: AsyncSession = Depends(get_db)):
     trigger = await get_trigger(db, trigger_id)
     if trigger is None:

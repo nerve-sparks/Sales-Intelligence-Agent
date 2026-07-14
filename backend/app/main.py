@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.controllers import icp, scores, signals, triggers
+from app.routes import icp, scores, signals, triggers
 
 app = FastAPI(title="SIGNAL Backend")
 

@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,20 +10,15 @@ from app.services.signal_extractor import extract_signals
 from app.services.signal_scorer import rescore_signals
 from app.views.signal_view import serialize_signal
 
-router = APIRouter(prefix="/signals", tags=["signals"])
 
-
-@router.post("/extract")
 async def extract(db: AsyncSession = Depends(get_db)):
     return await extract_signals(db)
 
 
-@router.post("/rescore")
 async def rescore(db: AsyncSession = Depends(get_db)):
     return await rescore_signals(db)
 
 
-@router.get("/{company_id}")
 async def get_signals(company_id: UUID, db: AsyncSession = Depends(get_db)):
     stmt = (
         select(Signal)
