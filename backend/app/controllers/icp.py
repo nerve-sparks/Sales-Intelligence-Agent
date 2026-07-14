@@ -29,14 +29,6 @@ async def create(payload: IcpCreate, db: AsyncSession = Depends(get_db)):
     return serialize_icp(icp)
 
 
-@router.get("/{icp_id}")
-async def get(icp_id: UUID, db: AsyncSession = Depends(get_db)):
-    icp = await get_icp(db, icp_id)
-    if icp is None:
-        raise HTTPException(status_code=404, detail="icp not found")
-    return serialize_icp(icp)
-
-
 @router.get("/{icp_id}/companies")
 async def companies(icp_id: UUID, db: AsyncSession = Depends(get_db)):
     icp = await get_icp(db, icp_id)

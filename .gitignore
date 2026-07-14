@@ -13,9 +13,11 @@ env/
 # Alembic
 backend/alembic/versions/__pycache__/
 
-# Node (frontend)
+# Frontend (Node)
 node_modules/
+dist/
 .vite/
+package-lock.json
 
 # IDE
 .vscode/
@@ -27,8 +29,3 @@ Thumbs.db
 
 # Logs
 *.log
-
-# Frontend
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/

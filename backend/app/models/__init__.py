@@ -6,6 +6,8 @@ from app.models.decision_maker import PERSONA_VALUES, DecisionMaker
 from app.models.icp_profile import IcpProfile
 from app.models.lead_score import LeadScore
 from app.models.signal import Signal
+from app.models.trigger_definition import TriggerDefinition
+from app.models.trigger_event import TriggerEvent
 
 __all__ = [
     "Company",
@@ -17,4 +19,6 @@ __all__ = [
     "IcpProfile",
     "LeadScore",
     "Signal",
+    "TriggerDefinition",
+    "TriggerEvent",
 ]
