@@ -11,6 +11,7 @@ import {
   Send,
   Target,
 } from "lucide-react";
+import { lazy, Suspense } from "react";
 import earthImage from "../../assets/earth.png";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
@@ -348,16 +349,25 @@ const mapLegend = [
   { label: "Monitor", range: "0-39", color: "#94a3b8" },
 ];
 
+const LeadGlobe = lazy(() => import("./LeadGlobe"));
+
+const globeFallback = (
+  <img
+    alt=""
+    className="pointer-events-none absolute -right-[2%] top-1/2 h-auto w-[66%] max-w-none -translate-y-1/2 select-none"
+    draggable={false}
+    src={earthImage}
+  />
+);
+
 function LeadOpportunityMap() {
   return (
     <section className="relative flex min-h-[420px] flex-col overflow-hidden rounded-[18px] bg-[#0a1020] p-[24px] text-white">
-      <img
-        alt=""
-        className="pointer-events-none absolute -right-[2%] top-1/2 z-0 h-auto w-[66%] max-w-none -translate-y-1/2 select-none"
-        draggable={false}
-        src={earthImage}
-      />
-      <div className="pointer-events-none absolute inset-0 z-0 bg-gradient-to-r from-[#0a1020] via-[#0a1020]/55 to-transparent" />
+      <div className="absolute inset-0 z-0">
+        <Suspense fallback={globeFallback}>
+          <LeadGlobe />
+        </Suspense>
+      </div>
 
       <div className="relative z-10 flex items-center gap-[8px]">
         <h2 className="m-0 text-[18px] font-bold">Lead Opportunity Map</h2>
