@@ -10,23 +10,27 @@ from app.services.lead_scorer import run_scoring
 from app.views.score_view import serialize_lead_score, serialize_ranked_lead_score
 
 
-async def run(db: AsyncSession = Depends(get_db)):
-    return await run_scoring(db)
+async def run(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
+    return await run_scoring(db, organisation_id)
 
 
-async def ranked(db: AsyncSession = Depends(get_db)):
+async def ranked(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
     stmt = (
         select(Company.company_name, LeadScore.lead_score, LeadScore.component_score, LeadScore.gate_status)
         .join(LeadScore, LeadScore.company_id == Company.company_id)
-        .where(LeadScore.gate_passed.is_(True))
+        .where(LeadScore.gate_passed.is_(True), Company.organisation_id == organisation_id)
         .order_by(LeadScore.lead_score.desc())
     )
     rows = (await db.execute(stmt)).all()
     return [serialize_ranked_lead_score(r) for r in rows]
 
 
-async def get_score(company_id: UUID, db: AsyncSession = Depends(get_db)):
-    stmt = select(LeadScore).where(LeadScore.company_id == company_id)
+async def get_score(organisation_id: UUID, company_id: UUID, db: AsyncSession = Depends(get_db)):
+    stmt = (
+        select(LeadScore)
+        .join(Company, Company.company_id == LeadScore.company_id)
+        .where(LeadScore.company_id == company_id, Company.organisation_id == organisation_id)
+    )
     score = (await db.execute(stmt)).scalar_one_or_none()
     if score is None:
         return {"detail": "not scored yet"}

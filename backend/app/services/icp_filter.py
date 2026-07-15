@@ -4,23 +4,35 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import Company, DecisionMaker, IcpProfile
+from app.models import Company, DecisionMaker, IcpProfile, Workspace
 
 
-async def create_icp(session: AsyncSession, values: dict) -> IcpProfile:
-    icp = IcpProfile(**values)
+async def create_icp(session: AsyncSession, workspace_id: UUID, values: dict) -> IcpProfile:
+    icp = IcpProfile(workspace_id=workspace_id, **values)
     session.add(icp)
     await session.commit()
     await session.refresh(icp)
     return icp
 
 
-async def get_icp(session: AsyncSession, icp_id: UUID) -> IcpProfile | None:
-    return await session.get(IcpProfile, icp_id)
+async def get_icp(session: AsyncSession, workspace_id: UUID, icp_id: UUID) -> IcpProfile | None:
+    stmt = select(IcpProfile).where(
+        IcpProfile.icp_id == icp_id, IcpProfile.workspace_id == workspace_id
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def filter_companies(session: AsyncSession, icp: IcpProfile) -> list[Company]:
-    stmt = select(Company).options(selectinload(Company.decision_makers))
+    # An ICP's Workspace belongs to exactly one Organisation - companies are
+    # shared across all Workspaces in that Organisation, so scope by
+    # organisation_id (via the workspace), not by workspace_id directly.
+    workspace = await session.get(Workspace, icp.workspace_id)
+
+    stmt = (
+        select(Company)
+        .options(selectinload(Company.decision_makers))
+        .where(Company.organisation_id == workspace.organisation_id)
+    )
 
     if icp.industries:
         stmt = stmt.where(

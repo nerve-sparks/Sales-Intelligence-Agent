@@ -7,9 +7,11 @@ from sqlalchemy import (
     VARCHAR,
     Boolean,
     CheckConstraint,
+    ForeignKey,
     Index,
     Integer,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from app.models.company_news import CompanyNews
     from app.models.company_scoop import CompanyScoop
     from app.models.decision_maker import DecisionMaker
+    from app.models.organisation import Organisation
 
 
 class Company(Base):
@@ -31,12 +34,19 @@ class Company(Base):
             "ownership_type IN ('public', 'private', 'pe_backed')",
             name="company_ownership_type_check",
         ),
+        UniqueConstraint("organisation_id", "zi_company_id", name="company_org_zi_id_key"),
         Index("idx_company_domain", "company_domain"),
         Index("idx_company_zi_id", "zi_company_id"),
+        Index("idx_company_organisation_id", "organisation_id"),
+    )
+
+    # Tenancy
+    organisation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organisation.organisation_id", ondelete="CASCADE"), nullable=False
     )
 
     # ZoomInfo Identity
-    zi_company_id: Mapped[int] = mapped_column(BIGINT, unique=True, nullable=False)
+    zi_company_id: Mapped[int] = mapped_column(BIGINT, nullable=False)
     company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
@@ -88,6 +98,7 @@ class Company(Base):
     products: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
 
     # Relationships
+    organisation: Mapped["Organisation"] = relationship()
     decision_makers: Mapped[list["DecisionMaker"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
     )

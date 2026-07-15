@@ -15,13 +15,13 @@ class TriggerCreate(BaseModel):
     signal_categories: list[str] | None = None
 
 
-async def create(payload: TriggerCreate, db: AsyncSession = Depends(get_db)):
-    trigger = await create_trigger(db, payload.model_dump())
+async def create(workspace_id: UUID, payload: TriggerCreate, db: AsyncSession = Depends(get_db)):
+    trigger = await create_trigger(db, workspace_id, payload.model_dump())
     return serialize_trigger(trigger)
 
 
-async def events(trigger_id: UUID, db: AsyncSession = Depends(get_db)):
-    trigger = await get_trigger(db, trigger_id)
+async def events(workspace_id: UUID, trigger_id: UUID, db: AsyncSession = Depends(get_db)):
+    trigger = await get_trigger(db, workspace_id, trigger_id)
     if trigger is None:
         raise HTTPException(status_code=404, detail="trigger not found")
 

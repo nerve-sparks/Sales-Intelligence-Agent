@@ -336,8 +336,12 @@ async def score_company(session: AsyncSession, company_id) -> dict:
     return {"company_id": company_id, "gate_status": gate_status}
 
 
-async def run_scoring(session: AsyncSession) -> dict:
-    company_ids = (await session.execute(select(Company.company_id))).scalars().all()
+async def run_scoring(session: AsyncSession, organisation_id) -> dict:
+    company_ids = (
+        await session.execute(
+            select(Company.company_id).where(Company.organisation_id == organisation_id)
+        )
+    ).scalars().all()
 
     active = nurture = 0
     for company_id in company_ids:
