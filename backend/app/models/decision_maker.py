@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BIGINT, VARCHAR, CheckConstraint, ForeignKey, Index, Text
+from sqlalchemy import BIGINT, VARCHAR, CheckConstraint, ForeignKey, Index, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -48,13 +48,25 @@ class DecisionMaker(Base):
             f"persona IN ({', '.join(repr(v) for v in PERSONA_VALUES)})",
             name="decision_maker_persona_check",
         ),
+        UniqueConstraint("organisation_id", "zi_person_id", name="decision_maker_org_zi_person_id_key"),
         Index("idx_dm_company_id", "company_id"),
         Index("idx_dm_persona", "persona"),
         Index("idx_dm_email", "email"),
+        Index("idx_dm_organisation_id", "organisation_id"),
+    )
+
+    # Tenancy - a person can appear under the same zi_person_id across
+    # different Organisations' imports; each Org gets its own row so
+    # upserts never reassign a contact between tenants.
+    decision_maker_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    organisation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organisation.organisation_id", ondelete="CASCADE"), nullable=False
     )
 
     # ZoomInfo Identity
-    zi_person_id: Mapped[int] = mapped_column(BIGINT, primary_key=True)
+    zi_person_id: Mapped[int] = mapped_column(BIGINT, nullable=False)
     company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("company.company_id", ondelete="CASCADE"), nullable=False
     )

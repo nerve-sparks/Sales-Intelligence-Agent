@@ -5,7 +5,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import CompanyNews, CompanyScoop, Signal
+from app.models import Company, CompanyNews, CompanyScoop, Signal
 
 SIGNAL_CATEGORY_MAP = {
     "ai_engineer_job_posting": "ai_seriousness",
@@ -231,9 +231,14 @@ async def _insert_signal(session: AsyncSession, values: dict) -> bool:
     return result.first() is not None
 
 
-async def _extract_news_signals(session: AsyncSession) -> tuple[int, int]:
+async def _extract_news_signals(session: AsyncSession, organisation_id) -> tuple[int, int]:
     inserted = skipped = 0
-    rows = (await session.execute(select(CompanyNews))).scalars().all()
+    stmt = (
+        select(CompanyNews)
+        .join(Company, Company.company_id == CompanyNews.company_id)
+        .where(Company.organisation_id == organisation_id)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
 
     for news in rows:
         signal_type, extraction_confidence = classify_news(news.title, news.description)
@@ -274,9 +279,14 @@ async def _extract_news_signals(session: AsyncSession) -> tuple[int, int]:
     return inserted, skipped
 
 
-async def _extract_scoop_signals(session: AsyncSession) -> tuple[int, int]:
+async def _extract_scoop_signals(session: AsyncSession, organisation_id) -> tuple[int, int]:
     inserted = skipped = 0
-    rows = (await session.execute(select(CompanyScoop))).scalars().all()
+    stmt = (
+        select(CompanyScoop)
+        .join(Company, Company.company_id == CompanyScoop.company_id)
+        .where(Company.organisation_id == organisation_id)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
 
     for scoop in rows:
         classification = classify_scoop(scoop.topics, scoop.description)
@@ -318,9 +328,9 @@ async def _extract_scoop_signals(session: AsyncSession) -> tuple[int, int]:
     return inserted, skipped
 
 
-async def extract_signals(session: AsyncSession) -> dict:
-    news_inserted, news_skipped = await _extract_news_signals(session)
-    scoop_inserted, scoop_skipped = await _extract_scoop_signals(session)
+async def extract_signals(session: AsyncSession, organisation_id) -> dict:
+    news_inserted, news_skipped = await _extract_news_signals(session, organisation_id)
+    scoop_inserted, scoop_skipped = await _extract_scoop_signals(session, organisation_id)
     await session.commit()
     return {
         "inserted": news_inserted + scoop_inserted,

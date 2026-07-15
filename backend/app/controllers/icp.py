@@ -21,13 +21,13 @@ class IcpCreate(BaseModel):
     buying_committee_personas: list[str] | None = None
 
 
-async def create(payload: IcpCreate, db: AsyncSession = Depends(get_db)):
-    icp = await create_icp(db, payload.model_dump())
+async def create(workspace_id: UUID, payload: IcpCreate, db: AsyncSession = Depends(get_db)):
+    icp = await create_icp(db, workspace_id, payload.model_dump())
     return serialize_icp(icp)
 
 
-async def companies(icp_id: UUID, db: AsyncSession = Depends(get_db)):
-    icp = await get_icp(db, icp_id)
+async def companies(workspace_id: UUID, icp_id: UUID, db: AsyncSession = Depends(get_db)):
+    icp = await get_icp(db, workspace_id, icp_id)
     if icp is None:
         raise HTTPException(status_code=404, detail="icp not found")
 

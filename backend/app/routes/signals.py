@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 from app.controllers import signals as signals_controller
 
-router = APIRouter(prefix="/signals", tags=["signals"])
+router = APIRouter(prefix="/organisations/{organisation_id}/signals", tags=["signals"])
 
 router.post("/extract")(signals_controller.extract)
 router.post("/rescore")(signals_controller.rescore)
