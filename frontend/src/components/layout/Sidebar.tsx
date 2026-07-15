@@ -121,7 +121,7 @@ export function Sidebar({
   activeSub?: string;
 }) {
   return (
-    <aside className="hidden w-[236px] shrink-0 flex-col border-r border-[#e9edf5] bg-white lg:flex">
+    <aside className="sticky top-0 hidden h-screen w-[236px] shrink-0 self-start overflow-y-auto border-r border-[#e9edf5] bg-white lg:flex lg:flex-col">
       <div className="flex h-[88px] shrink-0 items-center border-b border-[#e9edf5] px-[22px]">
         <FigmaLogo />
       </div>
