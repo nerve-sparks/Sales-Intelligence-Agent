@@ -11,6 +11,8 @@ class Settings:
     app_env: str
     log_level: str
     database_url: str
+    zoominfo_client_id: str | None
+    zoominfo_client_secret: str | None
 
     @property
     def database_url_sync(self) -> str:
@@ -26,4 +28,6 @@ def get_settings() -> Settings:
         app_env=os.environ.get("APP_ENV", "local"),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         database_url=database_url,
+        zoominfo_client_id=os.environ.get("ZOOMINFO_CLIENT_ID"),
+        zoominfo_client_secret=os.environ.get("ZOOMINFO_CLIENT_SECRET"),
     )

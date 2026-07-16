@@ -1,4 +1,4 @@
-from app.models import Company, DecisionMaker, IcpProfile
+from app.models import Company, CompanyIntent, DecisionMaker, IcpProfile
 
 
 def serialize_icp(icp: IcpProfile) -> dict:
@@ -30,6 +30,18 @@ def serialize_decision_maker(dm: DecisionMaker) -> dict:
         "phone": dm.phone,
         "mobile_phone": dm.mobile_phone,
         "linkedin_url": dm.linkedin_url,
+    }
+
+
+def serialize_intent(intent: CompanyIntent) -> dict:
+    return {
+        "intent_id": intent.intent_id,
+        "company_id": str(intent.company_id),
+        "category": intent.category,
+        "topic": intent.topic,
+        "signal_score": intent.signal_score,
+        "signal_date": intent.signal_date,
+        "recommended_contacts": intent.recommended_contacts,
     }
 
 
