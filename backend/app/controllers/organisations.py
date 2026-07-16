@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.services.organisation_service import create_organisation, get_organisation
-from app.views.organisation_view import serialize_organisation
 
 
 class OrganisationCreate(BaseModel):
@@ -31,12 +30,11 @@ class OrganisationCreate(BaseModel):
 
 
 async def create(payload: OrganisationCreate, db: AsyncSession = Depends(get_db)):
-    org = await create_organisation(db, payload.model_dump())
-    return serialize_organisation(org)
+    return await create_organisation(db, payload.model_dump())
 
 
 async def get(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
     org = await get_organisation(db, organisation_id)
     if org is None:
         raise HTTPException(status_code=404, detail="organisation not found")
-    return serialize_organisation(org)
+    return org

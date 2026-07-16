@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.services import zoominfo_enrich
 from app.services.zoominfo_client import ZoomInfoAPIError, ZoomInfoNotConfiguredError
-from app.views.icp_view import serialize_company, serialize_decision_maker, serialize_intent
+from app.schemas.company import IntentEnrichOut, NewsEnrichOut, ScoopEnrichOut
 
 
 class CompanyMatchCriteria(BaseModel):
@@ -182,7 +182,7 @@ async def enrich_company(organisation_id: UUID, payload: CompanyMatchCriteria, d
         company = await zoominfo_enrich.enrich_company(db, organisation_id, payload.to_zoominfo())
     except (ZoomInfoNotConfiguredError, ZoomInfoAPIError, ValueError) as exc:
         _handle_zoominfo_errors(exc)
-    return serialize_company(company)
+    return company
 
 
 async def enrich_contact(organisation_id: UUID, payload: ContactMatchCriteria, db: AsyncSession = Depends(get_db)):
@@ -191,7 +191,7 @@ async def enrich_contact(organisation_id: UUID, payload: ContactMatchCriteria, d
         contact = await zoominfo_enrich.enrich_contact(db, organisation_id, criteria, payload.company_id)
     except (ZoomInfoNotConfiguredError, ZoomInfoAPIError, ValueError) as exc:
         _handle_zoominfo_errors(exc)
-    return serialize_decision_maker(contact)
+    return contact
 
 
 async def enrich_scoops(organisation_id: UUID, payload: ScoopRequest, db: AsyncSession = Depends(get_db)):
@@ -199,7 +199,7 @@ async def enrich_scoops(organisation_id: UUID, payload: ScoopRequest, db: AsyncS
         rows = await zoominfo_enrich.enrich_scoops(db, organisation_id, payload.company_id, payload.to_zoominfo())
     except (ZoomInfoNotConfiguredError, ZoomInfoAPIError, ValueError) as exc:
         _handle_zoominfo_errors(exc)
-    return {"count": len(rows), "scoops": rows}
+    return ScoopEnrichOut(count=len(rows), scoops=rows)
 
 
 class NewsRequest(BaseModel):
@@ -227,7 +227,7 @@ async def enrich_news(organisation_id: UUID, payload: NewsRequest, db: AsyncSess
         rows = await zoominfo_enrich.enrich_news(db, organisation_id, payload.company_id, payload.to_zoominfo())
     except (ZoomInfoNotConfiguredError, ZoomInfoAPIError, ValueError) as exc:
         _handle_zoominfo_errors(exc)
-    return {"count": len(rows), "news": rows}
+    return NewsEnrichOut(count=len(rows), news=rows)
 
 
 class IntentRequest(BaseModel):
@@ -271,7 +271,7 @@ async def enrich_intent(organisation_id: UUID, payload: IntentRequest, db: Async
         signals = await zoominfo_enrich.enrich_intent(db, organisation_id, payload.company_id, payload.to_zoominfo())
     except (ZoomInfoNotConfiguredError, ZoomInfoAPIError, ValueError) as exc:
         _handle_zoominfo_errors(exc)
-    return {"count": len(signals), "signals": [serialize_intent(s) for s in signals]}
+    return IntentEnrichOut(count=len(signals), signals=signals)
 
 
 async def enrich_technologies(organisation_id: UUID, payload: CompanyRequest, db: AsyncSession = Depends(get_db)):
@@ -279,4 +279,4 @@ async def enrich_technologies(organisation_id: UUID, payload: CompanyRequest, db
         company = await zoominfo_enrich.enrich_technologies(db, organisation_id, payload.company_id)
     except (ZoomInfoNotConfiguredError, ZoomInfoAPIError, ValueError) as exc:
         _handle_zoominfo_errors(exc)
-    return serialize_company(company)
+    return company

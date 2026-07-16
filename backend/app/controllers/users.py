@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.services.user_service import create_user
-from app.views.user_view import serialize_user
 
 
 class UserCreate(BaseModel):
@@ -15,5 +14,4 @@ class UserCreate(BaseModel):
 
 
 async def create(organisation_id: UUID, payload: UserCreate, db: AsyncSession = Depends(get_db)):
-    user = await create_user(db, organisation_id, payload.model_dump())
-    return serialize_user(user)
+    return await create_user(db, organisation_id, payload.model_dump())

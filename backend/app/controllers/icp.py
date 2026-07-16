@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.services.icp_filter import create_icp, filter_companies, get_icp
-from app.views.icp_view import serialize_company, serialize_icp
+from app.schemas.icp import IcpCompaniesOut
 
 
 class IcpCreate(BaseModel):
@@ -22,8 +22,7 @@ class IcpCreate(BaseModel):
 
 
 async def create(workspace_id: UUID, payload: IcpCreate, db: AsyncSession = Depends(get_db)):
-    icp = await create_icp(db, workspace_id, payload.model_dump())
-    return serialize_icp(icp)
+    return await create_icp(db, workspace_id, payload.model_dump())
 
 
 async def companies(workspace_id: UUID, icp_id: UUID, db: AsyncSession = Depends(get_db)):
@@ -32,8 +31,4 @@ async def companies(workspace_id: UUID, icp_id: UUID, db: AsyncSession = Depends
         raise HTTPException(status_code=404, detail="icp not found")
 
     matches = await filter_companies(db, icp)
-    return {
-        "icp": serialize_icp(icp),
-        "match_count": len(matches),
-        "companies": [serialize_company(c) for c in matches],
-    }
+    return IcpCompaniesOut(icp=icp, match_count=len(matches), companies=matches)

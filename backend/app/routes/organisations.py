@@ -1,8 +1,9 @@
 from fastapi import APIRouter
 
 from app.controllers import organisations as organisations_controller
+from app.schemas.organisation import OrganisationOut
 
 router = APIRouter(prefix="/organisations", tags=["organisations"])
 
-router.post("")(organisations_controller.create)
-router.get("/{organisation_id}")(organisations_controller.get)
+router.post("", response_model=OrganisationOut)(organisations_controller.create)
+router.get("/{organisation_id}", response_model=OrganisationOut)(organisations_controller.get)

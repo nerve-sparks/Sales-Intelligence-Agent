@@ -8,7 +8,6 @@ from app.core.db import get_db
 from app.models import Company, Signal
 from app.services.signal_extractor import extract_signals
 from app.services.signal_scorer import rescore_signals
-from app.views.signal_view import serialize_signal
 
 
 async def extract(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
@@ -26,5 +25,4 @@ async def get_signals(organisation_id: UUID, company_id: UUID, db: AsyncSession 
         .where(Signal.company_id == company_id, Company.organisation_id == organisation_id)
         .order_by(Signal.signal_confidence.desc())
     )
-    signals = (await db.execute(stmt)).scalars().all()
-    return [serialize_signal(s) for s in signals]
+    return (await db.execute(stmt)).scalars().all()
