@@ -399,7 +399,7 @@ function MfaVerificationBody() {
         </p>
 
         <button
-          className="flex h-[54px] w-full max-w-[448px] items-center justify-center gap-[8px] rounded-[10px] bg-gradient-to-r from-[#ff5a18] via-[#c331d1] to-[#005bff] px-[16px] py-[12px] shadow-[0px_10px_15px_-3px_rgba(249,115,22,0.2),0px_4px_6px_-4px_rgba(249,115,22,0.2)]"
+          className="flex h-[clamp(48px,6vh,54px)] w-full max-w-[448px] items-center justify-center gap-[8px] rounded-[10px] bg-gradient-to-r from-[#ff5a18] via-[#c331d1] to-[#005bff] px-[16px] py-[12px] shadow-[0px_10px_15px_-3px_rgba(249,115,22,0.2),0px_4px_6px_-4px_rgba(249,115,22,0.2)]"
           type="submit"
         >
           <span className="font-['IBM_Plex_Sans'] text-[17px] font-bold leading-[24px] text-white">
@@ -457,9 +457,8 @@ function LoginForm({
   const isForgot = mode === "forgot";
   const isMfa = mode === "mfa";
   const copy = formCopy[mode];
-  const cardClassName = isMfa
-    ? "flex min-h-[clamp(610px,63vh,660px)] w-full max-w-[560px] flex-col gap-[23px] rounded-[24px] border border-[#f1f5f9] bg-white p-[clamp(1.875rem,3.25vw,56px)] shadow-[0px_20px_25px_rgba(0,0,0,0.05)]"
-    : "flex min-h-[clamp(610px,63vh,660px)] w-full max-w-[560px] flex-col gap-[23px] rounded-[24px] border border-[#f1f5f9] bg-white p-[clamp(1.875rem,3.25vw,56px)] shadow-[0px_20px_25px_rgba(0,0,0,0.05)]";
+  const cardClassName =
+    "flex min-h-[min(640px,58vh)] w-full max-w-[560px] flex-col gap-[clamp(0.85rem,2vh,23px)] rounded-[24px] border border-[#f1f5f9] bg-white px-[clamp(1.875rem,3.25vw,56px)] py-[clamp(1.35rem,3.2vh,44px)] shadow-[0px_20px_25px_rgba(0,0,0,0.05)]";
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -506,7 +505,7 @@ function LoginForm({
           <div className="relative">
             <input
               autoComplete="email"
-              className="h-[56px] w-full rounded-[12px] border border-[#e2e8f0] bg-[#f8fafc] py-[15px] pl-[48px] pr-[17px] font-['IBM_Plex_Sans'] text-[17px] font-normal text-[#0f172a] outline-none placeholder:text-[#94a3b8] focus:border-[#cbd5e1]"
+              className="h-[clamp(48px,6.2vh,56px)] w-full rounded-[12px] border border-[#e2e8f0] bg-[#f8fafc] pl-[48px] pr-[17px] font-['IBM_Plex_Sans'] text-[17px] font-normal text-[#0f172a] outline-none placeholder:text-[#94a3b8] focus:border-[#cbd5e1]"
               name="email"
               placeholder="Enter your work email"
               type="email"
@@ -528,7 +527,7 @@ function LoginForm({
               <div className="relative">
                 <input
                   autoComplete="current-password"
-                  className="h-[56px] w-full rounded-[12px] border border-[#e2e8f0] bg-[#f8fafc] py-[15px] pl-[48px] pr-[52px] font-['IBM_Plex_Sans'] text-[17px] font-normal text-[#0f172a] outline-none placeholder:text-[#94a3b8] focus:border-[#cbd5e1]"
+                  className="h-[clamp(48px,6.2vh,56px)] w-full rounded-[12px] border border-[#e2e8f0] bg-[#f8fafc] pl-[48px] pr-[52px] font-['IBM_Plex_Sans'] text-[17px] font-normal text-[#0f172a] outline-none placeholder:text-[#94a3b8] focus:border-[#cbd5e1]"
                   name="password"
                   placeholder="Enter your password"
                   type="password"
@@ -540,7 +539,7 @@ function LoginForm({
                 />
                 <button
                   aria-label="Show password"
-                  className="absolute right-0 top-0 flex h-[56px] w-[56px] items-center justify-center"
+                  className="absolute inset-y-0 right-0 flex w-[52px] items-center justify-center"
                   type="button"
                 >
                   <img alt="" className="size-[20px]" src={icons[6]} />
@@ -569,7 +568,7 @@ function LoginForm({
         )}
 
         <button
-          className="flex h-[54px] w-full items-center justify-center gap-[7.99px] rounded-[12px] bg-gradient-to-r from-[#f75317] via-[#7c3aed] via-[58.173%] to-[#0c20ff] to-[97.115%] px-[16px] py-[12px] shadow-[0px_10px_15px_-3px_rgba(249,115,22,0.2),0px_4px_6px_-4px_rgba(249,115,22,0.2)]"
+          className="flex h-[clamp(48px,6vh,54px)] w-full items-center justify-center gap-[7.99px] rounded-[12px] bg-gradient-to-r from-[#f75317] via-[#7c3aed] via-[58.173%] to-[#0c20ff] to-[97.115%] px-[16px] py-[12px] shadow-[0px_10px_15px_-3px_rgba(249,115,22,0.2),0px_4px_6px_-4px_rgba(249,115,22,0.2)]"
           type="submit"
         >
           <span className="font-['IBM_Plex_Sans'] text-[17px] font-bold leading-[24px] text-white">
@@ -582,7 +581,7 @@ function LoginForm({
       {isForgot ? (
         <>
           <button
-            className="flex h-[56px] w-full items-center justify-center rounded-[12px] border border-[#e2e8f0] bg-white px-[16px] font-['IBM_Plex_Sans'] text-[16px] font-bold leading-[24px] text-[#334155] shadow-[0px_1px_2px_rgba(15,23,42,0.03)]"
+            className="flex h-[clamp(48px,6.2vh,56px)] w-full items-center justify-center rounded-[12px] border border-[#e2e8f0] bg-white px-[16px] font-['IBM_Plex_Sans'] text-[16px] font-bold leading-[24px] text-[#334155] shadow-[0px_1px_2px_rgba(15,23,42,0.03)]"
             onClick={onBack}
             type="button"
           >
@@ -678,7 +677,7 @@ export function LoginPage() {
         </header>
 
         <section className={sectionClassName}>
-          <div className="relative min-h-0 md:min-h-[600px] 2xl:min-h-[690px]">
+          <div className="relative min-h-0 md:min-h-[clamp(460px,56vh,600px)] 2xl:min-h-[690px]">
             <div className="relative z-10 max-w-[620px]">
               <h1 className="m-0 font-['IBM_Plex_Sans'] text-[clamp(2.35rem,4vw,54px)] font-bold leading-[1.05] tracking-normal text-[#0f172a]">
                 {copy.headline.map((line) => (
@@ -713,7 +712,13 @@ export function LoginPage() {
               onBack={goToLogin}
               onForgot={goToForgot}
             />
-            {!isMfa && <TrustBadges />}
+            {/* Trust badges are secondary — hide them on short viewports
+                (laptops) so the form never forces the page to scroll. */}
+            {!isMfa && (
+              <div className="w-full [@media(max-height:820px)]:hidden">
+                <TrustBadges />
+              </div>
+            )}
           </div>
         </section>
       </div>
