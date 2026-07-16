@@ -11,7 +11,7 @@ React 19 + Vite + Tailwind v4 + `lucide-react`. Dummy data for now.
 - `components/layout/Sidebar.tsx` — app sidebar. Props: `active` (top nav label), `activeSub` (sub-tab label). Signal Intelligence expands to its in-use sub-tabs (Signal Feed, Signal Analytics); other items are flat. Nav items with an `href` render as links, others are inert placeholders.
 - `components/layout/TopBar.tsx` — search + detection pill + actions. Props: `searchPlaceholder`, `detectionIcon`, `showDetection`.
 - `components/layout/TopActions.tsx` — `DetectionPill`, `AIAssistantButton`, `NotificationBell`, `UserMenu` (compose when a page needs a custom header).
-- `components/ui/dataviz.tsx` — `Sparkline`, `Donut`, `Delta`, `UpTriangle`, `smoothPath`, `toPoints`. All charts are inline SVG — no chart library.
+- `components/ui/dataviz.tsx` — `Sparkline`, `Donut`, `Delta`, `UpTriangle`, `smoothPath`, `toPoints`. Charts are inline SVG — no chart library. Exception: Signal Analytics' Geographic Distribution map uses `react-svg-worldmap` (data-driven country shading), **lazy-loaded** so its ~170KB geometry stays out of the main bundle.
 
 ## Routing
 - `App.tsx` routes by `pathname.includes(...)`. Order matters: **most specific first** (e.g. `signal-detail` before `signal-feed`).

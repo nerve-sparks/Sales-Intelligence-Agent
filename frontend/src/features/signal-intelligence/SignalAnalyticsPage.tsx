@@ -17,7 +17,8 @@ import {
   Users,
   Zap,
 } from "lucide-react";
-import type { ComponentType, ReactNode } from "react";
+import { lazy, Suspense, type ComponentType, type ReactNode } from "react";
+import type { Data } from "react-svg-worldmap";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Delta, Donut, Sparkline, smoothPath } from "../../components/ui/dataviz";
@@ -554,22 +555,36 @@ const countries = [
   { name: "Germany", value: "612", pct: "4.8%" },
 ];
 
-/* Stylized world-map placeholder (abstract continents, not geographic). */
+/* Real world map, shaded by signal volume per country. Dummy data for now —
+   only the USA is highlighted. Lazy-loaded so the ~170KB map geometry stays out
+   of the main bundle (same rationale as the dashboard globe). */
+const geoData: Data = [{ country: "us", value: 4267 }];
+
+const LazyWorldMap = lazy(() =>
+  import("react-svg-worldmap").then((m) => ({ default: m.WorldMap })),
+);
+
 function WorldMap() {
-  const blobs = [
-    { cx: 70, cy: 90, rx: 42, ry: 30, o: 0.55 },
-    { cx: 96, cy: 150, rx: 24, ry: 40, o: 0.4 },
-    { cx: 165, cy: 78, rx: 20, ry: 16, o: 0.5 },
-    { cx: 178, cy: 128, rx: 26, ry: 40, o: 0.45 },
-    { cx: 250, cy: 92, rx: 55, ry: 34, o: 0.6 },
-    { cx: 290, cy: 150, rx: 20, ry: 12, o: 0.35 },
-  ];
   return (
-    <svg className="h-full w-full" preserveAspectRatio="xMidYMid meet" viewBox="0 0 340 200">
-      {blobs.map((b, i) => (
-        <ellipse cx={b.cx} cy={b.cy} fill="#7c3aed" fillOpacity={b.o} key={i} rx={b.rx} ry={b.ry} />
-      ))}
-    </svg>
+    <Suspense
+      fallback={<div className="size-full animate-pulse rounded-[12px] bg-[#efe9ff]" />}
+    >
+      <div className="[&_figure]:!m-0 [&_svg]:block [&_svg]:h-auto [&_svg]:w-full">
+        <LazyWorldMap
+          backgroundColor="transparent"
+          color="#7c3aed"
+          data={geoData}
+          size="responsive"
+          strokeOpacity={0.7}
+          styleFunction={({ countryValue }) => ({
+            fill: countryValue === undefined ? "#ded5fb" : "#7c3aed",
+            stroke: "#ffffff",
+            strokeWidth: 0.4,
+            cursor: "default",
+          })}
+        />
+      </div>
+    </Suspense>
   );
 }
 
@@ -577,20 +592,18 @@ function GeographicCard() {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <CardHead action={<ViewLink />} title="Geographic Distribution" />
-      <div className="mt-[16px] flex flex-col gap-[20px] lg:flex-row">
-        <div className="flex flex-1 flex-col">
-          <div className="h-[180px] w-full rounded-[12px] bg-[#f7f5ff]">
-            <WorldMap />
-          </div>
-          <div className="mt-[12px] flex items-center gap-[10px]">
-            <span className="text-[12px] text-[#94a3b8]">Low</span>
-            <span className="h-[8px] flex-1 rounded-full bg-gradient-to-r from-[#ede9fe] to-[#6d28d9]" />
-            <span className="text-[12px] text-[#94a3b8]">High</span>
-          </div>
+      <div className="mt-[16px] flex flex-col gap-[16px]">
+        <div className="w-full overflow-hidden rounded-[12px] bg-[#f7f5ff] px-[10px] py-[8px]">
+          <WorldMap />
         </div>
-        <div className="w-full lg:w-[220px]">
+        <div className="flex items-center gap-[10px]">
+          <span className="text-[12px] text-[#94a3b8]">Low</span>
+          <span className="h-[8px] flex-1 rounded-full bg-gradient-to-r from-[#ede9fe] to-[#6d28d9]" />
+          <span className="text-[12px] text-[#94a3b8]">High</span>
+        </div>
+        <div>
           <p className="m-0 text-[13px] font-semibold text-[#475569]">Top Countries</p>
-          <div className="mt-[12px] flex flex-col gap-[12px]">
+          <div className="mt-[12px] grid grid-cols-1 gap-x-[20px] gap-y-[10px] sm:grid-cols-2">
             {countries.map((c) => (
               <div className="flex items-center justify-between gap-[10px]" key={c.name}>
                 <span className="text-[13px] text-[#334155]">{c.name}</span>
