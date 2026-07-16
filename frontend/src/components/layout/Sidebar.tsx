@@ -1,19 +1,11 @@
 import {
-  BarChart3,
-  Bell,
-  Blocks,
-  Bot,
   ChevronDown,
   ChevronRight,
   Contact,
-  FileText,
   Gauge,
   Home,
-  ListFilter,
-  MessageSquare,
   Radio,
   Settings,
-  Users,
   Zap,
 } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
@@ -31,51 +23,17 @@ type NavEntry = {
 
 const navItems: NavEntry[] = [
   { icon: Home, label: "Dashboard", href: "/dashboard" },
-  {
-    icon: Zap,
-    label: "Trigger Intelligence",
-    href: "/trigger-library",
-    children: [
-      { label: "Trigger Library", href: "/trigger-library" },
-      { label: "Active Triggers" },
-      { label: "Trigger Builder" },
-      { label: "Trigger Templates" },
-      { label: "Trigger Performance" },
-    ],
-  },
+  { icon: Zap, label: "Trigger Intelligence", href: "/trigger-library" },
   {
     icon: Radio,
     label: "Signal Intelligence",
     href: "/signal-intelligence",
     children: [
       { label: "Signal Feed", href: "/signal-feed" },
-      { label: "Signal Explorer" },
-      { label: "Signal Alerts" },
-      { label: "Watchlist" },
-      { label: "Signal Validation Center" },
       { label: "Signal Analytics", href: "/signal-analytics" },
     ],
   },
-  { icon: Users, label: "Prospects" },
-  {
-    icon: Contact,
-    label: "Enterprise List",
-    href: "/enterprise-list",
-    children: [
-      { label: "Account List" },
-      { label: "Account Mapping" },
-      { label: "Buying Committee" },
-      { label: "Relationship Graph" },
-      { label: "News & Insights" },
-    ],
-  },
-  { icon: ListFilter, label: "Pipeline" },
-  { icon: MessageSquare, label: "Engagements" },
-  { icon: Bot, label: "AI Agents" },
-  { icon: BarChart3, label: "Analytics" },
-  { icon: FileText, label: "Reports" },
-  { icon: Blocks, label: "Integrations" },
-  { icon: Bell, label: "Alerts" },
+  { icon: Contact, label: "Enterprise List", href: "/enterprise-list" },
   { icon: Gauge, label: "Score Breakdown", href: "/score-breakdown" },
 ];
 

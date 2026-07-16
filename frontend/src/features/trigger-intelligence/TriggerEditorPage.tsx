@@ -9,7 +9,6 @@ import {
   Mail,
   Play,
   Plus,
-  RefreshCw,
   Rocket,
   Save,
   Slack,
@@ -18,12 +17,7 @@ import {
 } from "lucide-react";
 import { useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
-import {
-  AIAssistantButton,
-  DetectionPill,
-  NotificationBell,
-  UserMenu,
-} from "../../components/layout/TopActions";
+import { TopBar } from "../../components/layout/TopBar";
 import { addTrigger } from "../../lib/triggers";
 
 const pageBackground =
@@ -69,9 +63,11 @@ export function TriggerEditorPage() {
 
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
-      <Sidebar active="Trigger Intelligence" activeSub="Trigger Library" />
+      <Sidebar active="Trigger Intelligence" />
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar searchPlaceholder="Search companies, triggers, executives..." />
+
         <main className="flex-1 overflow-x-hidden px-[28px] py-[22px]">
           {/* Header */}
           <div className="flex flex-col gap-[18px] xl:flex-row xl:items-start xl:justify-between">
@@ -95,12 +91,6 @@ export function TriggerEditorPage() {
             </div>
 
             <div className="flex flex-col items-start gap-[16px] xl:items-end">
-              <div className="flex flex-wrap items-center gap-[12px]">
-                <DetectionPill className="hidden md:flex" icon={RefreshCw} />
-                <AIAssistantButton />
-                <NotificationBell />
-                <UserMenu />
-              </div>
               <div className="flex flex-wrap items-center gap-[10px]">
                 <button
                   className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155]"
