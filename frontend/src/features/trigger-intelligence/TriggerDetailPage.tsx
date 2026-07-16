@@ -704,7 +704,7 @@ function RecentActivityCard() {
 export function TriggerDetailPage() {
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
-      <Sidebar active="Trigger Intelligence" activeSub="Trigger Library" />
+      <Sidebar active="Trigger Intelligence" />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar searchPlaceholder="Search companies, triggers, executives..." showDetection={false} />

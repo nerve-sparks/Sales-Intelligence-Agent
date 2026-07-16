@@ -23,12 +23,7 @@ import {
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
-import {
-  AIAssistantButton,
-  DetectionPill,
-  NotificationBell,
-  UserMenu,
-} from "../../components/layout/TopActions";
+import { TopBar } from "../../components/layout/TopBar";
 import { Delta, Sparkline } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 
@@ -589,6 +584,11 @@ export function SignalIntelligencePage() {
       <Sidebar active="Signal Intelligence" />
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar
+          detectionIcon={RefreshCw}
+          searchPlaceholder="Search companies, triggers, executives..."
+        />
+
         <main className="flex-1 overflow-x-hidden px-[28px] py-[24px]">
           <div className="flex flex-col gap-[20px] xl:flex-row xl:items-start xl:justify-between">
             <div>
@@ -606,23 +606,14 @@ export function SignalIntelligencePage() {
               </p>
             </div>
 
-            <div className="flex flex-col items-start gap-[16px] xl:items-end">
-              <div className="flex flex-wrap items-center gap-[12px]">
-                <DetectionPill className="hidden md:flex" icon={RefreshCw} />
-                <AIAssistantButton />
-                <NotificationBell />
-                <UserMenu />
-              </div>
-
-              <button
-                className="flex items-center gap-[10px] rounded-[12px] border border-[#e9edf5] bg-white px-[16px] py-[11px] text-[14px] font-semibold text-[#0f172a]"
-                type="button"
-              >
-                <Calendar className="size-[17px] text-[#4f46e5]" />
-                May 21 - May 27, 2024
-                <ChevronDown className="size-[15px] text-[#94a3b8]" />
-              </button>
-            </div>
+            <button
+              className="flex items-center gap-[10px] rounded-[12px] border border-[#e9edf5] bg-white px-[16px] py-[11px] text-[14px] font-semibold text-[#0f172a]"
+              type="button"
+            >
+              <Calendar className="size-[17px] text-[#4f46e5]" />
+              May 21 - May 27, 2024
+              <ChevronDown className="size-[15px] text-[#94a3b8]" />
+            </button>
           </div>
 
           <div className="mt-[22px]">

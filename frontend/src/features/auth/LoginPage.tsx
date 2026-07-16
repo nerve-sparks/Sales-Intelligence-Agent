@@ -655,7 +655,7 @@ export function LoginPage() {
   const copy = screenCopy[mode];
   const isMfa = mode === "mfa";
   const sectionClassName =
-    "relative z-10 grid flex-1 items-center gap-[clamp(1.25rem,3.4vw,4rem)] pb-[clamp(1rem,2vh,2rem)] pt-0 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]";
+    "relative z-10 grid flex-1 items-start gap-[clamp(1.25rem,3.4vw,4rem)] pb-[clamp(1rem,2vh,2rem)] pt-[clamp(1.5rem,4vh,3rem)] lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]";
 
   const goToLogin = () => {
     setMode("login");
@@ -674,12 +674,12 @@ export function LoginPage() {
     >
       <div className="relative mx-auto flex min-h-screen w-full max-w-[1280px] flex-col px-[clamp(1.5rem,4vw,3rem)] py-[clamp(0.75rem,2.4vh,2.5rem)]">
         <header className="relative z-20 flex shrink-0 items-center">
-          <FigmaLogo className="origin-left -translate-x-[clamp(0.5rem,0.9vw,1rem)] translate-y-[clamp(0.95rem,1.8vh,1.35rem)] scale-105 sm:scale-125" />
+          <FigmaLogo className="origin-left -translate-x-[clamp(0.5rem,0.9vw,1rem)] scale-105 sm:scale-125" />
         </header>
 
         <section className={sectionClassName}>
           <div className="relative min-h-0 md:min-h-[600px] 2xl:min-h-[690px]">
-            <div className="relative z-10 max-w-[620px] translate-y-[clamp(-3.25rem,-5vh,)]">
+            <div className="relative z-10 max-w-[620px]">
               <h1 className="m-0 font-['IBM_Plex_Sans'] text-[clamp(2.35rem,4vw,54px)] font-bold leading-[1.05] tracking-normal text-[#0f172a]">
                 {copy.headline.map((line) => (
                   <span className="block" key={line}>

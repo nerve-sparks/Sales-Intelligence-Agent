@@ -18,7 +18,7 @@ export function TopBar({
   showDetection?: boolean;
 }) {
   return (
-    <header className="flex h-[88px] shrink-0 items-center gap-[16px] border-b border-[#e9edf5] bg-white px-[24px]">
+    <header className="sticky top-0 z-30 flex h-[88px] shrink-0 items-center gap-[16px] border-b border-[#e9edf5] bg-white px-[24px]">
       <div className="relative w-full max-w-[500px]">
         <Search className="pointer-events-none absolute left-[18px] top-1/2 size-[18px] -translate-y-1/2 text-[#94a3b8]" />
         <input
