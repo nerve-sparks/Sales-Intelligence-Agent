@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.services.workspace_service import add_member, create_workspace, list_members, list_workspaces
-from app.views.workspace_view import serialize_member, serialize_workspace
+from app.schemas.workspace import MemberOut
 
 
 class WorkspaceCreate(BaseModel):
@@ -20,20 +20,30 @@ class MemberCreate(BaseModel):
 
 
 async def create(organisation_id: UUID, payload: WorkspaceCreate, db: AsyncSession = Depends(get_db)):
-    workspace = await create_workspace(db, organisation_id, payload.model_dump())
-    return serialize_workspace(workspace)
+    return await create_workspace(db, organisation_id, payload.model_dump())
 
 
 async def list_all(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
-    workspaces = await list_workspaces(db, organisation_id)
-    return [serialize_workspace(w) for w in workspaces]
+    return await list_workspaces(db, organisation_id)
+
+
+def _member_out(member) -> MemberOut:
+    return MemberOut(
+        workspace_member_id=member.workspace_member_id,
+        workspace_id=member.workspace_id,
+        user_id=member.user_id,
+        email=member.user.email if member.user else None,
+        full_name=member.user.full_name if member.user else None,
+        role=member.role,
+        created_at=member.created_at,
+    )
 
 
 async def add_workspace_member(workspace_id: UUID, payload: MemberCreate, db: AsyncSession = Depends(get_db)):
     member = await add_member(db, workspace_id, payload.user_id, payload.role)
-    return serialize_member(member)
+    return _member_out(member)
 
 
 async def list_workspace_members(workspace_id: UUID, db: AsyncSession = Depends(get_db)):
     members = await list_members(db, workspace_id)
-    return [serialize_member(m) for m in members]
+    return [_member_out(m) for m in members]

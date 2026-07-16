@@ -1,7 +1,8 @@
 from fastapi import APIRouter
 
 from app.controllers import users as users_controller
+from app.schemas.user import UserOut
 
 router = APIRouter(prefix="/organisations/{organisation_id}/users", tags=["users"])
 
-router.post("")(users_controller.create)
+router.post("", response_model=UserOut)(users_controller.create)
