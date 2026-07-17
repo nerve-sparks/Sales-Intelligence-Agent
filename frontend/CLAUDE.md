@@ -26,7 +26,7 @@ React 19 + Vite + Tailwind v4 + `lucide-react`. Dummy data for now.
 - Sidebar (`aside`) and `TopBar` are `sticky top-0` — they stay put on scroll. Don't wrap pages in an `overflow` container or sticky breaks.
 
 ## Pages & routes (all built, dummy data)
-Auth: `/` login, `/forgot-password`, `/mfa-verification` (all in `features/auth/LoginPage.tsx`); `/onboarding`.
+Auth: `/` login, `/forgot-password`, `/mfa-verification` (all in `features/auth/LoginPage.tsx`); `/onboarding`. Auth screens are sized to the viewport so they don't scroll on laptops — vertical dims use `vh`-keyed `clamp()`/`min()`, and the trust badges hide under `[@media(max-height:820px)]`.
 Dashboard `/dashboard`. Signal Intelligence: `/signal-intelligence`, `/signal-feed`, `/signal-detail`, `/signal-analytics`. Trigger Intelligence: `/trigger-library`, `/trigger-detail`, `/trigger-editor`. CRM/Enterprise: `/enterprise-list`, `/enterprise-detail`, `/buying-committee`, `/member-detail`. `/score-breakdown`, `/score-history`.
 - List rows / cards / page-tabs navigate via `window.location.href`. Trigger Editor persists created triggers to `localStorage` (`src/lib/triggers.ts`) → shown on Trigger Library.
 
