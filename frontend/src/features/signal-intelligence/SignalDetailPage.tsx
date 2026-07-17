@@ -20,11 +20,33 @@ import {
   Triangle,
   TrendingUp,
 } from "lucide-react";
-import type { ComponentType } from "react";
+import { useEffect, useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { UpTriangle } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
+import { getSignalById, type SignalWithCompanyOut } from "../../api/signals";
+import { getOrganisationId } from "../../lib/session";
+
+function getSignalIdFromUrl(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return new URLSearchParams(window.location.search).get("id");
+}
+
+function relativeTime(iso: string | null): string {
+  if (!iso) {
+    return "—";
+  }
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const minutes = Math.round(diffMs / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -89,7 +111,19 @@ function Tag({ label, tone }: { label: string; tone: string }) {
 /* Header                                                              */
 /* ------------------------------------------------------------------ */
 
-function DetailHeader() {
+function DetailHeader({ signal }: { signal: SignalWithCompanyOut | null }) {
+  const title = signal ? signal.signal_type.replace(/_/g, " ") : "Series B funding round announced";
+  const company = signal?.company_name ?? "Acme Corp";
+  const detected = signal ? `${new Date(signal.ingested_at ?? "").toLocaleString()} (${relativeTime(signal.ingested_at)})` : "May 20, 2025 10:15 AM (8m ago)";
+  const category = signal ? signal.signal_category.replace(/_/g, " ") : "Funding & Investment";
+  const intentLabel = signal
+    ? (signal.signal_confidence ?? 0) >= 0.8
+      ? "High Intent"
+      : (signal.signal_confidence ?? 0) >= 0.5
+        ? "Medium Intent"
+        : "Low Intent"
+    : "High Intent";
+
   return (
     <div className="flex flex-col gap-[18px] xl:flex-row xl:items-start xl:justify-between">
       <div className="flex items-start gap-[18px]">
@@ -97,18 +131,18 @@ function DetailHeader() {
         <div>
           <div className="flex flex-wrap items-center gap-[12px]">
             <h1 className="m-0 text-[24px] font-bold text-[#0f172a]">
-              Series B funding round announced
+              {title}
             </h1>
             <span className="rounded-[7px] bg-[#f3e9ff] px-[10px] py-[4px] text-[12px] font-semibold text-[#7c3aed]">
-              High Intent
+              {intentLabel}
             </span>
           </div>
           <p className="m-0 mt-[8px] text-[14px] text-[#64748b]">
-            <span className="font-semibold text-[#334155]">Acme Corp</span> • Detected
-            on May 20, 2025 10:15 AM (8m ago)
+            <span className="font-semibold text-[#334155]">{company}</span> • Detected
+            on {detected}
           </p>
           <div className="mt-[12px] flex flex-wrap gap-[8px]">
-            <Tag label="Funding & Investment" tone="purple" />
+            <Tag label={category} tone="purple" />
             <Tag label="Press Release" tone="gray" />
           </div>
         </div>
@@ -669,6 +703,21 @@ function SimilarSignalsCard() {
 /* ------------------------------------------------------------------ */
 
 export function SignalDetailPage() {
+  const [signal, setSignal] = useState<SignalWithCompanyOut | null>(null);
+
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    const signalId = getSignalIdFromUrl();
+    if (!organisationId || !signalId) {
+      return;
+    }
+    getSignalById(organisationId, signalId)
+      .then(setSignal)
+      .catch(() => {
+        // No matching signal - keep the dummy fallback data.
+      });
+  }, []);
+
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Signal Intelligence" activeSub="Signal Feed" />
@@ -689,7 +738,7 @@ export function SignalDetailPage() {
           </nav>
 
           <div className="mt-[16px]">
-            <DetailHeader />
+            <DetailHeader signal={signal} />
           </div>
 
           <DetailTabs />

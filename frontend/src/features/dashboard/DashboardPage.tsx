@@ -23,6 +23,62 @@ import {
   toPoints,
 } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
+import { useEffect, useState } from "react";
+import { getRankedScores, type RankedLeadScoreOut } from "../../api/scores";
+import { listSignals, type SignalWithCompanyOut } from "../../api/signals";
+import { getOrganisationId } from "../../lib/session";
+
+function relativeTime(iso: string | null): string {
+  if (!iso) {
+    return "—";
+  }
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const minutes = Math.round(diffMs / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/* RankedLeadScoreOut has no revenue/next-best-action - those are UI-only
+ * concepts (revenue would need a join the ranked-scores endpoint doesn't
+ * do; "next best action" has no backend concept at all). Real
+ * name/score/gate_status come from the API. */
+function toProspect(row: RankedLeadScoreOut) {
+  const score = row.lead_score !== null ? Math.round(row.lead_score) : 0;
+  const initials = row.company_name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 3)
+    .toUpperCase();
+  return {
+    initials: initials || "?",
+    company: row.company_name,
+    revenue: "—",
+    action: row.gate_status === "active" ? "Qualified Lead" : "Needs Nurturing",
+    tone: row.gate_status === "active" ? "blue" : "orange",
+    score,
+    ring: score >= 75 ? "green" : "orange",
+  };
+}
+
+/* SignalWithCompanyOut has no action-tag/score-ring vocabulary - those are
+ * UI-only. Real company/time come from the API. */
+function toRecentSignal(s: SignalWithCompanyOut) {
+  const confidence = s.signal_confidence ?? 0;
+  const score = Math.round(confidence * 100);
+  return {
+    time: relativeTime(s.ingested_at),
+    company: s.company_name,
+    action: s.signal_type.replace(/_/g, " "),
+    tone: "blue",
+    score,
+    ring: score >= 75 ? "green" : "orange",
+    iconBg: "bg-[#2563eb]",
+  };
+}
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -528,7 +584,7 @@ function LeadTrend() {
 /* Top Priority Prospects                                              */
 /* ------------------------------------------------------------------ */
 
-const prospects = [
+const dummyProspects = [
   {
     initials: "ABC",
     company: "ABC Accounting Group",
@@ -576,7 +632,7 @@ const prospects = [
   },
 ];
 
-function TopPriorityProspects() {
+function TopPriorityProspects({ prospects }: { prospects: typeof dummyProspects }) {
   return (
     <section className="rounded-[18px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex items-center justify-between">
@@ -596,10 +652,10 @@ function TopPriorityProspects() {
       </div>
 
       <div className="divide-y divide-[#f1f5f9]">
-        {prospects.map((row) => (
+        {prospects.map((row, i) => (
           <div
             className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-[16px] py-[12px]"
-            key={row.company}
+            key={`${row.company}-${i}`}
           >
             <div className="flex min-w-0 items-center gap-[12px]">
               <span className="flex size-[38px] shrink-0 items-center justify-center rounded-full bg-[#0f172a] text-[11px] font-bold text-white">
@@ -647,7 +703,7 @@ function TopPriorityProspects() {
 /* Recent Signals                                                      */
 /* ------------------------------------------------------------------ */
 
-const signals = [
+const dummyRecentSignals = [
   {
     time: "2m ago",
     company: "Thomson & Associates",
@@ -695,7 +751,7 @@ const signals = [
   },
 ];
 
-function RecentSignals() {
+function RecentSignals({ signals }: { signals: typeof dummyRecentSignals }) {
   return (
     <section className="rounded-[18px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex items-center justify-between">
@@ -706,8 +762,8 @@ function RecentSignals() {
       </div>
 
       <div className="mt-[8px] divide-y divide-[#f1f5f9]">
-        {signals.map((signal) => (
-          <div className="flex items-center gap-[12px] py-[13px]" key={signal.company}>
+        {signals.map((signal, i) => (
+          <div className="flex items-center gap-[12px] py-[13px]" key={`${signal.company}-${i}`}>
             <span
               className={cn(
                 "flex size-[38px] shrink-0 items-center justify-center rounded-[10px] text-white",
@@ -802,6 +858,34 @@ function PipelineOverview() {
 /* ------------------------------------------------------------------ */
 
 export function DashboardPage() {
+  const [prospects, setProspects] = useState<typeof dummyProspects>(dummyProspects);
+  const [recentSignals, setRecentSignals] = useState<typeof dummyRecentSignals>(dummyRecentSignals);
+
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    if (!organisationId) {
+      return;
+    }
+    getRankedScores(organisationId)
+      .then((rows) => {
+        if (rows.length > 0) {
+          setProspects(rows.slice(0, 5).map(toProspect));
+        }
+      })
+      .catch(() => {
+        // No backend/org yet - keep the dummy rows.
+      });
+    listSignals(organisationId, { page: 1, page_size: 5 })
+      .then((res) => {
+        if (res.items.length > 0) {
+          setRecentSignals(res.items.map(toRecentSignal));
+        }
+      })
+      .catch(() => {
+        // No backend/org yet - keep the dummy rows.
+      });
+  }, []);
+
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Dashboard" />
@@ -839,8 +923,8 @@ export function DashboardPage() {
           </div>
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[1.35fr_0.9fr_1.05fr]">
-            <TopPriorityProspects />
-            <RecentSignals />
+            <TopPriorityProspects prospects={prospects} />
+            <RecentSignals signals={recentSignals} />
             <PipelineOverview />
           </div>
         </main>

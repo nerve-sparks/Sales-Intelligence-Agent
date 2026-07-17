@@ -16,11 +16,15 @@ import {
   Upload,
   Users,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Sparkline, UpTriangle } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
+import { listCompanies } from "../../api/companies";
+import { getIcpCompanies, listIcps, type IcpOut } from "../../api/icp";
+import { getRankedScores } from "../../api/scores";
+import { getOrganisationId, getWorkspaceId } from "../../lib/session";
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -107,7 +111,43 @@ function DropFilter({ label }: { label: string }) {
   );
 }
 
-function Toolbar() {
+function IcpFilterSelect({
+  icps,
+  selectedIcpId,
+  onChange,
+}: {
+  icps: IcpOut[];
+  selectedIcpId: string;
+  onChange: (icpId: string) => void;
+}) {
+  return (
+    <div className="relative flex h-[42px] items-center rounded-[10px] border border-[#e9edf5] bg-white px-[14px]">
+      <select
+        className="h-full appearance-none bg-transparent pr-[24px] text-[14px] font-medium text-[#334155] outline-none"
+        onChange={(e) => onChange(e.target.value)}
+        value={selectedIcpId}
+      >
+        <option value="all">All Companies</option>
+        {icps.map((icp) => (
+          <option key={icp.icp_id} value={icp.icp_id}>
+            {icp.name || "Untitled ICP"}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-[14px] size-[15px] text-[#94a3b8]" />
+    </div>
+  );
+}
+
+function Toolbar({
+  icps,
+  selectedIcpId,
+  onIcpChange,
+}: {
+  icps: IcpOut[];
+  selectedIcpId: string;
+  onIcpChange: (icpId: string) => void;
+}) {
   return (
     <div className="flex flex-wrap items-center gap-[12px]">
       <div className="relative min-w-[220px] flex-1">
@@ -118,6 +158,7 @@ function Toolbar() {
           type="search"
         />
       </div>
+      <IcpFilterSelect icps={icps} onChange={onIcpChange} selectedIcpId={selectedIcpId} />
       <DropFilter label="All Industries" />
       <DropFilter label="All Scores" />
       <DropFilter label="All Levels" />
@@ -135,6 +176,7 @@ function Toolbar() {
 /* ------------------------------------------------------------------ */
 
 type Enterprise = {
+  companyId?: string;
   logo: string;
   bg: string;
   name: string;
@@ -158,7 +200,71 @@ const rising = [10, 14, 12, 16, 15, 18, 20];
 const wavy = [15, 12, 16, 13, 17, 14, 18];
 const falling = [20, 17, 18, 14, 15, 12, 10];
 
-const enterprises: Enterprise[] = [
+const LOGO_COLORS = ["#16a34a", "#2563eb", "#7c3aed", "#0d9488", "#ef4444", "#6366f1", "#10b981", "#3b82f6", "#334155", "#f97316"];
+
+function hashString(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+type CompanyLike = {
+  company_id: string;
+  company_name: string;
+  city: string | null;
+  country: string | null;
+  industries: string[] | null;
+  revenue_range: string | null;
+  employee_range: string | null;
+};
+
+/* CompanyListItemOut has no intent/tier/engagement/sparkline/lastSignal -
+ * those are UI-only concepts with no backend model. tier/intent are derived
+ * from the real lead_score where available; engagement/sparkline/lastSignal
+ * are synthesized since nothing backs them.
+ *
+ * leadScore/gateStatus are always passed explicitly: the "all companies"
+ * path reads them straight off CompanyListItemOut, but the ICP-filtered
+ * path (getIcpCompanies) returns plain CompanyOut with no score joined in,
+ * so that caller looks scores up separately via getRankedScores() first. */
+function toEnterprise(company: CompanyLike, leadScore: number | null, gateStatus: string | null): Enterprise {
+  const score = leadScore ?? 0;
+  const tier: Enterprise["tier"] = score >= 80 ? "high" : score >= 60 ? "medium" : "low";
+  const intent = tier === "high" ? "High" : tier === "medium" ? "Medium" : "Low";
+  const active = gateStatus === "active";
+  const initials = company.company_name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+  const bg = LOGO_COLORS[hashString(company.company_name) % LOGO_COLORS.length];
+
+  return {
+    companyId: company.company_id,
+    logo: initials || "?",
+    bg,
+    name: company.company_name,
+    fav: false,
+    industry: company.industries?.[0] ?? "—",
+    flag: "🏳️",
+    location: [company.city, company.country].filter(Boolean).join(", ") || "—",
+    score,
+    intent,
+    tier,
+    engagement: active ? "Active" : "Dormant",
+    engColor: active ? "#16a34a" : "#94a3b8",
+    eng: active ? rising : falling,
+    lastSignal: "—",
+    dot: active ? "#16a34a" : "#94a3b8",
+    revenue: company.revenue_range ?? "—",
+    employees: company.employee_range ?? "—",
+  };
+}
+
+const dummyEnterprises: Enterprise[] = [
   { logo: "TN", bg: "#16a34a", name: "TechNova Solutions", fav: true, industry: "Software", flag: "🇮🇳", location: "Bengaluru, India", score: 92, intent: "Very High", tier: "high", engagement: "Active", engColor: "#16a34a", eng: rising, lastSignal: "2h ago", dot: "#16a34a", revenue: "$25M - $50M", employees: "501 - 1,000" },
   { logo: "CS", bg: "#2563eb", name: "CloudScale Inc.", fav: true, industry: "Cloud Services", flag: "🇺🇸", location: "San Francisco, USA", score: 88, intent: "High", tier: "high", engagement: "Active", engColor: "#16a34a", eng: rising, lastSignal: "5h ago", dot: "#16a34a", revenue: "$50M - $100M", employees: "1,001 - 2,500" },
   { logo: "DW", bg: "#7c3aed", name: "DataWeave Analytics", fav: false, industry: "Analytics", flag: "🇺🇸", location: "New York, USA", score: 85, intent: "High", tier: "high", engagement: "Active", engColor: "#16a34a", eng: rising, lastSignal: "1h ago", dot: "#16a34a", revenue: "$10M - $25M", employees: "201 - 500" },
@@ -190,7 +296,7 @@ function IntentTag({ intent, tier }: { intent: string; tier: string }) {
 const cols =
   "grid-cols-[28px_minmax(0,1.7fr)_0.9fr_1.2fr_1.15fr_1fr_1.2fr_0.85fr_1.1fr_0.95fr_40px]";
 
-function EnterpriseTable() {
+function EnterpriseTable({ enterprises }: { enterprises: Enterprise[] }) {
   return (
     <div className="overflow-x-auto">
       <div className="min-w-[1240px]">
@@ -212,9 +318,11 @@ function EnterpriseTable() {
           {enterprises.map((e) => (
             <div
               className={cn("grid cursor-pointer items-center gap-[12px] rounded-[8px] px-[8px] py-[13px] transition hover:bg-[#fafbff]", cols)}
-              key={e.name}
+              key={e.companyId ?? e.name}
               onClick={() => {
-                window.location.href = "/enterprise-detail";
+                window.location.href = e.companyId
+                  ? `/enterprise-detail?id=${e.companyId}`
+                  : "/enterprise-detail";
               }}
               role="button"
               tabIndex={0}
@@ -310,6 +418,68 @@ function PerPage() {
 /* ------------------------------------------------------------------ */
 
 export function EnterpriseListPage() {
+  const [enterprises, setEnterprises] = useState<Enterprise[]>(dummyEnterprises);
+  const [icps, setIcps] = useState<IcpOut[]>([]);
+  const [selectedIcpId, setSelectedIcpId] = useState("all");
+
+  // Populate the ICP filter dropdown once.
+  useEffect(() => {
+    const workspaceId = getWorkspaceId();
+    if (!workspaceId) {
+      return;
+    }
+    listIcps(workspaceId)
+      .then(setIcps)
+      .catch(() => {
+        // No backend/workspace yet - dropdown just shows "All Companies".
+      });
+  }, []);
+
+  // Reload the company list whenever the ICP filter changes - "all"
+  // queries every company in the org (listCompanies); a specific ICP
+  // queries only companies matching that ICP's filter criteria in SQL
+  // (getIcpCompanies -> icp_filter.filter_companies), then merges in
+  // lead scores separately since that endpoint doesn't join them.
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    const workspaceId = getWorkspaceId();
+    if (!organisationId) {
+      return;
+    }
+
+    if (selectedIcpId === "all") {
+      listCompanies(organisationId, { page: 1, page_size: 25 })
+        .then((res) => {
+          if (res.items.length > 0) {
+            setEnterprises(res.items.map((c) => toEnterprise(c, c.lead_score, c.gate_status)));
+          }
+        })
+        .catch(() => {
+          // No backend/org yet - keep the dummy rows.
+        });
+      return;
+    }
+
+    if (!workspaceId) {
+      return;
+    }
+    Promise.all([getIcpCompanies(workspaceId, selectedIcpId), getRankedScores(organisationId)])
+      .then(([icpResult, ranked]) => {
+        const scoreByName = new Map(ranked.map((r) => [r.company_name, r]));
+        setEnterprises(
+          icpResult.companies.map((c) => {
+            const matched = scoreByName.get(c.company_name);
+            return toEnterprise(c, matched?.lead_score ?? null, matched?.gate_status ?? null);
+          }),
+        );
+      })
+      .catch(() => {
+        // ICP has no matches yet, or the fetch failed - show nothing rather
+        // than silently falling back to the unrelated dummy rows.
+        setEnterprises([]);
+      });
+  }, [selectedIcpId]);
+
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Enterprise List" />
@@ -349,7 +519,7 @@ export function EnterpriseListPage() {
             <EnterpriseTabs />
 
             <div className="mt-[18px]">
-              <Toolbar />
+              <Toolbar icps={icps} onIcpChange={setSelectedIcpId} selectedIcpId={selectedIcpId} />
             </div>
 
             <div className="mt-[16px] flex flex-wrap items-center justify-end gap-[12px]">
@@ -364,7 +534,7 @@ export function EnterpriseListPage() {
             </div>
 
             <div className="mt-[16px]">
-              <EnterpriseTable />
+              <EnterpriseTable enterprises={enterprises} />
             </div>
 
             <div className="mt-[18px] flex flex-col items-center gap-[16px] border-t border-[#f1f5f9] pt-[18px] lg:flex-row lg:justify-between">

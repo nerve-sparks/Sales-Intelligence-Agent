@@ -22,6 +22,15 @@ async def get_icp(session: AsyncSession, workspace_id: UUID, icp_id: UUID) -> Ic
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
+async def list_icps(session: AsyncSession, workspace_id: UUID) -> list[IcpProfile]:
+    stmt = (
+        select(IcpProfile)
+        .where(IcpProfile.workspace_id == workspace_id)
+        .order_by(IcpProfile.created_at.desc())
+    )
+    return (await session.execute(stmt)).scalars().all()
+
+
 async def filter_companies(session: AsyncSession, icp: IcpProfile) -> list[Company]:
     # An ICP's Workspace belongs to exactly one Organisation - companies are
     # shared across all Workspaces in that Organisation, so scope by

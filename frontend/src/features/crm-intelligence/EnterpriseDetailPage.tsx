@@ -22,11 +22,21 @@ import {
   Video,
   Youtube,
 } from "lucide-react";
-import type { ComponentType, CSSProperties, ReactNode } from "react";
+import { useEffect, useState, type ComponentType, type CSSProperties, type ReactNode } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Donut, Sparkline, smoothPath } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
+import { getCompany } from "../../api/companies";
+import type { CompanyOut } from "../../api/icp";
+import { getOrganisationId } from "../../lib/session";
+
+function getCompanyIdFromUrl(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return new URLSearchParams(window.location.search).get("id");
+}
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -81,7 +91,20 @@ const scoreCards = [
   { label: "Fit Score", value: "88", badge: "Excellent", tone: "purple", spark: "#7c3aed", values: [42, 46, 50, 48, 56, 54, 60] },
 ];
 
-function Header() {
+function Header({ company }: { company: CompanyOut | null }) {
+  const name = company?.company_name ?? "TechNova Solutions";
+  const initials = company
+    ? company.company_name
+        .split(/\s+/)
+        .map((w) => w[0])
+        .join("")
+        .slice(0, 2)
+        .toUpperCase()
+    : "TN";
+  const industry = company?.industries?.[0] ?? "Software Development";
+  const location = company ? [company.city, company.country].filter(Boolean).join(", ") || "—" : "Bengaluru, India";
+  const website = company?.company_domain ?? "www.technova.com";
+
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-[12px]">
@@ -90,7 +113,7 @@ function Header() {
             Enterprise List
           </a>
           <ChevronRight className="size-[14px] text-[#cbd5e1]" />
-          <span className="font-semibold text-[#0f172a]">TechNova Solutions</span>
+          <span className="font-semibold text-[#0f172a]">{name}</span>
         </nav>
         <div className="flex flex-wrap items-center gap-[10px]">
           <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] py-[9px] text-[13px] font-semibold text-[#334155]" type="button">
@@ -111,21 +134,21 @@ function Header() {
       <div className="mt-[16px] flex flex-col gap-[16px] 2xl:flex-row 2xl:items-start 2xl:justify-between">
         <div className="flex items-start gap-[16px]">
           <span className="flex size-[64px] shrink-0 items-center justify-center rounded-[14px] bg-[#16a34a] text-[20px] font-bold text-white">
-            TN
+            {initials}
           </span>
           <div>
             <div className="flex flex-wrap items-center gap-[10px]">
-              <h1 className="m-0 text-[24px] font-bold text-[#0f172a]">TechNova Solutions</h1>
+              <h1 className="m-0 text-[24px] font-bold text-[#0f172a]">{name}</h1>
               <Badge label="Very High Intent" tone="green" />
               <Star className="size-[16px] text-[#cbd5e1]" />
             </div>
             <p className="m-0 mt-[6px] flex flex-wrap items-center gap-[8px] text-[13px] text-[#64748b]">
-              <span>Software Development</span>
+              <span>{industry}</span>
               <span>•</span>
-              <span>Bengaluru, India</span>
+              <span>{location}</span>
               <span>•</span>
-              <a className="font-medium text-[#2563eb] no-underline" href="https://www.technova.com">
-                www.technova.com
+              <a className="font-medium text-[#2563eb] no-underline" href={`https://${website}`}>
+                {website}
               </a>
               <Linkedin className="size-[15px] text-[#0a66c2]" />
             </p>
@@ -193,7 +216,7 @@ const tabLinks: Record<string, string> = {
   "Buying Committee": "/buying-committee",
 };
 
-function Tabs() {
+function Tabs({ companyId }: { companyId: string | null }) {
   return (
     <div className="mt-[18px] flex gap-[24px] overflow-x-auto border-b border-[#e9edf5]">
       {tabs.map((tab, i) => (
@@ -205,7 +228,7 @@ function Tabs() {
           key={tab}
           onClick={() => {
             if (tabLinks[tab]) {
-              window.location.href = tabLinks[tab];
+              window.location.href = companyId ? `${tabLinks[tab]}?id=${companyId}` : tabLinks[tab];
             }
           }}
           type="button"
@@ -221,7 +244,7 @@ function Tabs() {
 /* Row 1 cards                                                         */
 /* ------------------------------------------------------------------ */
 
-const snapshot: { label: string; value: ReactNode }[] = [
+const dummySnapshot: { label: string; value: ReactNode }[] = [
   { label: "Industry", value: "Software Development" },
   { label: "Company Size", value: "501 - 1,000 employees" },
   { label: "Founded", value: "2012" },
@@ -231,7 +254,28 @@ const snapshot: { label: string; value: ReactNode }[] = [
   { label: "Website", value: <a className="text-[#2563eb] no-underline" href="https://www.technova.com">www.technova.com</a> },
 ];
 
-function AccountSnapshot() {
+function AccountSnapshot({ company }: { company: CompanyOut | null }) {
+  const snapshot: { label: string; value: ReactNode }[] = company
+    ? [
+        { label: "Industry", value: company.industries?.[0] ?? "—" },
+        { label: "Company Size", value: company.employee_range ? `${company.employee_range} employees` : "—" },
+        { label: "Founded", value: company.founded_year ?? "—" },
+        { label: "Revenue", value: company.revenue_range ?? "—" },
+        { label: "Headquarters", value: [company.city, company.country].filter(Boolean).join(", ") || "—" },
+        { label: "Locations", value: "—" },
+        {
+          label: "Website",
+          value: company.company_domain ? (
+            <a className="text-[#2563eb] no-underline" href={`https://${company.company_domain}`}>
+              {company.company_domain}
+            </a>
+          ) : (
+            "—"
+          ),
+        },
+      ]
+    : dummySnapshot;
+
   return (
     <Card title="Account Snapshot">
       <dl className="m-0 flex flex-col gap-[12px]">
@@ -414,7 +458,7 @@ function AccountFit() {
   );
 }
 
-const techStack: { cat: string; icon: IconType; label: string; color: string }[] = [
+const dummyTechStack: { cat: string; icon: IconType; label: string; color: string }[] = [
   { cat: "Cloud", icon: Cloud, label: "aws", color: "#f59e0b" },
   { cat: "Data & Analytics", icon: Snowflake, label: "Snowflake", color: "#29b5e8" },
   { cat: "CRM", icon: Cloud, label: "Salesforce", color: "#00a1e0" },
@@ -422,14 +466,22 @@ const techStack: { cat: string; icon: IconType; label: string; color: string }[]
   { cat: "Collaboration", icon: Slack, label: "Slack", color: "#611f69" },
 ];
 
-function TechnologyStack() {
+function TechnologyStack({ company }: { company: CompanyOut | null }) {
+  // Company.technologies is a flat string list - no per-item category/color
+  // metadata exists on the backend, so real entries all share a generic
+  // icon/color instead of the dummy data's per-category styling.
+  const techStack: { cat: string; icon: IconType; label: string; color: string }[] =
+    company && company.technologies && company.technologies.length > 0
+      ? company.technologies.slice(0, 10).map((tech) => ({ cat: "Technology", icon: Cloud, label: tech, color: "#5b3df5" }))
+      : dummyTechStack;
+
   return (
     <Card action={<ViewLink label="View all technologies" />} title="Technology Stack">
       <div className="grid grid-cols-2 gap-[16px] sm:grid-cols-3 lg:grid-cols-5">
         {techStack.map((t) => {
           const Icon = t.icon;
           return (
-            <div className="flex flex-col items-center gap-[8px] text-center" key={t.cat}>
+            <div className="flex flex-col items-center gap-[8px] text-center" key={`${t.cat}-${t.label}`}>
               <p className="m-0 text-[11px] font-medium text-[#94a3b8]">{t.cat}</p>
               <div className="flex h-[52px] w-full items-center justify-center gap-[6px] rounded-[10px] border border-[#eef1f6] bg-[#fafbfc]">
                 <Icon className="size-[18px]" style={{ color: t.color }} />
@@ -552,6 +604,21 @@ function EngagementTimeline() {
 /* ------------------------------------------------------------------ */
 
 export function EnterpriseDetailPage() {
+  const [company, setCompany] = useState<CompanyOut | null>(null);
+  const companyId = getCompanyIdFromUrl();
+
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    if (!organisationId || !companyId) {
+      return;
+    }
+    getCompany(organisationId, companyId)
+      .then(setCompany)
+      .catch(() => {
+        // No matching company - keep the dummy fallback data.
+      });
+  }, [companyId]);
+
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Enterprise List" />
@@ -560,11 +627,11 @@ export function EnterpriseDetailPage() {
         <TopBar searchPlaceholder="Search companies, triggers, executives..." showDetection={false} />
 
         <main className="flex-1 overflow-x-hidden px-[28px] py-[22px]">
-          <Header />
-          <Tabs />
+          <Header company={company} />
+          <Tabs companyId={companyId} />
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] lg:grid-cols-2 xl:grid-cols-[1fr_1.2fr_1fr_1.3fr]">
-            <AccountSnapshot />
+            <AccountSnapshot company={company} />
             <SignalsOverTime />
             <TopTriggers />
             <KeySignals />
@@ -572,7 +639,7 @@ export function EnterpriseDetailPage() {
 
           <div className="mt-[20px] grid grid-cols-1 gap-[20px] xl:grid-cols-[1fr_1fr_1.3fr]">
             <AccountFit />
-            <TechnologyStack />
+            <TechnologyStack company={company} />
             <RelationshipMap />
           </div>
 

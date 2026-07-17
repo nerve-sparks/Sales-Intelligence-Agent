@@ -7,7 +7,6 @@ import {
   BarChart3,
   BriefcaseBusiness,
   Building2,
-  CalendarDays,
   Database,
   Ellipsis,
   Eye,
@@ -19,7 +18,6 @@ import {
   Landmark,
   Lock,
   Mail,
-  MapPin,
   MoreVertical,
   Pencil,
   PlayCircle,
@@ -35,8 +33,18 @@ import {
   Users,
   Zap,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FigmaLogo } from "../auth/LoginPage";
+import { ApiError } from "../../api/client";
+import { createOrganisation } from "../../api/organisations";
+import { addWorkspaceMember, createWorkspace } from "../../api/workspaces";
+import { createUser } from "../../api/users";
+import {
+  setOrganisationId as setSessionOrganisationId,
+  setWorkspaceId as setSessionWorkspaceId,
+} from "../../lib/session";
+import { createIcp } from "../../api/icp";
+import { uploadExcel } from "../../api/icpImports";
 import goLiveRocketImage from "../../assets/figma/onboarding/go-live-rocket.png";
 import heroImage from "../../assets/figma/onboarding/raw-image-1.png";
 import arrowRightIcon from "../../assets/figma/onboarding/icons/arrow-right.svg";
@@ -60,17 +68,184 @@ const icons = {
 const pageBackground =
   "linear-gradient(194.759deg, rgb(219, 219, 248) 23.984%, rgb(228, 227, 251) 48.487%), linear-gradient(90deg, rgb(255, 255, 255) 0%, rgb(255, 255, 255) 100%)";
 
+/* Organization Setup + Workspace Setup form state. Organization Setup runs
+ * first now (see OnboardingCard) since Workspace.organisation_id requires
+ * the Organisation to already exist - and Workspace Setup's Department
+ * options depend on the industry chosen in Organization Setup.
+ *
+ * Backend has a real Organisation <-> Workspace split (one org, many
+ * workspaces - see app/models/organisation.py + app/models/workspace.py):
+ * - Organisation owns account-level identity (account_name/account_url/
+ *   timezone/currency) AND the company profile (company_name/website/
+ *   industry/etc) - both collected in Organization Setup, since both are
+ *   needed at Organisation-creation time (no PATCH endpoint exists).
+ * - Workspace is a separate, department-level entity (workspace_name +
+ *   purpose) that ICPs/Triggers actually belong to - collected afterward
+ *   in Workspace Setup, once organisationId is available.
+ * - A Workspace does NOT belong to one user (WorkspaceMember is a
+ *   many-to-many join, several Users can share a Workspace). Workspace
+ *   Setup collects the founder's name/email so onboarding creates their
+ *   User record and adds them as a WorkspaceMember of the workspace they
+ *   just created - onboarding never created any User before this.
+ *
+ * account_name intentionally derives from company_name (the organisation's
+ * real identity), NOT from workspace_name - conflating those was the bug:
+ * workspace_name/workspace_purpose name the specific Workspace being
+ * created, a different backend concept from the organisation's own account
+ * identity.
+ *
+ * date_format/time_in_business have no backend column - kept as working UI
+ * state but never sent to the API. */
+type OnboardingFormState = {
+  workspace_name: string;
+  workspace_purpose: string;
+  user_full_name: string;
+  user_email: string;
+  timezone: string;
+  account_url: string;
+  currency: string;
+  date_format: string;
+  company_name: string;
+  website: string;
+  legal_business_name: string;
+  industry: string;
+  sub_industry: string;
+  business_type: string;
+  headquarters_location: string;
+  founded_year: string;
+  employee_count_range: string;
+  annual_revenue_range: string;
+  time_in_business: string;
+  company_description: string;
+};
+
+const initialFormState: OnboardingFormState = {
+  workspace_name: "",
+  workspace_purpose: "",
+  user_full_name: "",
+  user_email: "",
+  timezone: "",
+  account_url: "",
+  currency: "",
+  date_format: "MM/DD/YYYY",
+  company_name: "",
+  website: "",
+  legal_business_name: "",
+  industry: "",
+  sub_industry: "",
+  business_type: "",
+  headquarters_location: "",
+  founded_year: "",
+  employee_count_range: "",
+  annual_revenue_range: "",
+  time_in_business: "",
+  company_description: "",
+};
+
+const TIMEZONE_OPTIONS = [
+  "(GMT-08:00) Pacific Time (US & Canada)",
+  "(GMT-06:00) Central Time (US & Canada)",
+  "(GMT-05:00) Eastern Time (Canada)",
+  "(GMT+00:00) UTC",
+  "(GMT+01:00) Central European Time",
+  "(GMT+05:30) India Standard Time",
+];
+const CURRENCY_OPTIONS = ["USD - US Dollar ( $ )", "EUR - Euro ( € )", "GBP - British Pound ( £ )", "INR - Indian Rupee ( ₹ )"];
+const DATE_FORMAT_OPTIONS = ["MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD"];
+const BUSINESS_TYPE_OPTIONS = ["B2B"];
+// Scoped to Organization Setup's "Industry" field only - the Industry
+// Selection step and ICP Generation's "Primary Industry" field still use
+// the full `industries` list further below.
+const ORG_INDUSTRY_OPTIONS = ["Manufacturing"];
+const COMPANY_SIZE_OPTIONS = ["1 - 10", "11 - 50", "51 - 200", "201 - 500", "501 - 1000", "1000+"];
+const ANNUAL_REVENUE_OPTIONS = ["<$1M", "$1M - $10M", "$10M - $50M", "$50M - $100M", "$100M - $250M", "$250M+"];
+const TIME_IN_BUSINESS_OPTIONS = ["<1 Year", "1 - 5 Years", "6 - 10 Years", "10+ Years"];
+// "Department" (Workspace Setup) maps to Workspace.purpose - a real column
+// the onboarding UI never collected before (workspace creation always sent
+// purpose: null). Options depend on the industry chosen in Organization
+// Setup, same pattern as a real department picker would use.
+const DEPARTMENT_OPTIONS_BY_INDUSTRY: Record<string, string[]> = {
+  Manufacturing: ["Sales", "Marketing", "Customer Management", "Operations", "Production", "Quality Control", "Supply Chain", "Procurement"],
+};
+const DEFAULT_DEPARTMENT_OPTIONS = ["Sales", "Marketing", "Customer Success", "Operations", "Product", "Other"];
+
+function getDepartmentOptions(industry: string): string[] {
+  return DEPARTMENT_OPTIONS_BY_INDUSTRY[industry] ?? DEFAULT_DEPARTMENT_OPTIONS;
+}
+
+/* ICP Generation step - maps to POST /workspaces/{workspace_id}/icp
+ * (IcpProfile: name/industries/employee_min/max/revenue_min/max_usd/
+ * countries/technologies/buying_committee_personas). Growth Stage and
+ * Business Model have no backend column on IcpProfile - kept as working
+ * UI state but never sent, same pattern as Language/Date Format earlier. */
+type IcpFormState = {
+  industry: string;
+  company_size: string;
+  annual_revenue: string;
+  headquarters_country: string;
+  growth_stage: string;
+  business_model: string;
+  technologies: string;
+  buying_committee_persona: string;
+  pain_points: string;
+  business_goals: string;
+};
+
+const initialIcpFormState: IcpFormState = {
+  industry: "",
+  company_size: "",
+  annual_revenue: "",
+  headquarters_country: "",
+  growth_stage: "",
+  business_model: "",
+  technologies: "",
+  buying_committee_persona: "",
+  pain_points: "",
+  business_goals: "",
+};
+
+const ICP_COUNTRY_OPTIONS = ["United States", "India", "United Kingdom", "Canada", "Germany", "Australia", "Singapore", "Israel", "Brazil", "Japan"];
+const ICP_GROWTH_STAGE_OPTIONS = ["Seed", "Early Stage", "Growth Stage", "Mature", "Enterprise"];
+const ICP_BUSINESS_MODEL_OPTIONS = ["B2B", "B2C", "B2B2C"];
+// Matches PERSONA_VALUES in app/models/decision_maker.py - IcpProfile
+// stores these as free text, but only these values ever match a real
+// DecisionMaker.persona in the filter (see icp_filter.py).
+const ICP_PERSONA_OPTIONS = [
+  "ceo", "president", "coo", "cfo", "cto", "cio", "ciso",
+  "chief_revenue_officer", "chief_marketing_officer", "chief_sales_officer",
+  "vp_sales", "vp_operations", "director", "managing_director", "general_manager",
+];
+
+function parseEmployeeRange(band: string): { min: number | null; max: number | null } {
+  if (band === "1000+") {
+    return { min: 1000, max: null };
+  }
+  const match = band.match(/(\d+)\s*-\s*(\d+)/);
+  return match ? { min: Number(match[1]), max: Number(match[2]) } : { min: null, max: null };
+}
+
+function parseRevenueRange(band: string): { min: number | null; max: number | null } {
+  const toUsd = (v: string) => Number(v.replace(/[^0-9.]/g, "")) * 1_000_000;
+  if (band === "<$1M") {
+    return { min: 0, max: 1_000_000 };
+  }
+  if (band === "$250M+") {
+    return { min: 250_000_000, max: null };
+  }
+  const match = band.match(/\$([\d.]+)M\s*-\s*\$([\d.]+)M/);
+  return match ? { min: toUsd(match[1]), max: toUsd(match[2]) } : { min: null, max: null };
+}
+
 const steps = [
-  ["Workspace", "Setup"],
   ["Organization", "Setup"],
+  ["Workspace", "Setup"],
   ["Team", "Invitations"],
   ["Industry", "Selection"],
   ["Data Source", "Setup"],
   ["CRM", "Integration"],
   ["Trigger", "Generation"],
   ["ICP", "Generation"],
-  ["Import", "Validation"],
-  ["AI Business", "Discovery"],
+  ["Business", "Discovery"],
   ["Go", "Live"],
 ];
 
@@ -475,20 +650,6 @@ const icpLibraryRows = [
   },
 ];
 
-const onboardingLibraryRows = [
-  ["1. Workspace Setup", "Set up your workspace and basic preferences", "Completed", "100%", "May 20, 2025"],
-  ["2. Organization Setup", "Configure your organization profile and settings", "Completed", "100%", "May 20, 2025"],
-  ["3. Team Invitations", "Invite your team members and set roles", "Completed", "100%", "May 20, 2025"],
-  ["4. Industry Selection", "Select your industry and business focus", "Completed", "100%", "May 20, 2025"],
-  ["5. AI Business Discovery", "AI analyzes your business and market context", "Completed", "100%", "May 20, 2025"],
-  ["6. Trigger Generation", "Generate your relevant triggers with AI", "Completed", "100%", "May 20, 2025"],
-  ["7. CRM Integration", "Connect and configure your CRM", "Completed", "100%", "May 20, 2025"],
-  ["8. ICP Generation", "Generate your ideal customer profile with AI", "In Progress", "75%", "-"],
-  ["9. Data Source Setup", "Configure your data sources and connections", "Pending", "0%", "-"],
-  ["10. Import Validation", "Validate and import your data", "Pending", "0%", "-"],
-  ["11. Go Live", "Complete setup and start your success journey", "Pending", "0%", "-"],
-];
-
 const businessDiscoverySources = [
   {
     name: "Company Website",
@@ -617,21 +778,13 @@ const setupSummaryItems = [
   "Organization Setup",
   "Team Invitations",
   "Industry Selection",
-  "AI Business Discovery",
+  "Business Discovery",
   "ICP Generation",
   "Trigger Generation",
   "CRM Integration",
   "Data Source Setup",
-  "Import Validation",
   "Go Live",
 ];
-
-type FieldProps = {
-  icon: string;
-  label: string;
-  required?: boolean;
-  value: string;
-};
 
 function RequiredMark() {
   return <span className="text-[#ef4444]">*</span>;
@@ -651,7 +804,16 @@ function FieldLabel({
   );
 }
 
-function TextField({ icon, label, required, value }: FieldProps) {
+type TextFieldProps = {
+  icon: string;
+  label: string;
+  required?: boolean;
+  placeholder?: string;
+  value: string;
+  onChange: (value: string) => void;
+};
+
+function TextField({ icon, label, required, placeholder, value, onChange }: TextFieldProps) {
   return (
     <div className="flex flex-col gap-[8px]">
       <FieldLabel required={required}>{label}</FieldLabel>
@@ -663,70 +825,73 @@ function TextField({ icon, label, required, value }: FieldProps) {
         />
         <input
           className="h-full w-full rounded-[8px] bg-transparent pl-[41px] pr-[17px] font-['Inter'] text-[14px] leading-[20px] text-[#0f172a] outline-none placeholder:text-[#94a3b8]"
-          placeholder={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
           type="text"
+          value={value}
         />
       </div>
     </div>
   );
 }
 
-function FilledTextField({ icon, label, required, value }: FieldProps) {
+type SelectFieldProps = {
+  icon: string;
+  label: string;
+  required?: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+};
+
+function SelectField({ icon, label, required, value, onChange, options }: SelectFieldProps) {
   return (
     <div className="flex flex-col gap-[8px]">
       <FieldLabel required={required}>{label}</FieldLabel>
       <div className="relative flex h-[42px] items-center rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc]">
         <img
           alt=""
-          className="pointer-events-none absolute left-[12px] size-[20px]"
+          className="pointer-events-none absolute left-[12px] z-10 size-[20px]"
           src={icon}
         />
-        <input
-          className="h-full w-full rounded-[8px] bg-transparent pl-[41px] pr-[17px] font-['Inter'] text-[14px] leading-[20px] text-[#0f172a] outline-none"
-          defaultValue={value}
-          type="text"
+        <select
+          className="h-full w-full appearance-none rounded-[8px] bg-transparent pl-[41px] pr-[36px] font-['Inter'] text-[14px] leading-[20px] text-[#0f172a] outline-none"
+          onChange={(e) => onChange(e.target.value)}
+          value={value}
+        >
+          <option disabled value="">
+            Select {label.toLowerCase()}
+          </option>
+          {options.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <ChevronDown
+          aria-hidden="true"
+          className="pointer-events-none absolute right-[12px] size-[17px] text-[#64748b]"
+          strokeWidth={2}
         />
       </div>
     </div>
   );
 }
 
-function SelectField({ icon, label, required, value }: FieldProps) {
+function WorkspaceUrlField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   return (
     <div className="flex flex-col gap-[8px]">
-      <FieldLabel required={required}>{label}</FieldLabel>
-      <button
-        className="relative flex h-[42px] w-full items-center rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc] pl-[41px] pr-[36px] text-left font-['Inter'] text-[14px] leading-[20px] text-[#0f172a]"
-        type="button"
-      >
-        <img
-          alt=""
-          className="pointer-events-none absolute left-[12px] size-[20px]"
-          src={icon}
-        />
-        <span className="block min-w-0 truncate">{value}</span>
-        <ChevronDown
-          aria-hidden="true"
-          className="absolute right-[12px] size-[17px] text-[#64748b]"
-          strokeWidth={2}
-        />
-      </button>
-    </div>
-  );
-}
-
-function WorkspaceUrlField() {
-  return (
-    <div className="flex flex-col gap-[8px]">
-      <FieldLabel required>Workspace URL</FieldLabel>
+      <FieldLabel required>Account URL</FieldLabel>
       <div className="flex h-[42px] w-full overflow-hidden rounded-[8px] font-['Inter'] text-[14px] leading-[20px]">
         <div className="flex items-center border border-r-0 border-[#e2e8f0] bg-[#f8fafc] px-[13px] text-[#64748b]">
           https://
         </div>
         <input
-          className="min-w-0 flex-1 border border-[#e2e8f0] bg-[#f8fafc] px-[17px] text-[#6b7280] outline-none"
-          defaultValue="acme-corp"
+          className="min-w-0 flex-1 border border-[#e2e8f0] bg-[#f8fafc] px-[17px] text-[#0f172a] outline-none"
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="acme-corp"
           type="text"
+          value={value}
         />
         <div className="w-[24px] border border-l-0 border-[#e2e8f0] bg-[#f8fafc]" />
       </div>
@@ -737,7 +902,7 @@ function WorkspaceUrlField() {
 function LogoUpload() {
   return (
     <div className="flex flex-col gap-[8px]">
-      <FieldLabel>Workspace Logo</FieldLabel>
+      <FieldLabel>Company Logo</FieldLabel>
       <button
         className="flex h-[119px] w-full flex-col items-center justify-center rounded-[12px] border-2 border-dashed border-[#e2e8f0] bg-[#f8fafc] px-[34px] py-[20px]"
         type="button"
@@ -759,125 +924,163 @@ function LogoUpload() {
   );
 }
 
-function WorkspaceSetupForm() {
-  return (
-    <div className="grid grid-cols-1 gap-x-[20px] gap-y-[19px] md:grid-cols-2">
-      <TextField
-        icon={icons.workspace}
-        label="Workspace Name"
-        required
-        value="Enter workspace name"
-      />
-      <SelectField
-        icon={icons.globe}
-        label="Time Zone"
-        required
-        value="(GMT-05:00) Eastern Time (Cana..."
-      />
-      <WorkspaceUrlField />
-      <SelectField
-        icon={icons.currency}
-        label="Currency"
-        required
-        value="USD - US Dollar ( $ )"
-      />
-      <LogoUpload />
-      <div className="flex flex-col gap-[24px]">
-        <SelectField
-          icon={icons.globe}
-          label="Language"
-          required
-          value="English (US)"
-        />
-        <SelectField
-          icon={icons.calendar}
-          label="Date Format"
-          required
-          value="MM/DD/YYYY"
-        />
-      </div>
-    </div>
-  );
-}
+type StepFormProps = {
+  form: OnboardingFormState;
+  onFieldChange: <K extends keyof OnboardingFormState>(field: K, value: OnboardingFormState[K]) => void;
+};
 
-function OrganizationSetupForm() {
+function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
   return (
     <div className="grid grid-cols-1 gap-x-[20px] gap-y-[16px] md:grid-cols-2">
-      <FilledTextField
+      <TextField
         icon={icons.workspace}
         label="Company Name"
+        onChange={(v) => onFieldChange("company_name", v)}
+        placeholder="Acme Technologies Inc."
         required
-        value="Acme Technologies Inc."
+        value={form.company_name}
       />
-      <FilledTextField
+      <TextField
         icon={icons.globe}
         label="Website"
+        onChange={(v) => onFieldChange("website", v)}
+        placeholder="https://www.acmetech.com"
         required
-        value="https://www.acmetech.com"
+        value={form.website}
       />
-      <FilledTextField
+      <TextField
         icon={icons.workspace}
         label="Legal Business Name"
-        value="Acme Technologies Incorporated"
+        onChange={(v) => onFieldChange("legal_business_name", v)}
+        placeholder="Acme Technologies Incorporated"
+        value={form.legal_business_name}
       />
       <SelectField
         icon={icons.workspace}
         label="Industry"
+        onChange={(v) => onFieldChange("industry", v)}
+        options={ORG_INDUSTRY_OPTIONS}
         required
-        value="Software"
-      />
-      <SelectField
-        icon={icons.currency}
-        label="Sub Industry"
-        value="Sales Intelligence"
+        value={form.industry}
       />
       <SelectField
         icon={icons.workspace}
         label="Business Type"
-        value="B2B"
+        onChange={(v) => onFieldChange("business_type", v)}
+        options={BUSINESS_TYPE_OPTIONS}
+        value={form.business_type}
       />
-      <FilledTextField
+      <TextField
         icon={icons.globe}
         label="Headquarters Location"
+        onChange={(v) => onFieldChange("headquarters_location", v)}
+        placeholder="San Francisco, California, USA"
         required
-        value="San Francisco, California, USA"
-      />
-      <FilledTextField
-        icon={icons.calendar}
-        label="Founded Year"
-        value="2015"
+        value={form.headquarters_location}
       />
       <SelectField
         icon={icons.workspace}
         label="Company Size (Employees)"
+        onChange={(v) => onFieldChange("employee_count_range", v)}
+        options={COMPANY_SIZE_OPTIONS}
         required
-        value="201 - 500"
+        value={form.employee_count_range}
       />
       <SelectField
         icon={icons.currency}
         label="Annual Revenue"
+        onChange={(v) => onFieldChange("annual_revenue_range", v)}
+        options={ANNUAL_REVENUE_OPTIONS}
         required
-        value="$50M - $100M"
+        value={form.annual_revenue_range}
       />
       <SelectField
         icon={icons.calendar}
         label="Time in Business"
+        onChange={(v) => onFieldChange("time_in_business", v)}
+        options={TIME_IN_BUSINESS_OPTIONS}
         required
-        value="6 - 10 Years"
+        value={form.time_in_business}
       />
+      <SelectField
+        icon={icons.globe}
+        label="Time Zone"
+        onChange={(v) => onFieldChange("timezone", v)}
+        options={TIMEZONE_OPTIONS}
+        required
+        value={form.timezone}
+      />
+      <WorkspaceUrlField onChange={(v) => onFieldChange("account_url", v)} value={form.account_url} />
+      <SelectField
+        icon={icons.currency}
+        label="Currency"
+        onChange={(v) => onFieldChange("currency", v)}
+        options={CURRENCY_OPTIONS}
+        required
+        value={form.currency}
+      />
+      <SelectField
+        icon={icons.calendar}
+        label="Date Format"
+        onChange={(v) => onFieldChange("date_format", v)}
+        options={DATE_FORMAT_OPTIONS}
+        required
+        value={form.date_format}
+      />
+      <LogoUpload />
 
       <div className="flex flex-col gap-[8px] md:col-span-2">
         <FieldLabel>Company Description</FieldLabel>
         <textarea
           className="min-h-[74px] w-full resize-none rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc] px-[14px] py-[12px] font-['Inter'] text-[13px] font-normal leading-[20px] text-[#0f172a] outline-none"
-          defaultValue="Acme Technologies provides an AI-powered sales intelligence platform that helps revenue teams identify high-potential prospects, track buying signals, and close more deals faster."
           maxLength={500}
+          onChange={(e) => onFieldChange("company_description", e.target.value)}
+          placeholder="Describe what your company does..."
+          value={form.company_description}
         />
         <div className="flex min-h-[36px] items-center rounded-[8px] border border-[#bfdbfe] bg-[#eff6ff] px-[12px] font-['Inter'] text-[12px] leading-[18px] text-[#1e40af]">
           This information helps our AI models deliver more relevant insights
           and recommendations.
         </div>
       </div>
+    </div>
+  );
+}
+
+function WorkspaceSetupForm({ form, onFieldChange }: StepFormProps) {
+  return (
+    <div className="grid grid-cols-1 gap-x-[20px] gap-y-[19px] md:grid-cols-2">
+      <TextField
+        icon={icons.workspace}
+        label="Workspace Name"
+        onChange={(v) => onFieldChange("workspace_name", v)}
+        placeholder="Enter workspace name"
+        required
+        value={form.workspace_name}
+      />
+      <SelectField
+        icon={icons.workspace}
+        label="Department"
+        onChange={(v) => onFieldChange("workspace_purpose", v)}
+        options={getDepartmentOptions(form.industry)}
+        required
+        value={form.workspace_purpose}
+      />
+      <TextField
+        icon={icons.workspace}
+        label="Your Name"
+        onChange={(v) => onFieldChange("user_full_name", v)}
+        placeholder="Enter your full name"
+        value={form.user_full_name}
+      />
+      <TextField
+        icon={icons.globe}
+        label="Your Email"
+        onChange={(v) => onFieldChange("user_email", v)}
+        placeholder="you@company.com"
+        required
+        value={form.user_email}
+      />
     </div>
   );
 }
@@ -1515,60 +1718,162 @@ function TriggerGenerationForm() {
   );
 }
 
-function IcpInputField({
-  icon: Icon,
-  label,
-  placeholder,
-  required = false,
-  wide = false,
-}: {
-  icon: typeof BriefcaseBusiness;
-  label: string;
-  placeholder: string;
-  required?: boolean;
-  wide?: boolean;
-}) {
+type IcpFormProps = {
+  form: IcpFormState;
+  onFieldChange: <K extends keyof IcpFormState>(field: K, value: IcpFormState[K]) => void;
+  icpId: string | null;
+  workspaceId: string | null;
+};
+
+function ExcelUploadButton({ icpId, workspaceId }: { icpId: string | null; workspaceId: string | null }) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [uploadedName, setUploadedName] = useState<string | null>(null);
+  const ready = Boolean(icpId && workspaceId);
+
+  const handleFile = async (file: File) => {
+    if (!icpId || !workspaceId) {
+      return;
+    }
+    setUploading(true);
+    setError(null);
+    try {
+      const blob = await uploadExcel(workspaceId, icpId, file);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `scored_${file.name}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setUploadedName(file.name);
+    } catch (err) {
+      setError(err instanceof ApiError ? String(err.detail) : "Upload failed. Please try again.");
+    }
+    setUploading(false);
+  };
+
   return (
-    <div className={`flex flex-col gap-[8px] ${wide ? "md:col-span-2" : ""}`}>
-      <FieldLabel required={required}>{label}</FieldLabel>
-      <div className="relative flex h-[42px] items-center rounded-[8px] border border-[#e2e8f0] bg-white">
-        <Icon aria-hidden="true" className="absolute left-[12px] size-[18px] text-[#4f46e5]" />
-        <span className="truncate pl-[41px] pr-[36px] font-['Inter'] text-[12px] font-medium text-[#64748b]">
-          {placeholder}
-        </span>
-        <ChevronDown
-          aria-hidden="true"
-          className="absolute right-[12px] size-[16px] text-[#0f1f6f]"
+    <div className="flex flex-col items-end gap-[4px]">
+      <div className="flex items-center gap-[8px]">
+        <input
+          accept=".csv,.xlsx"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              handleFile(file);
+            }
+            e.target.value = "";
+          }}
+          ref={fileInputRef}
+          type="file"
         />
+        <button
+          className="flex h-[36px] items-center gap-[7px] rounded-[8px] border border-[#e2e8f0] bg-white px-[16px] font-['Inter'] text-[12px] font-bold text-[#0f1f6f] disabled:opacity-50"
+          disabled={!ready || uploading}
+          onClick={() => fileInputRef.current?.click()}
+          title={ready ? "Upload a ZoomInfo export to score against this ICP" : "Click Continue below to create your ICP first"}
+          type="button"
+        >
+          <img alt="" className="size-[14px]" src={icons.upload} />
+          {uploading ? "Uploading..." : "Upload Excel"}
+        </button>
       </div>
+      {error && <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#ef4444]">{error}</p>}
+      {!error && uploadedName && (
+        <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#16a34a]">
+          Scored {uploadedName} - check your downloads
+        </p>
+      )}
     </div>
   );
 }
 
-function IcpGenerationForm() {
+function IcpGenerationForm({ form, onFieldChange, icpId, workspaceId }: IcpFormProps) {
   return (
     <div className="flex flex-col gap-[14px]">
       <div className="grid grid-cols-1 gap-[12px] md:grid-cols-2 xl:grid-cols-3">
-        <IcpInputField icon={BriefcaseBusiness} label="Primary Industry" placeholder="Select or type industry" required />
-        <IcpInputField icon={Users} label="Company Size (Employees)" placeholder="Select company size" required />
-        <IcpInputField icon={BarChart3} label="Annual Revenue" placeholder="Select revenue range" required />
-        <IcpInputField icon={MapPin} label="Headquarters Location" placeholder="Select headquarters location" required />
-        <IcpInputField icon={TrendingUp} label="Growth Stage" placeholder="Select growth stage" required />
-        <IcpInputField icon={Building2} label="Business Model" placeholder="Select business model" required />
-        <IcpInputField icon={Code2} label="Technologies Used" placeholder="Select or type technologies (e.g., AWS, Salesforce, HubSpot)" wide />
-        <IcpInputField icon={User} label="Buying Committee (Key Roles)" placeholder="Select or type key roles (e.g., VP Sales, CRO)" />
+        <SelectField
+          icon={icons.workspace}
+          label="Primary Industry"
+          onChange={(v) => onFieldChange("industry", v)}
+          options={industries.map((i) => i.title)}
+          required
+          value={form.industry}
+        />
+        <SelectField
+          icon={icons.workspace}
+          label="Company Size (Employees)"
+          onChange={(v) => onFieldChange("company_size", v)}
+          options={COMPANY_SIZE_OPTIONS}
+          required
+          value={form.company_size}
+        />
+        <SelectField
+          icon={icons.currency}
+          label="Annual Revenue"
+          onChange={(v) => onFieldChange("annual_revenue", v)}
+          options={ANNUAL_REVENUE_OPTIONS}
+          required
+          value={form.annual_revenue}
+        />
+        <SelectField
+          icon={icons.globe}
+          label="Headquarters Location"
+          onChange={(v) => onFieldChange("headquarters_country", v)}
+          options={ICP_COUNTRY_OPTIONS}
+          required
+          value={form.headquarters_country}
+        />
+        <SelectField
+          icon={icons.workspace}
+          label="Growth Stage"
+          onChange={(v) => onFieldChange("growth_stage", v)}
+          options={ICP_GROWTH_STAGE_OPTIONS}
+          required
+          value={form.growth_stage}
+        />
+        <SelectField
+          icon={icons.workspace}
+          label="Business Model"
+          onChange={(v) => onFieldChange("business_model", v)}
+          options={ICP_BUSINESS_MODEL_OPTIONS}
+          required
+          value={form.business_model}
+        />
+        <div className="md:col-span-2">
+          <TextField
+            icon={icons.workspace}
+            label="Technologies Used"
+            onChange={(v) => onFieldChange("technologies", v)}
+            placeholder="e.g. AWS, Salesforce, HubSpot"
+            value={form.technologies}
+          />
+        </div>
+        <SelectField
+          icon={icons.workspace}
+          label="Buying Committee (Key Roles)"
+          onChange={(v) => onFieldChange("buying_committee_persona", v)}
+          options={ICP_PERSONA_OPTIONS}
+          value={form.buying_committee_persona}
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-[12px] md:grid-cols-2">
-        {[
-          ["Pain Points", "Enter main pain points"],
-          ["Business Goals", "Enter key business goals"],
-        ].map(([label, placeholder]) => (
+        {(
+          [
+            ["Pain Points", "pain_points", "Enter main pain points"],
+            ["Business Goals", "business_goals", "Enter key business goals"],
+          ] as const
+        ).map(([label, field, placeholder]) => (
           <div className="flex flex-col gap-[8px]" key={label}>
             <FieldLabel>{label}</FieldLabel>
             <textarea
               className="min-h-[58px] resize-none rounded-[8px] border border-[#e2e8f0] bg-white px-[12px] py-[10px] font-['Inter'] text-[12px] font-medium text-[#0f172a] outline-none placeholder:text-[#64748b]"
+              onChange={(e) => onFieldChange(field, e.target.value)}
               placeholder={placeholder}
+              value={form[field]}
             />
           </div>
         ))}
@@ -1581,15 +1886,20 @@ function IcpGenerationForm() {
               Your ICP Library
             </h3>
             <p className="m-0 mt-[2px] font-['Inter'] text-[11px] font-medium leading-[17px] text-[#0f1f6f]">
-              Create and manage multiple ICPs for different target segments.
+              {icpId
+                ? "ICP created - you can now upload your Excel export below."
+                : "Fill in the fields above, then click \"Create ICP\" below to enable Excel upload."}
             </p>
           </div>
-          <button
-            className="h-[36px] rounded-[8px] bg-[#005bff] px-[16px] font-['Inter'] text-[12px] font-bold text-white"
-            type="button"
-          >
-            + Create New ICP
-          </button>
+          <div className="flex items-center gap-[8px]">
+            <ExcelUploadButton icpId={icpId} workspaceId={workspaceId} />
+            <button
+              className="h-[36px] rounded-[8px] bg-[#005bff] px-[16px] font-['Inter'] text-[12px] font-bold text-white"
+              type="button"
+            >
+              + Create New ICP
+            </button>
+          </div>
         </div>
         <table className="w-full border-collapse">
           <thead>
@@ -1648,153 +1958,6 @@ function IcpGenerationForm() {
   );
 }
 
-function IcpLibraryForm() {
-  return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="grid grid-cols-1 gap-[10px] sm:grid-cols-2">
-        <div className="rounded-[10px] border border-[#e2e8f0] bg-white p-[12px]">
-          <p className="m-0 font-['Inter'] text-[11px] font-bold text-[#0f1f6f]">
-            Overall Progress
-          </p>
-          <div className="mt-[6px] flex items-center gap-[12px]">
-            <span className="font-['Inter'] text-[22px] font-bold leading-none text-[#0f1f6f]">
-              78%
-            </span>
-            <span className="h-[7px] flex-1 overflow-hidden rounded-full bg-[#e2e8f0]">
-              <span className="block h-full w-[78%] rounded-full bg-[#16a34a]" />
-            </span>
-          </div>
-        </div>
-        <div className="rounded-[10px] border border-[#e2e8f0] bg-white p-[12px]">
-          <p className="m-0 font-['Inter'] text-[11px] font-bold text-[#0f1f6f]">
-            Estimated Time Remaining
-          </p>
-          <div className="mt-[8px] flex items-center gap-[8px] font-['Inter'] text-[18px] font-bold text-[#0f1f6f]">
-            <Clock3 aria-hidden="true" className="size-[18px] text-[#005bff]" />
-            12 min
-          </div>
-        </div>
-      </div>
-
-      <div className="overflow-hidden rounded-[12px] border border-[#e2e8f0] bg-white">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="border-b border-[#e2e8f0] text-left">
-              {["Step", "Description", "Status", "Progress", "Completed On", "Action"].map(
-                (heading) => (
-                  <th
-                    className="px-[12px] py-[10px] font-['Inter'] text-[10px] font-bold text-[#0f1f6f]"
-                    key={heading}
-                  >
-                    {heading}
-                  </th>
-                ),
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {onboardingLibraryRows.map(([step, description, status, progress, date], index) => {
-              const progressValue = Number.parseInt(progress, 10);
-              const isComplete = status === "Completed";
-              const isInProgress = status === "In Progress";
-
-              return (
-                <tr className="border-b border-[#f1f5f9] last:border-b-0" key={step}>
-                  <td className="px-[12px] py-[8px]">
-                    <div className="flex items-center gap-[9px]">
-                      <span
-                        className={`flex size-[28px] shrink-0 items-center justify-center rounded-[7px] ${
-                          isComplete
-                            ? "bg-[#dcfce7] text-[#16a34a]"
-                            : isInProgress
-                              ? "bg-[#f3e8ff] text-[#7c3aed]"
-                              : "bg-[#eef2ff] text-[#005bff]"
-                        }`}
-                      >
-                        {isComplete ? (
-                          <Check aria-hidden="true" className="size-[15px]" />
-                        ) : (
-                          <CalendarDays aria-hidden="true" className="size-[15px]" />
-                        )}
-                      </span>
-                      <span className="font-['Inter'] text-[11px] font-bold text-[#0f1f6f]">
-                        {step}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="max-w-[190px] px-[12px] py-[8px] font-['Inter'] text-[10px] font-medium leading-[15px] text-[#0f1f6f]">
-                    {description}
-                  </td>
-                  <td className="px-[12px] py-[8px]">
-                    <span
-                      className={`whitespace-nowrap rounded-[6px] px-[8px] py-[4px] font-['Inter'] text-[10px] font-bold ${
-                        isComplete
-                          ? "bg-[#dcfce7] text-[#16a34a]"
-                          : isInProgress
-                            ? "bg-[#f3e8ff] text-[#7c3aed]"
-                            : "bg-[#e2e8f0] text-[#0f1f6f]"
-                      }`}
-                    >
-                      {status}
-                    </span>
-                  </td>
-                  <td className="px-[12px] py-[8px]">
-                    <div className="flex items-center gap-[8px]">
-                      <span className="h-[5px] w-[88px] overflow-hidden rounded-full bg-[#e2e8f0]">
-                        <span
-                          className={`block h-full rounded-full ${
-                            isInProgress
-                              ? "bg-gradient-to-r from-[#7c3aed] to-[#db2777]"
-                              : "bg-[#16a34a]"
-                          }`}
-                          style={{ width: `${progressValue}%` }}
-                        />
-                      </span>
-                      <span className="font-['Inter'] text-[10px] font-bold text-[#0f1f6f]">
-                        {progress}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-[12px] py-[8px] font-['Inter'] text-[10px] font-medium leading-[15px] text-[#0f1f6f]">
-                    {date}
-                  </td>
-                  <td className="px-[12px] py-[8px]">
-                    <button
-                      className={`h-[30px] rounded-[6px] border px-[14px] font-['Inter'] text-[11px] font-bold ${
-                        index === 7
-                          ? "border-[#c084fc] text-[#7c3aed]"
-                          : "border-[#e2e8f0] text-[#0f1f6f]"
-                      }`}
-                      type="button"
-                    >
-                      {index < 7 ? "View" : index === 7 ? "Continue" : "Start"}
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="flex min-h-[58px] flex-col gap-3 rounded-[10px] border border-[#e9d5ff] bg-[#faf5ff] px-[14px] py-[12px] sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-[12px]">
-          <Target aria-hidden="true" className="size-[22px] text-[#7c3aed]" />
-          <p className="m-0 font-['Inter'] text-[12px] font-bold leading-[18px] text-[#0f1f6f]">
-            Complete all onboarding steps to get the most accurate AI insights and recommendations.
-          </p>
-        </div>
-        <button
-          className="h-[36px] shrink-0 rounded-[8px] border border-[#d8b4fe] bg-white px-[18px] font-['Inter'] text-[12px] font-bold text-[#7c3aed]"
-          type="button"
-        >
-          View Best Practices
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function DiscoveryStatus({ status }: { status: string }) {
   if (status === "Completed") {
     return (
@@ -1833,17 +1996,17 @@ function AiBusinessDiscoveryForm() {
           </span>
           <div className="max-w-[420px]">
             <h3 className="m-0 font-['Inter'] text-[22px] font-bold leading-[28px] text-[#0f1f6f]">
-              AI Analysis in Progress
+              Analysis in Progress
             </h3>
             <p className="m-0 mt-[14px] font-['Inter'] text-[13px] font-medium leading-[21px] text-[#0f1f6f]">
-              XSparks AI is discovering key information about your business from
+              XSparks is discovering key information about your business from
               multiple sources.
             </p>
             <button
               className="mt-[12px] font-['Inter'] text-[13px] font-bold leading-[20px] text-[#005bff]"
               type="button"
             >
-              Learn more about our AI discovery process
+              Learn more about our discovery process
             </button>
           </div>
         </div>
@@ -1930,7 +2093,7 @@ function GoLiveForm() {
               </span>
               <div>
                 <h3 className="m-0 font-['Inter'] text-[26px] font-bold leading-[32px] text-[#0f1f6f]">
-                  You're All Set!
+                  Onboarding Completed and Go Live!
                 </h3>
                 <p className="m-0 mt-[14px] font-['Inter'] text-[13px] font-medium leading-[21px] text-[#0f1f6f]">
                   Your account has been successfully configured. XSparks AI is
@@ -2091,23 +2254,180 @@ function OnboardingStepper({ activeStep }: { activeStep: number }) {
 
 function OnboardingCard() {
   const [activeStep, setActiveStep] = useState(0);
-  const isOrganizationStep = activeStep === 1;
+  const [form, setForm] = useState<OnboardingFormState>(initialFormState);
+  const [organisationId, setOrganisationId] = useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [icpForm, setIcpForm] = useState<IcpFormState>(initialIcpFormState);
+  const [icpId, setIcpId] = useState<string | null>(null);
+  const isOrganizationStep = activeStep === 0;
+  const isWorkspaceStep = activeStep === 1;
   const isTeamStep = activeStep === 2;
   const isIndustryStep = activeStep === 3;
   const isDataSourceStep = activeStep === 4;
   const isCrmStep = activeStep === 5;
   const isTriggerStep = activeStep === 6;
   const isIcpStep = activeStep === 7;
-  const isIcpLibraryStep = activeStep === 8;
-  const isAiBusinessStep = activeStep === 9;
-  const isGoLiveStep = activeStep === 10;
+  const isAiBusinessStep = activeStep === 8;
+  const isGoLiveStep = activeStep === 9;
   const stepperStep = activeStep;
-  const formViewportClassName = `mt-[18px] overflow-hidden transition-[height] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-    activeStep === 0 ? "h-[362px]" : "h-[430px]"
-  }`;
+  const formViewportClassName =
+    "mt-[18px] h-[430px] overflow-hidden transition-[height] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]";
+  const trackRef = useRef<HTMLDivElement>(null);
 
-  const handlePrimaryAction = () => {
-    setActiveStep((step) => Math.min(step + 1, 10));
+  // Each step panel keeps its own scrollTop even while off-screen (they're
+  // all rendered side by side and slid via translateX, not remounted per
+  // step). Without this, switching to a step whose panel was left scrolled
+  // - or hit by Chrome's scroll-anchoring on a panel taller than the fixed
+  // viewport height - shows content clipped at the top instead of at rest.
+  useEffect(() => {
+    const panel = trackRef.current?.children[activeStep];
+    if (panel) {
+      panel.scrollTop = 0;
+    }
+  }, [activeStep]);
+
+  const handleFieldChange = <K extends keyof OnboardingFormState>(field: K, value: OnboardingFormState[K]) => {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleIcpFieldChange = <K extends keyof IcpFormState>(field: K, value: IcpFormState[K]) => {
+    setIcpForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handlePrimaryAction = async () => {
+    if (isGoLiveStep) {
+      window.location.href = "/dashboard";
+      return;
+    }
+
+    // Organisation must exist before a Workspace can reference it
+    // (Workspace.organisation_id is required) - Organization Setup runs
+    // first and creates the Organisation alone; Workspace Setup runs
+    // second and creates the Workspace once organisationId is available.
+    // No PATCH endpoint exists on either, so each step submits everything
+    // it collected in one POST when the user leaves that step.
+    if (isOrganizationStep && organisationId === null) {
+      if (!form.company_name.trim()) {
+        setSubmitError("Company Name is required.");
+        return;
+      }
+      setSubmitting(true);
+      setSubmitError(null);
+      try {
+        const org = await createOrganisation({
+          account_name: form.company_name || null,
+          account_url: form.account_url || null,
+          timezone: form.timezone || null,
+          currency: form.currency || null,
+          company_name: form.company_name,
+          website: form.website || null,
+          legal_business_name: form.legal_business_name || null,
+          industry: form.industry || null,
+          sub_industry: form.sub_industry || null,
+          business_type: form.business_type || null,
+          headquarters_location: form.headquarters_location || null,
+          founded_year: form.founded_year || null,
+          employee_count_range: form.employee_count_range || null,
+          annual_revenue_range: form.annual_revenue_range || null,
+          company_description: form.company_description || null,
+        });
+        setOrganisationId(org.organisation_id);
+        setSessionOrganisationId(org.organisation_id);
+      } catch (err) {
+        setSubmitError(
+          err instanceof ApiError ? String(err.detail) : "Something went wrong. Please try again.",
+        );
+        setSubmitting(false);
+        return;
+      }
+      setSubmitting(false);
+    }
+
+    if (isWorkspaceStep && workspaceId === null) {
+      if (!organisationId) {
+        setSubmitError("Organisation setup must complete before creating a workspace.");
+        return;
+      }
+      if (!form.workspace_name.trim()) {
+        setSubmitError("Workspace Name is required.");
+        return;
+      }
+      if (!form.user_email.trim()) {
+        setSubmitError("Your Email is required.");
+        return;
+      }
+      setSubmitting(true);
+      setSubmitError(null);
+      try {
+        const workspace = await createWorkspace(organisationId, {
+          workspace_name: form.workspace_name,
+          purpose: form.workspace_purpose || null,
+        });
+        setSessionWorkspaceId(workspace.workspace_id);
+        setWorkspaceId(workspace.workspace_id);
+
+        // A Workspace doesn't belong to one user (WorkspaceMember is a
+        // many-to-many join) - this creates the founder's User record and
+        // adds them as a member of the workspace they just set up, since
+        // onboarding never created a User at all before this.
+        const user = await createUser(organisationId, {
+          email: form.user_email,
+          full_name: form.user_full_name || null,
+        });
+        await addWorkspaceMember(workspace.workspace_id, {
+          user_id: user.user_id,
+          role: "owner",
+        });
+      } catch (err) {
+        setSubmitError(
+          err instanceof ApiError ? String(err.detail) : "Something went wrong. Please try again.",
+        );
+        setSubmitting(false);
+        return;
+      }
+      setSubmitting(false);
+    }
+
+    if (isIcpStep && icpId === null) {
+      if (workspaceId) {
+        setSubmitting(true);
+        setSubmitError(null);
+        const employees = parseEmployeeRange(icpForm.company_size);
+        const revenue = parseRevenueRange(icpForm.annual_revenue);
+        try {
+          const icp = await createIcp(workspaceId, {
+            name: icpForm.industry ? `${icpForm.industry} ICP` : "Onboarding ICP",
+            industries: icpForm.industry ? [icpForm.industry] : null,
+            employee_min: employees.min,
+            employee_max: employees.max,
+            revenue_min_usd: revenue.min,
+            revenue_max_usd: revenue.max,
+            countries: icpForm.headquarters_country ? [icpForm.headquarters_country] : null,
+            technologies: icpForm.technologies
+              ? icpForm.technologies.split(",").map((t) => t.trim()).filter(Boolean)
+              : null,
+            buying_committee_personas: icpForm.buying_committee_persona ? [icpForm.buying_committee_persona] : null,
+          });
+          setIcpId(icp.icp_id);
+        } catch (err) {
+          setSubmitError(
+            err instanceof ApiError ? String(err.detail) : "Something went wrong. Please try again.",
+          );
+          setSubmitting(false);
+          return;
+        }
+        setSubmitting(false);
+        // Stay on this step - the Upload Excel button only enables once
+        // icpId is set, so advancing immediately would mean it never
+        // renders in a clickable state. A second click on Continue (now
+        // that icpId !== null) falls through to the normal advance below.
+        return;
+      }
+    }
+
+    setActiveStep((step) => Math.min(step + 1, 9));
   };
 
   const handleSecondaryAction = () => {
@@ -2125,9 +2445,7 @@ function OnboardingCard() {
           {isGoLiveStep
             ? "Go Live"
             : isAiBusinessStep
-            ? "AI Analysis in Progress"
-            : isIcpLibraryStep
-            ? "ICP Library"
+            ? "Analysis in Progress"
             : isIcpStep
               ? "Define Your Ideal Customer Profile (Manual Input)"
               : isTriggerStep
@@ -2148,9 +2466,7 @@ function OnboardingCard() {
           {isGoLiveStep
             ? "Congratulations! Your XSparks AI platform is ready to drive outcomes."
             : isAiBusinessStep
-            ? "Our AI is analyzing your business to build a powerful foundation for personalized insights."
-            : isIcpLibraryStep
-            ? "Track your onboarding journey and setup progress."
+            ? "We're analyzing your business to build a powerful foundation for personalized insights."
             : isIcpStep
               ? "Provide the key details about your ideal customer. This will help AI generate accurate insights."
               : isTriggerStep
@@ -2172,85 +2488,97 @@ function OnboardingCard() {
       <div className={formViewportClassName}>
         <div
           className="flex h-full transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"
+          ref={trackRef}
           style={{ transform: `translateX(-${activeStep * 100}%)` }}
         >
-          <div className="h-full w-full shrink-0">
-            <WorkspaceSetupForm />
+          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
+            <OrganizationSetupForm form={form} onFieldChange={handleFieldChange} />
           </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]">
-            <OrganizationSetupForm />
+          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
+            <WorkspaceSetupForm form={form} onFieldChange={handleFieldChange} />
           </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]">
+          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <TeamInvitationsForm />
           </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]">
+          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <IndustrySelectionForm />
           </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]">
+          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <DataSourceSetupForm />
           </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]">
+          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <CrmIntegrationForm />
           </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]">
+          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <TriggerGenerationForm />
           </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]">
-            <IcpGenerationForm />
+          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
+            <IcpGenerationForm form={icpForm} icpId={icpId} onFieldChange={handleIcpFieldChange} workspaceId={workspaceId} />
           </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]">
-            <IcpLibraryForm />
-          </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]">
+          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <AiBusinessDiscoveryForm />
           </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]">
+          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <GoLiveForm />
           </div>
         </div>
       </div>
 
-      <footer className="mt-auto flex min-h-[79px] flex-col gap-5 border-t border-[#f1f5f9] pt-[24px] sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-[12px]">
-          <div className="flex size-[32px] shrink-0 items-center justify-center rounded-[8px] bg-[#eff6ff]">
-            <img alt="" className="size-[20px]" src={icons.secure} />
+      <footer className="mt-auto flex min-h-[79px] flex-col gap-3 border-t border-[#f1f5f9] pt-[24px]">
+        {submitError && (
+          <div className="flex min-h-[36px] items-center rounded-[8px] border border-[#fecaca] bg-[#fef2f2] px-[12px] font-['Inter'] text-[12px] font-medium leading-[18px] text-[#b91c1c]">
+            {submitError}
           </div>
-          <div className="min-w-0">
-            <p className="m-0 font-['Inter'] text-[11px] font-bold leading-[16.5px] text-[#334155]">
-              Your data is safe and secure
-            </p>
-            <p className="m-0 font-['Inter'] text-[11px] font-normal leading-[16.5px] text-[#94a3b8]">
-              We'll never share your information
-            </p>
+        )}
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-[12px]">
+            <div className="flex size-[32px] shrink-0 items-center justify-center rounded-[8px] bg-[#eff6ff]">
+              <img alt="" className="size-[20px]" src={icons.secure} />
+            </div>
+            <div className="min-w-0">
+              <p className="m-0 font-['Inter'] text-[11px] font-bold leading-[16.5px] text-[#334155]">
+                Your data is safe and secure
+              </p>
+              <p className="m-0 font-['Inter'] text-[11px] font-normal leading-[16.5px] text-[#94a3b8]">
+                We'll never share your information
+              </p>
+            </div>
           </div>
-        </div>
 
-        <div className="flex items-center justify-end gap-[32px]">
-          <button
-            className="font-['Inter'] text-[14px] font-medium leading-[20px] text-[#64748b]"
-            onClick={handleSecondaryAction}
-            type="button"
-          >
-            {activeStep > 0 ? "Back" : "Skip for now"}
-          </button>
-          <button
-            className="flex h-[44px] items-center gap-[8px] rounded-[12px] bg-gradient-to-r from-[#f75317] via-[#7c3aed] via-[58.173%] to-[#0c20ff] to-[97.115%] px-[40px] py-[12px] shadow-[0px_10px_15px_-3px_#c7d2fe,0px_4px_6px_-4px_#c7d2fe]"
-            onClick={handlePrimaryAction}
-            type="button"
-          >
-            <span className="font-['Inter'] text-[14px] font-bold leading-[20px] text-white">
-              {isGoLiveStep
-                ? "Start Using XSparks"
-                : isAiBusinessStep || isIcpLibraryStep
-                ? "Continue"
-                : isCrmStep
-                ? "Connect Salesforce"
-                : activeStep > 0
-                  ? "Save & Continue"
-                  : "Continue"}
-            </span>
-            <img alt="" className="size-[16px]" src={icons.arrowRight} />
-          </button>
+          <div className="flex items-center justify-end gap-[32px]">
+            <button
+              className="font-['Inter'] text-[14px] font-medium leading-[20px] text-[#64748b]"
+              onClick={handleSecondaryAction}
+              type="button"
+            >
+              {activeStep > 0 ? "Back" : "Skip for now"}
+            </button>
+            <button
+              className="flex h-[44px] items-center gap-[8px] rounded-[12px] bg-gradient-to-r from-[#f75317] via-[#7c3aed] via-[58.173%] to-[#0c20ff] to-[97.115%] px-[40px] py-[12px] shadow-[0px_10px_15px_-3px_#c7d2fe,0px_4px_6px_-4px_#c7d2fe] disabled:opacity-60"
+              disabled={submitting}
+              onClick={handlePrimaryAction}
+              type="button"
+            >
+              <span className="font-['Inter'] text-[14px] font-bold leading-[20px] text-white">
+                {submitting
+                  ? "Saving..."
+                  : isGoLiveStep
+                    ? "Start Using XSparks"
+                    : isAiBusinessStep
+                      ? "Continue"
+                      : isCrmStep
+                        ? "Connect Salesforce"
+                        : isIcpStep && icpId === null
+                          ? "Create ICP"
+                          : isIcpStep
+                            ? "Continue"
+                            : activeStep > 0
+                              ? "Save & Continue"
+                              : "Continue"}
+              </span>
+              <img alt="" className="size-[16px]" src={icons.arrowRight} />
+            </button>
+          </div>
         </div>
       </footer>
     </section>

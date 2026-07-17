@@ -23,6 +23,15 @@ async def get_trigger(session: AsyncSession, workspace_id: UUID, trigger_id: UUI
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
+async def list_triggers(session: AsyncSession, workspace_id: UUID) -> list[TriggerDefinition]:
+    stmt = (
+        select(TriggerDefinition)
+        .where(TriggerDefinition.workspace_id == workspace_id)
+        .order_by(TriggerDefinition.created_at.desc())
+    )
+    return (await session.execute(stmt)).scalars().all()
+
+
 async def detect_trigger_events(session: AsyncSession, trigger: TriggerDefinition) -> list[TriggerEvent]:
     # A trigger's Workspace belongs to exactly one Organisation - signals are
     # shared across all Workspaces in that Organisation (same as company data),

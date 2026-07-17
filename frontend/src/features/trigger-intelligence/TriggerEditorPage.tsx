@@ -19,12 +19,26 @@ import { useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { addTrigger } from "../../lib/triggers";
+import { createTrigger } from "../../api/triggers";
+import { getWorkspaceId } from "../../lib/session";
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
 
 type IconType = ComponentType<{ className?: string }>;
 type ActionRow = { icon: IconType; label: string; target: string };
+
+/* Real signal_category values the backend actually matches on (see
+ * SIGNAL_CATEGORY_MAP in app/services/signal_extractor.py) - this is the
+ * only field on this page that maps to something the backend can act on. */
+const SIGNAL_CATEGORY_OPTIONS = [
+  "ai_seriousness",
+  "ai_pain_points",
+  "buying_stage",
+  "budget_and_capital",
+  "urgency_and_catalysts",
+  "competitive_context",
+];
 
 function SelectBox({ icon: Icon, label }: { icon?: IconType; label: string }) {
   return (
@@ -39,25 +53,73 @@ function SelectBox({ icon: Icon, label }: { icon?: IconType; label: string }) {
   );
 }
 
+function CategorySelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <div className="relative flex h-[44px] w-full items-center rounded-[10px] border border-[#e9edf5] bg-white px-[14px] text-[14px] text-[#0f172a]">
+      <select
+        className="h-full w-full appearance-none bg-transparent pr-[20px] outline-none"
+        onChange={(e) => onChange(e.target.value)}
+        value={value}
+      >
+        {SIGNAL_CATEGORY_OPTIONS.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-[14px] size-[16px] text-[#94a3b8]" />
+    </div>
+  );
+}
+
 export function TriggerEditorPage() {
   const [name, setName] = useState("Hiring Spike Detected");
   const [description, setDescription] = useState(
     "Detects hiring spikes for target roles in key accounts",
   );
+  const [category, setCategory] = useState(SIGNAL_CATEGORY_OPTIONS[1]);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [actions, setActions] = useState<ActionRow[]>([
     { icon: Mail, label: "Send Email Notification", target: "Sales Team" },
     { icon: Slack, label: "Send Slack Alert", target: "#sales-alerts" },
     { icon: Cloud, label: "Create Salesforce Task", target: "Follow up with account" },
   ]);
 
-  const save = (status: "active" | "draft") => {
+  const save = async (status: "active" | "draft") => {
+    const triggerName = name.trim() || "Untitled Trigger";
+    const workspaceId = getWorkspaceId();
+
+    // status ("active"/"draft") and the notification actions (email/Slack/
+    // Salesforce) have no backend model yet - LLM/notification wiring was
+    // explicitly deferred earlier in this project. Persist what the backend
+    // can actually act on (name + signal_categories); keep the localStorage
+    // save too so Trigger Library always has something to show even if the
+    // API call fails or no workspace exists yet.
     addTrigger({
       id: String(Date.now()),
-      name: name.trim() || "Untitled Trigger",
-      category: "Hiring",
+      name: triggerName,
+      category,
       description: description.trim(),
       status,
     });
+
+    if (workspaceId) {
+      setSaving(true);
+      setSaveError(null);
+      try {
+        await createTrigger(workspaceId, {
+          name: triggerName,
+          signal_categories: [category],
+        });
+      } catch {
+        setSaveError("Saved locally, but couldn't reach the backend.");
+        setSaving(false);
+        return;
+      }
+      setSaving(false);
+    }
+
     window.location.href = "/trigger-library";
   };
 
@@ -90,10 +152,11 @@ export function TriggerEditorPage() {
               </p>
             </div>
 
-            <div className="flex flex-col items-start gap-[16px] xl:items-end">
+            <div className="flex flex-col items-start gap-[10px] xl:items-end">
               <div className="flex flex-wrap items-center gap-[10px]">
                 <button
-                  className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155]"
+                  className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155] disabled:opacity-60"
+                  disabled={saving}
                   onClick={() => save("draft")}
                   type="button"
                 >
@@ -108,14 +171,16 @@ export function TriggerEditorPage() {
                   Test Trigger
                 </button>
                 <button
-                  className="flex items-center gap-[8px] rounded-[10px] bg-[#fa5a1e] px-[18px] py-[10px] text-[14px] font-semibold text-white shadow-[0px_10px_20px_-6px_rgba(250,90,30,0.5)]"
+                  className="flex items-center gap-[8px] rounded-[10px] bg-[#fa5a1e] px-[18px] py-[10px] text-[14px] font-semibold text-white shadow-[0px_10px_20px_-6px_rgba(250,90,30,0.5)] disabled:opacity-60"
+                  disabled={saving}
                   onClick={() => save("active")}
                   type="button"
                 >
                   <Rocket className="size-[16px]" />
-                  Activate Trigger
+                  {saving ? "Saving..." : "Activate Trigger"}
                 </button>
               </div>
+              {saveError && <p className="m-0 text-[12px] font-medium text-[#ef4444]">{saveError}</p>}
             </div>
           </div>
 
@@ -138,7 +203,7 @@ export function TriggerEditorPage() {
                   <label className="mb-[8px] block text-[13px] font-semibold text-[#334155]">
                     Trigger Category
                   </label>
-                  <SelectBox label="Hiring" />
+                  <CategorySelect onChange={setCategory} value={category} />
                 </div>
                 <div>
                   <label className="mb-[8px] block text-[13px] font-semibold text-[#334155]">

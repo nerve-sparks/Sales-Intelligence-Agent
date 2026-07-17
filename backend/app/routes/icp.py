@@ -6,4 +6,5 @@ from app.schemas.icp import IcpCompaniesOut, IcpOut
 router = APIRouter(prefix="/workspaces/{workspace_id}/icp", tags=["icp"])
 
 router.post("", response_model=IcpOut)(icp_controller.create)
+router.get("", response_model=list[IcpOut])(icp_controller.list_all)
 router.get("/{icp_id}/companies", response_model=IcpCompaniesOut)(icp_controller.companies)

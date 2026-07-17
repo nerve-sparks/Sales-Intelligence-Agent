@@ -13,11 +13,75 @@ import {
   Sparkles,
   Star,
 } from "lucide-react";
-import type { ComponentType } from "react";
+import { useEffect, useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Donut, Sparkline } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
+import { listDecisionMakers } from "../../api/companies";
+import type { DecisionMakerOut } from "../../api/icp";
+import { getOrganisationId } from "../../lib/session";
+
+function getCompanyIdFromUrl(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return new URLSearchParams(window.location.search).get("id");
+}
+
+const MEMBER_COLORS = ["#6366f1", "#ec4899", "#0d9488", "#f59e0b", "#2563eb", "#ef4444", "#8b5cf6", "#0ea5e9"];
+
+function hashString(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+/* DecisionMaker (backend) has no seniority/influence/last-activity/
+ * relationship-strength/champion fields - those are CRM-engagement
+ * concepts the model doesn't track (see onboarding audit). Real
+ * identity/role fields come from the API; the rest is a fixed,
+ * non-committal default rather than invented per-person data. */
+function toMember(dm: DecisionMakerOut): Member {
+  const name = [dm.first_name, dm.last_name].filter(Boolean).join(" ") || "Unknown";
+  const initials = name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+  const persona = dm.persona ?? "";
+  const seniority = /chief|ceo|cfo|cto|coo|cio|ciso|founder|president/.test(persona)
+    ? "C-Level"
+    : /vp_|evp|svp/.test(persona)
+      ? "VP"
+      : /director|managing_director/.test(persona)
+        ? "Director"
+        : "Manager";
+  const senTone = seniority === "C-Level" ? "purple" : seniority === "VP" ? "violet" : seniority === "Director" ? "blue" : "green";
+
+  return {
+    decisionMakerId: dm.decision_maker_id,
+    initials: initials || "?",
+    bg: MEMBER_COLORS[hashString(name) % MEMBER_COLORS.length],
+    name,
+    role: dm.job_title ?? "—",
+    dept: dm.department ?? "—",
+    deptSub: "—",
+    seniority,
+    senTone,
+    influence: "Medium",
+    infTone: "orange",
+    time: "—",
+    activity: "No recent activity",
+    rel: "Unknown",
+    relTone: "gray",
+    relIcon: dm.email ? Mail : Linkedin,
+    champion: false,
+  };
+}
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -171,6 +235,7 @@ function Tabs() {
 /* ------------------------------------------------------------------ */
 
 type Member = {
+  decisionMakerId?: string;
   initials: string;
   bg: string;
   name: string;
@@ -189,7 +254,7 @@ type Member = {
   champion: boolean;
 };
 
-const members: Member[] = [
+const dummyMembers: Member[] = [
   { initials: "RM", bg: "#6366f1", name: "Rohit Menon", role: "CTO", dept: "Technology", deptSub: "IT Leadership", seniority: "C-Level", senTone: "purple", influence: "High", infTone: "green", time: "2h ago", activity: "Email opened", rel: "Strong", relTone: "green", relIcon: Linkedin, champion: true },
   { initials: "AI", bg: "#ec4899", name: "Ananya Iyer", role: "Head of Engineering", dept: "Engineering", deptSub: "Engineering Leadership", seniority: "Director", senTone: "blue", influence: "High", infTone: "green", time: "5h ago", activity: "Visited pricing page", rel: "Strong", relTone: "green", relIcon: Linkedin, champion: true },
   { initials: "VS", bg: "#0d9488", name: "Vikram Shah", role: "VP of Product", dept: "Product", deptSub: "Product Leadership", seniority: "VP", senTone: "violet", influence: "High", infTone: "green", time: "1d ago", activity: "Attended webinar", rel: "Moderate", relTone: "orange", relIcon: Linkedin, champion: false },
@@ -203,7 +268,7 @@ const members: Member[] = [
 const cols =
   "grid-cols-[minmax(0,1.6fr)_minmax(0,1.4fr)_0.85fr_0.7fr_minmax(0,1.2fr)_1fr_0.6fr_0.5fr]";
 
-function MembersTable() {
+function MembersTable({ members }: { members: Member[] }) {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="overflow-x-auto">
@@ -225,9 +290,11 @@ function MembersTable() {
               return (
                 <div
                   className={cn("grid cursor-pointer items-center gap-[12px] rounded-[8px] px-[6px] py-[13px] transition hover:bg-[#fafbff]", cols)}
-                  key={m.name}
+                  key={m.decisionMakerId ?? m.name}
                   onClick={() => {
-                    window.location.href = "/member-detail";
+                    window.location.href = m.decisionMakerId
+                      ? `/member-detail?id=${m.decisionMakerId}`
+                      : "/member-detail";
                   }}
                   role="button"
                   tabIndex={0}
@@ -396,6 +463,25 @@ function RoleDistribution() {
 /* ------------------------------------------------------------------ */
 
 export function BuyingCommitteePage() {
+  const [members, setMembers] = useState<Member[]>(dummyMembers);
+
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    const companyId = getCompanyIdFromUrl();
+    if (!organisationId || !companyId) {
+      return;
+    }
+    listDecisionMakers(organisationId, companyId)
+      .then((res) => {
+        if (res.length > 0) {
+          setMembers(res.map(toMember));
+        }
+      })
+      .catch(() => {
+        // No matching company/decision-makers - keep the dummy rows.
+      });
+  }, []);
+
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Enterprise List" />
@@ -408,7 +494,7 @@ export function BuyingCommitteePage() {
           <Tabs />
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[minmax(0,1fr)_360px]">
-            <MembersTable />
+            <MembersTable members={members} />
             <div className="flex flex-col gap-[20px]">
               <CommitteeInsights />
               <InfluenceDistribution />

@@ -23,11 +23,21 @@ import {
   Users,
   Video,
 } from "lucide-react";
-import type { ComponentType, ReactNode } from "react";
+import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Donut, Sparkline, smoothPath } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
+import { getDecisionMaker } from "../../api/companies";
+import type { DecisionMakerOut } from "../../api/icp";
+import { getOrganisationId } from "../../lib/session";
+
+function getDecisionMakerIdFromUrl(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return new URLSearchParams(window.location.search).get("id");
+}
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -82,14 +92,25 @@ const scoreCards = [
   { label: "Account Fit", value: "92%", badge: "Strong", tone: "green", spark: "#16a34a", values: [30, 36, 40, 44, 48, 54, 58] },
 ];
 
-function Header() {
+function Header({ dm }: { dm: DecisionMakerOut | null }) {
+  const name = dm ? [dm.first_name, dm.last_name].filter(Boolean).join(" ") || "Unknown" : "Rohit Menon";
+  const initials = dm
+    ? name
+        .split(/\s+/)
+        .map((w) => w[0])
+        .join("")
+        .slice(0, 2)
+        .toUpperCase()
+    : "RM";
+  const jobTitle = dm?.job_title ?? "CTO";
+
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-[12px]">
         <nav className="flex flex-wrap items-center gap-[8px] text-[13px] text-[#64748b]">
           <a className="no-underline hover:text-[#334155]" href="/buying-committee">Buying Committee</a>
           <ChevronRight className="size-[14px] text-[#cbd5e1]" />
-          <span className="font-semibold text-[#0f172a]">Rohit Menon</span>
+          <span className="font-semibold text-[#0f172a]">{name}</span>
         </nav>
         <div className="flex flex-wrap items-center gap-[10px]">
           <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] py-[9px] text-[13px] font-semibold text-[#334155]" type="button"><Bell className="size-[15px]" /> Add to Watchlist</button>
@@ -102,17 +123,17 @@ function Header() {
       <div className="mt-[16px] flex flex-col gap-[16px] 2xl:flex-row 2xl:items-center 2xl:justify-between">
         <div className="flex items-start gap-[16px]">
           <span className="relative shrink-0">
-            <span className="flex size-[64px] items-center justify-center rounded-full bg-[#6366f1] text-[20px] font-bold text-white">RM</span>
+            <span className="flex size-[64px] items-center justify-center rounded-full bg-[#6366f1] text-[20px] font-bold text-white">{initials}</span>
             <span className="absolute bottom-[2px] right-[2px] size-[13px] rounded-full border-2 border-white bg-[#22c55e]" />
           </span>
           <div>
             <div className="flex flex-wrap items-center gap-[10px]">
-              <h1 className="m-0 text-[24px] font-bold text-[#0f172a]">Rohit Menon</h1>
+              <h1 className="m-0 text-[24px] font-bold text-[#0f172a]">{name}</h1>
               <Badge label="Champion" tone="green" />
               <Star className="size-[16px] text-[#cbd5e1]" />
             </div>
             <p className="m-0 mt-[5px] flex items-center gap-[8px] text-[13px] font-medium text-[#334155]">
-              CTO •
+              {jobTitle} •
               <button className="flex items-center gap-[4px] font-semibold text-[#2563eb]" type="button">
                 TechNova Solutions <ChevronDown className="size-[13px]" />
               </button>
@@ -175,12 +196,26 @@ function Tabs() {
 /* Left column cards                                                   */
 /* ------------------------------------------------------------------ */
 
-function ContactInformation() {
-  const rows = [
+function ContactInformation({ dm }: { dm: DecisionMakerOut | null }) {
+  const dummyRows = [
     { icon: Mail, value: "rohit.menon@technova.com", copy: true },
     { icon: Phone, value: "+91 98765 43210", copy: true },
     { icon: Linkedin, value: "linkedin.com/in/rohitmenon", external: true },
   ];
+  const realRows: typeof dummyRows = [];
+  if (dm?.email) {
+    realRows.push({ icon: Mail, value: dm.email, copy: true });
+  }
+  if (dm?.phone) {
+    realRows.push({ icon: Phone, value: dm.phone, copy: true });
+  }
+  if (dm?.mobile_phone) {
+    realRows.push({ icon: Phone, value: dm.mobile_phone, copy: true });
+  }
+  if (dm?.linkedin_url) {
+    realRows.push({ icon: Linkedin, value: dm.linkedin_url, external: true });
+  }
+  const rows = dm ? realRows : dummyRows;
   return (
     <Card title="Contact Information">
       <div className="flex flex-col gap-[14px]">
@@ -201,14 +236,22 @@ function ContactInformation() {
   );
 }
 
-function CurrentRole() {
-  const rows = [
-    { label: "Current Role", value: "CTO" },
-    { label: "Department", value: "Engineering" },
-    { label: "Since", value: "Jan 2022 (2.4 yrs)" },
-    { label: "Experience", value: "12+ years" },
-    { label: "Education", value: "B.Tech, IIT Madras" },
-  ];
+function CurrentRole({ dm }: { dm: DecisionMakerOut | null }) {
+  const rows = dm
+    ? [
+        { label: "Current Role", value: dm.job_title ?? "—" },
+        { label: "Department", value: dm.department ?? "—" },
+        { label: "Since", value: "—" },
+        { label: "Experience", value: dm.years_of_experience ?? "—" },
+        { label: "Education", value: "—" },
+      ]
+    : [
+        { label: "Current Role", value: "CTO" },
+        { label: "Department", value: "Engineering" },
+        { label: "Since", value: "Jan 2022 (2.4 yrs)" },
+        { label: "Experience", value: "12+ years" },
+        { label: "Education", value: "B.Tech, IIT Madras" },
+      ];
   return (
     <Card title="Current Role & Background">
       <dl className="m-0 flex flex-col gap-[12px]">
@@ -544,6 +587,21 @@ function NextActions() {
 /* ------------------------------------------------------------------ */
 
 export function MemberDetailPage() {
+  const [dm, setDm] = useState<DecisionMakerOut | null>(null);
+
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    const decisionMakerId = getDecisionMakerIdFromUrl();
+    if (!organisationId || !decisionMakerId) {
+      return;
+    }
+    getDecisionMaker(organisationId, decisionMakerId)
+      .then(setDm)
+      .catch(() => {
+        // No matching decision-maker - keep the dummy fallback data.
+      });
+  }, []);
+
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Enterprise List" />
@@ -552,14 +610,14 @@ export function MemberDetailPage() {
         <TopBar searchPlaceholder="Search companies, triggers, executives..." showDetection={false} />
 
         <main className="flex-1 overflow-x-hidden px-[28px] py-[22px]">
-          <Header />
+          <Header dm={dm} />
           <Tabs />
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="flex flex-col gap-[20px]">
               <div className="grid grid-cols-1 gap-[20px] lg:grid-cols-3">
-                <ContactInformation />
-                <CurrentRole />
+                <ContactInformation dm={dm} />
+                <CurrentRole dm={dm} />
                 <RecentSignals />
               </div>
               <div className="grid grid-cols-1 gap-[20px] lg:grid-cols-3">

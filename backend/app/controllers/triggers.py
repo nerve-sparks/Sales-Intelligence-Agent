@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.services.trigger_matcher import create_trigger, detect_trigger_events, get_trigger
+from app.services.trigger_matcher import create_trigger, detect_trigger_events, get_trigger, list_triggers
 from app.schemas.trigger import TriggerEventOut, TriggerEventsOut
 
 
@@ -17,6 +17,10 @@ class TriggerCreate(BaseModel):
 
 async def create(workspace_id: UUID, payload: TriggerCreate, db: AsyncSession = Depends(get_db)):
     return await create_trigger(db, workspace_id, payload.model_dump())
+
+
+async def list_all(workspace_id: UUID, db: AsyncSession = Depends(get_db)):
+    return await list_triggers(db, workspace_id)
 
 
 async def events(workspace_id: UUID, trigger_id: UUID, db: AsyncSession = Depends(get_db)):

@@ -20,12 +20,34 @@ import {
   UserPlus,
   Zap,
 } from "lucide-react";
-import { useState, type ComponentType } from "react";
+import { useEffect, useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Donut } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { getTriggers, type SavedTrigger } from "../../lib/triggers";
+import { listTriggers } from "../../api/triggers";
+import { getWorkspaceId } from "../../lib/session";
+
+/* TriggerDefinition (backend) has no category/description/status fields -
+ * those are frontend-only concepts (see onboarding audit). Real id/name
+ * come from the API; the rest falls back to sensible defaults so the
+ * existing TriggerCard rendering needs no changes. */
+function toSavedTrigger(trigger: {
+  trigger_id: string;
+  name: string | null;
+  signal_types: string[] | null;
+  signal_categories: string[] | null;
+}): SavedTrigger {
+  return {
+    id: trigger.trigger_id,
+    name: trigger.name || "Untitled Trigger",
+    category: trigger.signal_categories?.[0] || trigger.signal_types?.[0] || "General",
+    description:
+      [trigger.signal_types, trigger.signal_categories].flat().filter(Boolean).join(", ") || "Custom trigger",
+    status: "active",
+  };
+}
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -492,7 +514,19 @@ function QuickActionsCard() {
 /* ------------------------------------------------------------------ */
 
 export function TriggerLibraryPage() {
-  const [saved] = useState<SavedTrigger[]>(() => getTriggers());
+  const [saved, setSaved] = useState<SavedTrigger[]>(() => getTriggers());
+
+  useEffect(() => {
+    const workspaceId = getWorkspaceId();
+    if (!workspaceId) {
+      return;
+    }
+    listTriggers(workspaceId)
+      .then((triggers) => setSaved(triggers.map(toSavedTrigger)))
+      .catch(() => {
+        // No backend/workspace yet - keep the localStorage fallback.
+      });
+  }, []);
 
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>

@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.services.icp_filter import create_icp, filter_companies, get_icp
+from app.services.icp_filter import create_icp, filter_companies, get_icp, list_icps
 from app.schemas.icp import IcpCompaniesOut
 
 
@@ -23,6 +23,10 @@ class IcpCreate(BaseModel):
 
 async def create(workspace_id: UUID, payload: IcpCreate, db: AsyncSession = Depends(get_db)):
     return await create_icp(db, workspace_id, payload.model_dump())
+
+
+async def list_all(workspace_id: UUID, db: AsyncSession = Depends(get_db)):
+    return await list_icps(db, workspace_id)
 
 
 async def companies(workspace_id: UUID, icp_id: UUID, db: AsyncSession = Depends(get_db)):

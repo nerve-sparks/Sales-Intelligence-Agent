@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 class DecisionMakerOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    decision_maker_id: UUID
     zi_person_id: int
     first_name: str | None = None
     last_name: str | None = None
@@ -97,6 +98,30 @@ class NewsOut(BaseModel):
     description: str | None = None
     category: str | None = None
     page_date: datetime | None = None
+
+
+class CompanyListItemOut(BaseModel):
+    company_id: UUID
+    company_name: str
+    company_domain: str | None = None
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
+    employee_count: int | None = None
+    employee_range: str | None = None
+    revenue_usd: int | None = None
+    revenue_range: str | None = None
+    industries: list[str] | None = None
+    logo_url: str | None = None
+    lead_score: float | None = None
+    gate_status: str | None = None
+
+
+class CompanyListOut(BaseModel):
+    items: list[CompanyListItemOut]
+    total: int
+    page: int
+    page_size: int
 
 
 class ScoopEnrichOut(BaseModel):

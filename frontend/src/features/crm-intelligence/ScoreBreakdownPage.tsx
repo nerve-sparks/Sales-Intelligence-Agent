@@ -6,10 +6,26 @@ import {
   Share2,
   Upload,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Donut, smoothPath } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
+import { getCompany } from "../../api/companies";
+import type { CompanyOut } from "../../api/icp";
+import { getScore, type LeadScoreOut, type NotScoredOut } from "../../api/scores";
+import { getOrganisationId } from "../../lib/session";
+
+function getCompanyIdFromUrl(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return new URLSearchParams(window.location.search).get("id");
+}
+
+function isScored(score: LeadScoreOut | NotScoredOut | null): score is LeadScoreOut {
+  return score !== null && "lead_score_id" in score;
+}
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -32,7 +48,24 @@ function Badge({ label, tone }: { label: string; tone: string }) {
 /* Header + summary                                                    */
 /* ------------------------------------------------------------------ */
 
-function Header() {
+function Header({ company, score }: { company: CompanyOut | null; score: LeadScoreOut | NotScoredOut | null }) {
+  const name = company?.company_name ?? "Acme Corporation";
+  const initials = company
+    ? name
+        .split(/\s+/)
+        .map((w) => w[0])
+        .join("")
+        .slice(0, 2)
+        .toUpperCase()
+    : "AC";
+  const meta = company
+    ? [company.company_domain, [company.city, company.country].filter(Boolean).join(", "), company.employee_count ? `${company.employee_count} Employees` : null, company.industries?.[0]]
+        .filter(Boolean)
+        .join(" • ")
+    : "acme.com • San Francisco, CA, USA • 5,200 Employees • Software";
+  const overallScore = isScored(score) && score.lead_score !== null ? Math.round(score.lead_score) : 78;
+  const gateStatus = isScored(score) ? score.gate_status : "active";
+
   return (
     <div>
       <div className="flex flex-wrap items-start justify-between gap-[12px]">
@@ -40,11 +73,11 @@ function Header() {
           <nav className="flex items-center gap-[8px] text-[13px] text-[#64748b]">
             <span className="font-semibold text-[#5b3df5]">Score Breakdown</span>
             <ChevronRight className="size-[14px] text-[#cbd5e1]" />
-            <span className="font-semibold text-[#0f172a]">Acme Corporation</span>
+            <span className="font-semibold text-[#0f172a]">{name}</span>
           </nav>
           <h1 className="m-0 mt-[10px] text-[26px] font-bold text-[#0f172a]">Score Breakdown</h1>
           <p className="m-0 mt-[6px] text-[15px] text-[#64748b]">
-            Detailed breakdown of Acme Corporation's score across all dimensions and signals.
+            Detailed breakdown of {name}'s score across all dimensions and signals.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-[10px]">
@@ -62,23 +95,21 @@ function Header() {
 
       <div className="mt-[18px] grid grid-cols-1 gap-px overflow-hidden rounded-[16px] border border-[#eef1f6] bg-[#eef1f6] lg:grid-cols-[minmax(0,1.6fr)_1fr_1fr_1fr]">
         <div className="flex items-center gap-[14px] bg-white p-[18px]">
-          <span className="flex size-[48px] shrink-0 items-center justify-center rounded-[12px] bg-[#e6f0ff] text-[15px] font-bold text-[#2563eb]">AC</span>
+          <span className="flex size-[48px] shrink-0 items-center justify-center rounded-[12px] bg-[#e6f0ff] text-[15px] font-bold text-[#2563eb]">{initials}</span>
           <div className="min-w-0">
             <div className="flex items-center gap-[8px]">
-              <p className="m-0 text-[17px] font-bold text-[#0f172a]">Acme Corporation</p>
-              <Badge label="Active" tone="green" />
+              <p className="m-0 text-[17px] font-bold text-[#0f172a]">{name}</p>
+              <Badge label={gateStatus === "active" ? "Active" : "Nurture"} tone={gateStatus === "active" ? "green" : "orange"} />
             </div>
-            <p className="m-0 mt-[3px] truncate text-[12px] text-[#64748b]">
-              acme.com • San Francisco, CA, USA • 5,200 Employees • Software
-            </p>
+            <p className="m-0 mt-[3px] truncate text-[12px] text-[#64748b]">{meta}</p>
           </div>
         </div>
         <div className="bg-white p-[18px]">
           <p className="m-0 text-[12px] text-[#94a3b8]">Overall Score</p>
           <div className="mt-[6px] flex items-baseline gap-[8px]">
-            <span className="text-[26px] font-bold leading-none text-[#0f172a]">78</span>
+            <span className="text-[26px] font-bold leading-none text-[#0f172a]">{overallScore}</span>
             <span className="text-[13px] text-[#94a3b8]">/100</span>
-            <Badge label="Good Fit" tone="green" />
+            <Badge label={overallScore >= 75 ? "Good Fit" : overallScore >= 50 ? "Fair Fit" : "Poor Fit"} tone={overallScore >= 75 ? "green" : overallScore >= 50 ? "orange" : "red"} />
           </div>
         </div>
         <div className="bg-white p-[18px]">
@@ -123,7 +154,7 @@ function Tabs() {
 /* Score by Dimension                                                  */
 /* ------------------------------------------------------------------ */
 
-const dimensions = [
+const dummyDimensions = [
   { name: "Firmographic Fit", score: 85, weight: "25%", weighted: "21.3", impact: "High", impTone: "green", color: "#2563eb", val: 21.3 },
   { name: "Intent Signals", score: 72, weight: "20%", weighted: "14.4", impact: "High", impTone: "green", color: "#16a34a", val: 14.4 },
   { name: "Engagement Signals", score: 68, weight: "15%", weighted: "10.2", impact: "Medium", impTone: "orange", color: "#7c3aed", val: 10.2 },
@@ -133,9 +164,38 @@ const dimensions = [
   { name: "Negative Signals", score: 40, weight: "5%", weighted: "2.0", impact: "Low", impTone: "red", color: "#94a3b8", val: 2.0 },
 ];
 
+// The 7 dimension names/weights below are UI copy invented for the mockup -
+// they don't match the backend's actual d1-d7 scoring model (see
+// lead_scorer.py). Real scores use the backend's own dimension names
+// instead of forcing a mismatched mapping onto the mockup's labels; weight/
+// weighted-score aren't persisted per-dimension so those columns show "—"
+// rather than fabricated numbers.
+const REAL_DIMENSION_LABELS: { key: keyof LeadScoreOut; name: string; color: string }[] = [
+  { key: "d1_pain_acuity", name: "Pain Acuity", color: "#2563eb" },
+  { key: "d2_ai_intent", name: "AI Intent", color: "#16a34a" },
+  { key: "d3_economic_capacity", name: "Economic Capacity", color: "#7c3aed" },
+  { key: "d4_authority", name: "Authority", color: "#f59e0b" },
+  { key: "d5_timing_catalyst", name: "Timing Catalyst", color: "#f97316" },
+  { key: "d6_solution_fit", name: "Solution Fit", color: "#ef4444" },
+  { key: "d7_competitive", name: "Competitive", color: "#94a3b8" },
+];
+
+function toRealDimensions(score: LeadScoreOut) {
+  return REAL_DIMENSION_LABELS.map((d) => {
+    const raw = score[d.key];
+    const value = typeof raw === "number" ? raw : 0;
+    const impact = value >= 75 ? "High" : value >= 50 ? "Medium" : "Low";
+    const impTone = value >= 75 ? "green" : value >= 50 ? "orange" : "red";
+    return { name: d.name, score: Math.round(value), weight: "—", weighted: "—", impact, impTone, color: d.color, val: value || 0.01 };
+  });
+}
+
 const dimCols = "grid-cols-[minmax(0,1.6fr)_0.8fr_0.9fr_1fr_0.7fr]";
 
-function ScoreByDimension() {
+function ScoreByDimension({ score }: { score: LeadScoreOut | NotScoredOut | null }) {
+  const dimensions = isScored(score) ? toRealDimensions(score) : dummyDimensions;
+  const overallScore = isScored(score) && score.lead_score !== null ? Math.round(score.lead_score) : 78;
+
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex items-start justify-between gap-[12px]">
@@ -150,7 +210,7 @@ function ScoreByDimension() {
         <div className="relative size-[220px] shrink-0">
           <Donut segments={dimensions.map((d) => ({ value: d.val, color: d.color }))} size={220} thickness={30} />
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-[34px] font-bold leading-none text-[#0f172a]">78</span>
+            <span className="text-[34px] font-bold leading-none text-[#0f172a]">{overallScore}</span>
             <span className="mt-[3px] text-[13px] text-[#94a3b8]">/100</span>
           </div>
         </div>
@@ -179,8 +239,8 @@ function ScoreByDimension() {
               <div className={cn("grid items-center gap-[12px] pt-[12px] text-[13px] font-bold text-[#0f172a]", dimCols)}>
                 <span>Total</span>
                 <span />
-                <span>100%</span>
-                <span>73.6 <span className="font-normal text-[#94a3b8]">= 78/100</span></span>
+                <span>{isScored(score) ? "—" : "100%"}</span>
+                <span>{isScored(score) ? overallScore : <>73.6 <span className="font-normal text-[#94a3b8]">= 78/100</span></>}</span>
                 <span />
               </div>
             </div>
@@ -323,6 +383,27 @@ function ScoreHistory() {
 /* ------------------------------------------------------------------ */
 
 export function ScoreBreakdownPage() {
+  const [company, setCompany] = useState<CompanyOut | null>(null);
+  const [score, setScore] = useState<LeadScoreOut | NotScoredOut | null>(null);
+
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    const companyId = getCompanyIdFromUrl();
+    if (!organisationId || !companyId) {
+      return;
+    }
+    getCompany(organisationId, companyId)
+      .then(setCompany)
+      .catch(() => {
+        // No matching company - keep the dummy fallback data.
+      });
+    getScore(organisationId, companyId)
+      .then(setScore)
+      .catch(() => {
+        // No score yet - keep the dummy fallback data.
+      });
+  }, []);
+
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Score Breakdown" />
@@ -331,11 +412,11 @@ export function ScoreBreakdownPage() {
         <TopBar searchPlaceholder="Search companies, triggers, executives..." showDetection={false} />
 
         <main className="flex-1 overflow-x-hidden px-[28px] py-[22px]">
-          <Header />
+          <Header company={company} score={score} />
           <Tabs />
 
           <div className="mt-[22px]">
-            <ScoreByDimension />
+            <ScoreByDimension score={score} />
           </div>
 
           <div className="mt-[20px] grid grid-cols-1 gap-[20px] xl:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">

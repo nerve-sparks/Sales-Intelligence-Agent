@@ -14,10 +14,25 @@ import {
   Triangle,
   Users,
 } from "lucide-react";
-import type { ComponentType, ReactNode } from "react";
+import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { cn } from "../../lib/cn";
+import { listSignals, type SignalWithCompanyOut } from "../../api/signals";
+import { getOrganisationId } from "../../lib/session";
+
+function relativeTime(iso: string | null): string {
+  if (!iso) {
+    return "—";
+  }
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const minutes = Math.round(diffMs / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -137,6 +152,7 @@ function FilterBar() {
 /* ------------------------------------------------------------------ */
 
 type Signal = {
+  signalId?: string;
   logo: Logo;
   title: string;
   description: string;
@@ -149,7 +165,32 @@ type Signal = {
   detected: string;
 };
 
-const signals: Signal[] = [
+/* SignalWithCompanyOut has no logo/domain/company-size/title - those are
+ * UI-only concepts (see onboarding audit: Signal is a firmographic-free
+ * extraction record). Real id/company/category/confidence-derived score
+ * come from the API; the rest falls back to generic/derived values. */
+function toSignal(s: SignalWithCompanyOut): Signal {
+  const confidence = s.signal_confidence ?? 0;
+  const intent = confidence >= 0.8 ? "High" : confidence >= 0.5 ? "Medium" : "Low";
+  return {
+    signalId: s.signal_id,
+    logo: { type: "icon", icon: Layers, bg: "#eef1ff", color: "#5b3df5" },
+    title: s.signal_type.replace(/_/g, " "),
+    description: s.core_fact ?? "—",
+    tags: [
+      { label: s.signal_category.replace(/_/g, " "), tone: "purple" },
+      { label: s.signal_type.replace(/_/g, " "), tone: "gray" },
+    ],
+    company: s.company_name,
+    domain: "—",
+    size: "—",
+    intent,
+    score: Math.round(confidence * 100),
+    detected: relativeTime(s.ingested_at),
+  };
+}
+
+const dummySignals: Signal[] = [
   {
     logo: { type: "icon", icon: Triangle, bg: "#0f172a", color: "#ffffff" },
     title: "Series B funding round announced",
@@ -276,7 +317,7 @@ const signals: Signal[] = [
 const tableColumns =
   "grid-cols-[minmax(0,2.4fr)_minmax(0,1.2fr)_92px_120px_112px_96px]";
 
-function SignalTable() {
+function SignalTable({ signals }: { signals: Signal[] }) {
   return (
     <div className="overflow-hidden rounded-[16px] border border-[#eef1f6] bg-white shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="overflow-x-auto">
@@ -302,9 +343,11 @@ function SignalTable() {
                   "grid cursor-pointer items-center gap-[16px] px-[24px] py-[18px] transition hover:bg-[#fafbff]",
                   tableColumns,
                 )}
-                key={signal.title}
+                key={signal.signalId ?? signal.title}
                 onClick={() => {
-                  window.location.href = "/signal-detail";
+                  window.location.href = signal.signalId
+                    ? `/signal-detail?id=${signal.signalId}`
+                    : "/signal-detail";
                 }}
                 role="button"
                 tabIndex={0}
@@ -438,6 +481,24 @@ function Pagination() {
 /* ------------------------------------------------------------------ */
 
 export function SignalFeedPage() {
+  const [signals, setSignals] = useState<Signal[]>(dummySignals);
+
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    if (!organisationId) {
+      return;
+    }
+    listSignals(organisationId, { page: 1, page_size: 20 })
+      .then((res) => {
+        if (res.items.length > 0) {
+          setSignals(res.items.map(toSignal));
+        }
+      })
+      .catch(() => {
+        // No backend/org yet - keep the dummy rows.
+      });
+  }, []);
+
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Signal Intelligence" activeSub="Signal Feed" />
@@ -464,7 +525,7 @@ export function SignalFeedPage() {
           </div>
 
           <div className="mt-[18px]">
-            <SignalTable />
+            <SignalTable signals={signals} />
           </div>
 
           <Pagination />
