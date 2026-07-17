@@ -21,7 +21,8 @@ import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Sparkline, UpTriangle } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
-import { listCompanies } from "../../api/companies";
+import { exportCompanies, getCompanyStats, listCompanies, type CompanyStatsOut } from "../../api/companies";
+import { ApiError } from "../../api/client";
 import { getIcpCompanies, listIcps, type IcpOut } from "../../api/icp";
 import { getRankedScores } from "../../api/scores";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
@@ -33,12 +34,37 @@ const pageBackground =
 /* Stat cards                                                          */
 /* ------------------------------------------------------------------ */
 
-const stats = [
+type StatCard = {
+  icon: typeof ShieldCheck;
+  bg: string;
+  color: string;
+  label: string;
+  value: string;
+  delta: string | null;
+  down: boolean;
+  spark: string;
+  values: number[];
+};
+
+const dummyStats: StatCard[] = [
   { icon: ShieldCheck, bg: "#f3e9ff", color: "#7c3aed", label: "Total Enterprises", value: "3,842", delta: "8.6%", down: false, spark: "#7c3aed", values: [30, 36, 32, 40, 35, 44, 38, 46, 42, 50] },
   { icon: Settings, bg: "#e7f8ef", color: "#16a34a", label: "High Intent Enterprises", value: "628", delta: "15.3%", down: false, spark: "#16a34a", values: [26, 30, 28, 36, 32, 40, 36, 44, 40, 48] },
   { icon: Users, bg: "#fff1e3", color: "#f97316", label: "Medium Intent Enterprises", value: "1,256", delta: "9.7%", down: false, spark: "#f97316", values: [34, 30, 36, 32, 38, 33, 40, 35, 42, 38] },
   { icon: Bell, bg: "#fdecec", color: "#ef4444", label: "Low Intent Enterprises", value: "212", delta: "6.4%", down: true, spark: "#2563eb", values: [40, 36, 42, 34, 38, 30, 36, 32, 34, 30] },
 ];
+
+/* CompanyStatsOut has no vs-last-7-days baseline - a single snapshot can't
+ * produce a real delta, so those are dropped instead of faked. The
+ * sparklines lose their meaning too (no time series behind them), so they
+ * flatten to the current value rather than showing the old demo shape. */
+function toStatCards(data: CompanyStatsOut): StatCard[] {
+  return [
+    { icon: ShieldCheck, bg: "#f3e9ff", color: "#7c3aed", label: "Total Enterprises", value: data.total.toLocaleString(), delta: null, down: false, spark: "#7c3aed", values: [data.total, data.total] },
+    { icon: Settings, bg: "#e7f8ef", color: "#16a34a", label: "High Intent Enterprises", value: data.high_intent.toLocaleString(), delta: null, down: false, spark: "#16a34a", values: [data.high_intent, data.high_intent] },
+    { icon: Users, bg: "#fff1e3", color: "#f97316", label: "Medium Intent Enterprises", value: data.medium_intent.toLocaleString(), delta: null, down: false, spark: "#f97316", values: [data.medium_intent, data.medium_intent] },
+    { icon: Bell, bg: "#fdecec", color: "#ef4444", label: "Low Intent Enterprises", value: data.low_intent.toLocaleString(), delta: null, down: true, spark: "#2563eb", values: [data.low_intent, data.low_intent] },
+  ];
+}
 
 function StatDelta({ value, down }: { value: string; down: boolean }) {
   return (
@@ -49,7 +75,7 @@ function StatDelta({ value, down }: { value: string; down: boolean }) {
   );
 }
 
-function StatCards() {
+function StatCards({ stats }: { stats: StatCard[] }) {
   return (
     <div className="grid grid-cols-1 gap-[16px] sm:grid-cols-2 xl:grid-cols-4">
       {stats.map((s) => {
@@ -63,10 +89,12 @@ function StatCards() {
               <span className="text-[14px] font-semibold text-[#475569]">{s.label}</span>
             </div>
             <p className="m-0 mt-[12px] text-[28px] font-bold leading-none text-[#0f172a]">{s.value}</p>
-            <p className="m-0 mt-[8px] flex items-center gap-[6px] text-[12px] text-[#94a3b8]">
-              <StatDelta down={s.down} value={s.delta} />
-              vs last 7 days
-            </p>
+            {s.delta && (
+              <p className="m-0 mt-[8px] flex items-center gap-[6px] text-[12px] text-[#94a3b8]">
+                <StatDelta down={s.down} value={s.delta} />
+                vs last 7 days
+              </p>
+            )}
             <div className="mt-[8px]">
               <Sparkline className="h-[42px] w-full" color={s.spark} gradientId={`ent-${s.label.replace(/\s+/g, "")}`} values={s.values} />
             </div>
@@ -421,6 +449,9 @@ export function EnterpriseListPage() {
   const [enterprises, setEnterprises] = useState<Enterprise[]>(dummyEnterprises);
   const [icps, setIcps] = useState<IcpOut[]>([]);
   const [selectedIcpId, setSelectedIcpId] = useState("all");
+  const [statCards, setStatCards] = useState<StatCard[]>(dummyStats);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   // Populate the ICP filter dropdown once.
   useEffect(() => {
@@ -432,6 +463,24 @@ export function EnterpriseListPage() {
       .then(setIcps)
       .catch(() => {
         // No backend/workspace yet - dropdown just shows "All Companies".
+      });
+  }, []);
+
+  // Org-wide totals for the stat cards - independent of the ICP filter and
+  // current page, so it always reflects every company from the uploaded data.
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    if (!organisationId) {
+      return;
+    }
+    getCompanyStats(organisationId)
+      .then((data) => {
+        if (data.total > 0) {
+          setStatCards(toStatCards(data));
+        }
+      })
+      .catch(() => {
+        // No backend/org yet - keep the dummy stat cards.
       });
   }, []);
 
@@ -447,11 +496,17 @@ export function EnterpriseListPage() {
       return;
     }
 
+    // Top lead score first, lowest last - the backend already orders "all
+    // companies" this way (LeadScore.lead_score desc nulls last), but the
+    // ICP-filtered branch below merges scores in JS after two separate
+    // fetches, so it needs its own explicit sort.
+    const byScoreDesc = (a: Enterprise, b: Enterprise) => b.score - a.score;
+
     if (selectedIcpId === "all") {
       listCompanies(organisationId, { page: 1, page_size: 25 })
         .then((res) => {
           if (res.items.length > 0) {
-            setEnterprises(res.items.map((c) => toEnterprise(c, c.lead_score, c.gate_status)));
+            setEnterprises(res.items.map((c) => toEnterprise(c, c.lead_score, c.gate_status)).sort(byScoreDesc));
           }
         })
         .catch(() => {
@@ -467,10 +522,12 @@ export function EnterpriseListPage() {
       .then(([icpResult, ranked]) => {
         const scoreByName = new Map(ranked.map((r) => [r.company_name, r]));
         setEnterprises(
-          icpResult.companies.map((c) => {
-            const matched = scoreByName.get(c.company_name);
-            return toEnterprise(c, matched?.lead_score ?? null, matched?.gate_status ?? null);
-          }),
+          icpResult.companies
+            .map((c) => {
+              const matched = scoreByName.get(c.company_name);
+              return toEnterprise(c, matched?.lead_score ?? null, matched?.gate_status ?? null);
+            })
+            .sort(byScoreDesc),
         );
       })
       .catch(() => {
@@ -479,6 +536,30 @@ export function EnterpriseListPage() {
         setEnterprises([]);
       });
   }, [selectedIcpId]);
+
+  // Exports the same set of companies currently shown - every company for
+  // "All Companies", or just that ICP's matches when one is selected -
+  // with real LeadScore columns (see excel_pipeline.build_company_export_workbook).
+  const handleExport = async () => {
+    const organisationId = getOrganisationId();
+    if (!organisationId) {
+      return;
+    }
+    setExporting(true);
+    setExportError(null);
+    try {
+      const blob = await exportCompanies(organisationId, selectedIcpId === "all" ? undefined : selectedIcpId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "companies_export.xlsx";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(err instanceof ApiError ? String(err.detail) : "Export failed. Please try again.");
+    }
+    setExporting(false);
+  };
 
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
@@ -495,24 +576,32 @@ export function EnterpriseListPage() {
                 Manage and explore all enterprises in your database.
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-[10px]">
-              <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155]" type="button">
-                <Download className="size-[16px] text-[#64748b]" />
-                Export
-              </button>
-              <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155]" type="button">
-                <Upload className="size-[16px] text-[#64748b]" />
-                Import
-              </button>
-              <button className="flex items-center gap-[8px] rounded-[10px] bg-[#fa5a1e] px-[18px] py-[10px] text-[14px] font-semibold text-white shadow-[0px_10px_20px_-6px_rgba(250,90,30,0.5)]" type="button">
-                <Plus className="size-[17px]" />
-                Add Enterprise
-              </button>
+            <div className="flex flex-col items-end gap-[6px]">
+              <div className="flex flex-wrap items-center gap-[10px]">
+                <button
+                  className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155] disabled:opacity-60"
+                  disabled={exporting}
+                  onClick={handleExport}
+                  type="button"
+                >
+                  <Download className="size-[16px] text-[#64748b]" />
+                  {exporting ? "Exporting..." : "Export"}
+                </button>
+                <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155]" type="button">
+                  <Upload className="size-[16px] text-[#64748b]" />
+                  Import
+                </button>
+                <button className="flex items-center gap-[8px] rounded-[10px] bg-[#fa5a1e] px-[18px] py-[10px] text-[14px] font-semibold text-white shadow-[0px_10px_20px_-6px_rgba(250,90,30,0.5)]" type="button">
+                  <Plus className="size-[17px]" />
+                  Add Enterprise
+                </button>
+              </div>
+              {exportError && <p className="m-0 text-[12px] font-medium text-[#ef4444]">{exportError}</p>}
             </div>
           </div>
 
           <div className="mt-[22px]">
-            <StatCards />
+            <StatCards stats={statCards} />
           </div>
 
           <div className="mt-[22px] rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">

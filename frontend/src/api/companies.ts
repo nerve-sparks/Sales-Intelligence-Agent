@@ -1,5 +1,5 @@
 /* Mirrors backend/app/routes/companies.py */
-import { apiGet } from "./client";
+import { apiGet, apiGetForBlob } from "./client";
 import type { CompanyOut, DecisionMakerOut } from "./icp";
 
 export type CompanyListItemOut = {
@@ -36,6 +36,26 @@ export function listCompanies(
   if (params.search) query.set("search", params.search);
   const qs = query.toString();
   return apiGet<CompanyListOut>(`/organisations/${organisationId}/companies${qs ? `?${qs}` : ""}`);
+}
+
+export type CompanyStatsOut = {
+  total: number;
+  high_intent: number;
+  medium_intent: number;
+  low_intent: number;
+};
+
+export function getCompanyStats(organisationId: string): Promise<CompanyStatsOut> {
+  return apiGet<CompanyStatsOut>(`/organisations/${organisationId}/companies/stats`);
+}
+
+/* Company Directory + real LeadScore columns as an .xlsx download - icpId
+ * narrows the export to that ICP's matching companies (same filter the
+ * Enterprise List's dropdown applies), omit it to export every company. */
+export async function exportCompanies(organisationId: string, icpId?: string): Promise<Blob> {
+  const qs = icpId ? `?icp_id=${icpId}` : "";
+  const { blob } = await apiGetForBlob(`/organisations/${organisationId}/companies/export${qs}`);
+  return blob;
 }
 
 export function getCompany(organisationId: string, companyId: string): Promise<CompanyOut> {

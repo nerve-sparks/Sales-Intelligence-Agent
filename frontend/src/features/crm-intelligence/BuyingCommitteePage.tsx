@@ -18,8 +18,9 @@ import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Donut, Sparkline } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
-import { listDecisionMakers } from "../../api/companies";
-import type { DecisionMakerOut } from "../../api/icp";
+import { getCompany, listDecisionMakers } from "../../api/companies";
+import type { CompanyOut, DecisionMakerOut } from "../../api/icp";
+import { getScore, type LeadScoreOut, type NotScoredOut } from "../../api/scores";
 import { getOrganisationId } from "../../lib/session";
 
 function getCompanyIdFromUrl(): string | null {
@@ -27,6 +28,10 @@ function getCompanyIdFromUrl(): string | null {
     return null;
   }
   return new URLSearchParams(window.location.search).get("id");
+}
+
+function isScored(score: LeadScoreOut | NotScoredOut | null): score is LeadScoreOut {
+  return score !== null && "lead_score_id" in score;
 }
 
 const MEMBER_COLORS = ["#6366f1", "#ec4899", "#0d9488", "#f59e0b", "#2563eb", "#ef4444", "#8b5cf6", "#0ea5e9"];
@@ -80,6 +85,7 @@ function toMember(dm: DecisionMakerOut): Member {
     relTone: "gray",
     relIcon: dm.email ? Mail : Linkedin,
     champion: false,
+    hasEmail: Boolean(dm.email),
   };
 }
 
@@ -116,13 +122,46 @@ const relClass: Record<string, string> = {
 /* Header                                                              */
 /* ------------------------------------------------------------------ */
 
-const scoreCards = [
-  { label: "Account Score", value: "92", badge: "Very High", tone: "green", spark: "#7c3aed", values: [40, 46, 44, 52, 48, 58, 62] },
+/* Engagement Score/Fit Score/Opportunity have no backend model (no
+ * engagement tracking, no fit-scoring, no conversion-probability concept
+ * beyond the real lead_score/gate model) - kept as clearly-generic
+ * placeholders. Account Score is real: it's just the company's actual
+ * lead_score, same number shown on Score Breakdown/Enterprise List. */
+const dummyScoreCards = [
   { label: "Engagement Score", value: "78", badge: "High", tone: "blue", spark: "#2563eb", values: [34, 38, 36, 44, 42, 50, 54] },
   { label: "Fit Score", value: "88", badge: "Excellent", tone: "purple", spark: "#7c3aed", values: [42, 46, 50, 48, 56, 54, 60] },
 ];
 
-function Header() {
+function accountScoreBadge(score: number): { label: string; tone: string } {
+  if (score >= 80) return { label: "Very High", tone: "green" };
+  if (score >= 60) return { label: "High", tone: "blue" };
+  if (score >= 40) return { label: "Medium", tone: "orange" };
+  return { label: "Low", tone: "gray" };
+}
+
+function Header({
+  company,
+  score,
+  companyId,
+}: {
+  company: CompanyOut | null;
+  score: LeadScoreOut | NotScoredOut | null;
+  companyId: string | null;
+}) {
+  const name = company?.company_name ?? "TechNova Solutions";
+  const initials = company
+    ? name.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase()
+    : "TN";
+  const industry = company?.industries?.[0] ?? "Software Development";
+  const location = company ? [company.city, company.country].filter(Boolean).join(", ") || "—" : "Bengaluru, India";
+  const website = company?.company_domain ?? "www.technova.com";
+  const detailHref = companyId ? `/enterprise-detail?id=${companyId}` : "/enterprise-detail";
+
+  const accountScore = isScored(score) && score.lead_score !== null ? Math.round(score.lead_score) : 92;
+  const accountBadge = accountScoreBadge(accountScore);
+  const gateStatus = isScored(score) ? score.gate_status : "active";
+  const intentBadge = gateStatus === "active" ? { label: "Active Intent", tone: "green" } : { label: "Nurture", tone: "orange" };
+
   return (
     <div>
       <div className="flex flex-wrap items-start justify-between gap-[12px]">
@@ -130,7 +169,7 @@ function Header() {
           <nav className="flex flex-wrap items-center gap-[8px] text-[13px] text-[#64748b]">
             <a className="no-underline hover:text-[#334155]" href="/enterprise-list">Enterprise List</a>
             <ChevronRight className="size-[14px] text-[#cbd5e1]" />
-            <a className="no-underline hover:text-[#334155]" href="/enterprise-detail">TechNova Solutions</a>
+            <a className="no-underline hover:text-[#334155]" href={detailHref}>{name}</a>
             <ChevronRight className="size-[14px] text-[#cbd5e1]" />
             <span className="font-semibold text-[#0f172a]">Buying Committee</span>
           </nav>
@@ -162,24 +201,34 @@ function Header() {
 
       <div className="mt-[18px] flex flex-col gap-[16px] 2xl:flex-row 2xl:items-center 2xl:justify-between">
         <div className="flex items-start gap-[16px]">
-          <span className="flex size-[58px] shrink-0 items-center justify-center rounded-[14px] bg-[#16a34a] text-[18px] font-bold text-white">TN</span>
+          <span className="flex size-[58px] shrink-0 items-center justify-center rounded-[14px] bg-[#16a34a] text-[18px] font-bold text-white">{initials}</span>
           <div>
             <div className="flex flex-wrap items-center gap-[10px]">
-              <h2 className="m-0 text-[20px] font-bold text-[#0f172a]">TechNova Solutions</h2>
-              <Badge label="Very High Intent" tone="green" />
+              <h2 className="m-0 text-[20px] font-bold text-[#0f172a]">{name}</h2>
+              <Badge label={intentBadge.label} tone={intentBadge.tone} />
               <Star className="size-[15px] text-[#cbd5e1]" />
             </div>
             <p className="m-0 mt-[5px] flex flex-wrap items-center gap-[8px] text-[13px] text-[#64748b]">
-              <span>Software Development</span><span>•</span>
-              <span>Bengaluru, India</span><span>•</span>
-              <a className="font-medium text-[#2563eb] no-underline" href="https://www.technova.com">www.technova.com</a>
+              <span>{industry}</span><span>•</span>
+              <span>{location}</span><span>•</span>
+              <a className="font-medium text-[#2563eb] no-underline" href={`https://${website}`}>{website}</a>
               <Linkedin className="size-[15px] text-[#0a66c2]" />
             </p>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-px overflow-hidden rounded-[16px] border border-[#eef1f6] bg-[#eef1f6] md:grid-cols-4">
-          {scoreCards.map((s) => (
+          <div className="bg-white p-[14px]">
+            <p className="m-0 text-[12px] text-[#94a3b8]">Account Score</p>
+            <div className="mt-[6px] flex items-center gap-[8px]">
+              <span className="text-[20px] font-bold leading-none text-[#0f172a]">{accountScore}</span>
+              <Badge label={accountBadge.label} tone={accountBadge.tone} />
+            </div>
+            <div className="mt-[6px]">
+              <Sparkline className="h-[26px] w-full" color="#7c3aed" gradientId="bc-AccountScore" values={[accountScore, accountScore]} />
+            </div>
+          </div>
+          {dummyScoreCards.map((s) => (
             <div className="bg-white p-[14px]" key={s.label}>
               <p className="m-0 text-[12px] text-[#94a3b8]">{s.label}</p>
               <div className="mt-[6px] flex items-center gap-[8px]">
@@ -252,17 +301,18 @@ type Member = {
   relTone: string;
   relIcon: IconType;
   champion: boolean;
+  hasEmail: boolean;
 };
 
 const dummyMembers: Member[] = [
-  { initials: "RM", bg: "#6366f1", name: "Rohit Menon", role: "CTO", dept: "Technology", deptSub: "IT Leadership", seniority: "C-Level", senTone: "purple", influence: "High", infTone: "green", time: "2h ago", activity: "Email opened", rel: "Strong", relTone: "green", relIcon: Linkedin, champion: true },
-  { initials: "AI", bg: "#ec4899", name: "Ananya Iyer", role: "Head of Engineering", dept: "Engineering", deptSub: "Engineering Leadership", seniority: "Director", senTone: "blue", influence: "High", infTone: "green", time: "5h ago", activity: "Visited pricing page", rel: "Strong", relTone: "green", relIcon: Linkedin, champion: true },
-  { initials: "VS", bg: "#0d9488", name: "Vikram Shah", role: "VP of Product", dept: "Product", deptSub: "Product Leadership", seniority: "VP", senTone: "violet", influence: "High", infTone: "green", time: "1d ago", activity: "Attended webinar", rel: "Moderate", relTone: "orange", relIcon: Linkedin, champion: false },
-  { initials: "NK", bg: "#f59e0b", name: "Neha Kapoor", role: "Finance Director", dept: "Finance", deptSub: "Finance Leadership", seniority: "Director", senTone: "blue", influence: "Medium", infTone: "orange", time: "2d ago", activity: "Downloaded case study", rel: "Moderate", relTone: "orange", relIcon: Linkedin, champion: false },
-  { initials: "SR", bg: "#2563eb", name: "Sandeep Reddy", role: "Head of IT Operations", dept: "IT Operations", deptSub: "Operations Leadership", seniority: "Director", senTone: "blue", influence: "Medium", infTone: "orange", time: "3d ago", activity: "Email opened", rel: "Weak", relTone: "red", relIcon: Linkedin, champion: false },
-  { initials: "PN", bg: "#ef4444", name: "Priya Nair", role: "Procurement Manager", dept: "Procurement", deptSub: "Procurement", seniority: "Manager", senTone: "green", influence: "Low", infTone: "blue", time: "4d ago", activity: "Website visit", rel: "Weak", relTone: "red", relIcon: Mail, champion: false },
-  { initials: "AD", bg: "#8b5cf6", name: "Arjun Dev", role: "Data & Analytics Lead", dept: "Data & Analytics", deptSub: "Data Leadership", seniority: "Manager", senTone: "green", influence: "Low", infTone: "blue", time: "5d ago", activity: "Blog viewed", rel: "Weak", relTone: "red", relIcon: Linkedin, champion: false },
-  { initials: "MJ", bg: "#0ea5e9", name: "Meera Joshi", role: "Legal Counsel", dept: "Legal", deptSub: "Legal", seniority: "Manager", senTone: "green", influence: "Low", infTone: "blue", time: "7d ago", activity: "No activity", rel: "No Connection", relTone: "gray", relIcon: Mail, champion: false },
+  { initials: "RM", bg: "#6366f1", name: "Rohit Menon", role: "CTO", dept: "Technology", deptSub: "IT Leadership", seniority: "C-Level", senTone: "purple", influence: "High", infTone: "green", time: "2h ago", activity: "Email opened", rel: "Strong", relTone: "green", relIcon: Linkedin, champion: true, hasEmail: false },
+  { initials: "AI", bg: "#ec4899", name: "Ananya Iyer", role: "Head of Engineering", dept: "Engineering", deptSub: "Engineering Leadership", seniority: "Director", senTone: "blue", influence: "High", infTone: "green", time: "5h ago", activity: "Visited pricing page", rel: "Strong", relTone: "green", relIcon: Linkedin, champion: true, hasEmail: false },
+  { initials: "VS", bg: "#0d9488", name: "Vikram Shah", role: "VP of Product", dept: "Product", deptSub: "Product Leadership", seniority: "VP", senTone: "violet", influence: "High", infTone: "green", time: "1d ago", activity: "Attended webinar", rel: "Moderate", relTone: "orange", relIcon: Linkedin, champion: false, hasEmail: false },
+  { initials: "NK", bg: "#f59e0b", name: "Neha Kapoor", role: "Finance Director", dept: "Finance", deptSub: "Finance Leadership", seniority: "Director", senTone: "blue", influence: "Medium", infTone: "orange", time: "2d ago", activity: "Downloaded case study", rel: "Moderate", relTone: "orange", relIcon: Linkedin, champion: false, hasEmail: false },
+  { initials: "SR", bg: "#2563eb", name: "Sandeep Reddy", role: "Head of IT Operations", dept: "IT Operations", deptSub: "Operations Leadership", seniority: "Director", senTone: "blue", influence: "Medium", infTone: "orange", time: "3d ago", activity: "Email opened", rel: "Weak", relTone: "red", relIcon: Linkedin, champion: false, hasEmail: false },
+  { initials: "PN", bg: "#ef4444", name: "Priya Nair", role: "Procurement Manager", dept: "Procurement", deptSub: "Procurement", seniority: "Manager", senTone: "green", influence: "Low", infTone: "blue", time: "4d ago", activity: "Website visit", rel: "Weak", relTone: "red", relIcon: Mail, champion: false, hasEmail: true },
+  { initials: "AD", bg: "#8b5cf6", name: "Arjun Dev", role: "Data & Analytics Lead", dept: "Data & Analytics", deptSub: "Data Leadership", seniority: "Manager", senTone: "green", influence: "Low", infTone: "blue", time: "5d ago", activity: "Blog viewed", rel: "Weak", relTone: "red", relIcon: Linkedin, champion: false, hasEmail: false },
+  { initials: "MJ", bg: "#0ea5e9", name: "Meera Joshi", role: "Legal Counsel", dept: "Legal", deptSub: "Legal", seniority: "Manager", senTone: "green", influence: "Low", infTone: "blue", time: "7d ago", activity: "No activity", rel: "No Connection", relTone: "gray", relIcon: Mail, champion: false, hasEmail: true },
 ];
 
 const cols =
@@ -342,7 +392,7 @@ function MembersTable({ members }: { members: Member[] }) {
       </div>
 
       <div className="mt-[16px] flex flex-wrap items-center justify-between gap-[12px]">
-        <span className="text-[13px] text-[#64748b]">Showing 1 - 8 of 8 members</span>
+        <span className="text-[13px] text-[#64748b]">Showing 1 - {members.length} of {members.length} members</span>
         <div className="flex items-center gap-[6px]">
           <button aria-label="Previous page" className="flex size-[32px] items-center justify-center rounded-[9px] border border-[#e9edf5] bg-white text-[#475569]" type="button">
             <ChevronLeft className="size-[15px]" />
@@ -364,21 +414,45 @@ function MembersTable({ members }: { members: Member[] }) {
 /* Right rail                                                          */
 /* ------------------------------------------------------------------ */
 
-function CommitteeInsights() {
-  const bullets = [
-    "Rohit Menon (CTO) is the key decision maker and highly engaged.",
-    "Strong champions identified in Technology and Engineering.",
-    "Finance and Procurement need more engagement.",
-    "Consider multi-threaded approach to improve coverage.",
-  ];
+/* No AI generation happens here - every bullet is computed straight from
+ * the real decision-maker rows (seniority derived from persona, department
+ * and email presence straight off DecisionMaker), not fabricated per-name
+ * prose like "Rohit Menon is highly engaged" that doesn't even exist in
+ * the real data for most companies. */
+function buildInsights(members: Member[], companyName: string): string[] {
+  if (members.length === 0) {
+    return [`No decision makers identified yet for ${companyName}.`];
+  }
+
+  const bullets = [`${members.length} buying committee member${members.length === 1 ? "" : "s"} identified for ${companyName}.`];
+
+  const cLevel = members.filter((m) => m.seniority === "C-Level");
+  if (cLevel.length > 0) {
+    bullets.push(`${cLevel.length} C-level contact${cLevel.length === 1 ? "" : "s"} identified: ${cLevel.map((m) => m.name).join(", ")}.`);
+  }
+
+  const deptCounts = new Map<string, number>();
+  members.forEach((m) => {
+    if (m.dept !== "—") deptCounts.set(m.dept, (deptCounts.get(m.dept) ?? 0) + 1);
+  });
+  const topDept = [...deptCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (topDept) {
+    bullets.push(`${topDept[0]} has the most identified contacts (${topDept[1]}).`);
+  }
+
+  const reachable = members.filter((m) => m.hasEmail).length;
+  bullets.push(`${reachable} of ${members.length} contact${members.length === 1 ? "" : "s"} ${reachable === 1 ? "has" : "have"} a direct email on file.`);
+
+  return bullets;
+}
+
+function CommitteeInsights({ members, companyName }: { members: Member[]; companyName: string }) {
+  const bullets = buildInsights(members, companyName);
   return (
     <section className="rounded-[16px] border border-[#eee9ff] bg-[#faf8ff] p-[20px]">
-      <div className="flex items-center justify-between">
-        <h2 className="m-0 flex items-center gap-[8px] text-[15px] font-bold text-[#0f172a]">
-          <Sparkles className="size-[17px] text-[#7c3aed]" /> Committee Insights
-        </h2>
-        <span className="rounded-[6px] bg-[#ede9fe] px-[7px] py-[2px] text-[11px] font-semibold text-[#7c3aed]">AI Generated</span>
-      </div>
+      <h2 className="m-0 flex items-center gap-[8px] text-[15px] font-bold text-[#0f172a]">
+        <Sparkles className="size-[17px] text-[#7c3aed]" /> Committee Insights
+      </h2>
       <div className="mt-[14px] flex flex-col gap-[12px]">
         {bullets.map((b) => (
           <div className="flex gap-[10px]" key={b}>
@@ -387,37 +461,52 @@ function CommitteeInsights() {
           </div>
         ))}
       </div>
-      <button className="mt-[16px] flex items-center gap-[6px] text-[13px] font-semibold text-[#5b3df5]" type="button">
-        View full insights <ChevronRight className="size-[14px]" />
-      </button>
     </section>
   );
 }
 
-const influence = [
-  { label: "High (3)", pct: "38%", value: 3, color: "#6366f1" },
-  { label: "Medium (2)", pct: "25%", value: 2, color: "#f97316" },
-  { label: "Low (3)", pct: "37%", value: 3, color: "#ec4899" },
-];
+const SENIORITY_COLORS: Record<string, string> = {
+  "C-Level": "#6366f1",
+  VP: "#8b5cf6",
+  Director: "#f97316",
+  Manager: "#ec4899",
+};
 
-function InfluenceDistribution() {
+type DistributionSlice = { label: string; pct: string; value: number; color: string };
+
+/* "Influence" itself is a fixed non-committal default on every real member
+ * (toMember() - the backend has no engagement/influence-scoring concept),
+ * so charting it would just visualize fake data. Seniority tier IS real
+ * (derived from the decision maker's real persona), so this card shows
+ * that distribution instead under an honest name. */
+function buildSeniorityDistribution(members: Member[]): DistributionSlice[] {
+  const counts = new Map<string, number>();
+  members.forEach((m) => counts.set(m.seniority, (counts.get(m.seniority) ?? 0) + 1));
+  const total = members.length || 1;
+  return [...counts.entries()].map(([label, value]) => ({
+    label: `${label} (${value})`,
+    pct: `${Math.round((value / total) * 100)}%`,
+    value,
+    color: SENIORITY_COLORS[label] ?? "#94a3b8",
+  }));
+}
+
+function SeniorityDistribution({ members }: { members: Member[] }) {
+  const slices = buildSeniorityDistribution(members);
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="flex items-center justify-between">
-        <h2 className="m-0 text-[15px] font-bold text-[#0f172a]">Influence Distribution</h2>
-        <button className="text-[12px] font-semibold text-[#5b3df5]" type="button">View Details</button>
-      </div>
+      <h2 className="m-0 text-[15px] font-bold text-[#0f172a]">Seniority Distribution</h2>
       <div className="mt-[14px] flex items-center gap-[18px]">
         <div className="relative size-[104px] shrink-0">
-          <Donut segments={influence.map((i) => ({ value: i.value, color: i.color }))} size={104} thickness={16} />
+          <Donut segments={slices.map((s) => ({ value: s.value, color: s.color }))} size={104} thickness={16} />
         </div>
         <div className="flex flex-1 flex-col gap-[12px]">
-          {influence.map((i) => (
-            <div className="flex items-center justify-between gap-[10px]" key={i.label}>
+          {slices.map((s) => (
+            <div className="flex items-center justify-between gap-[10px]" key={s.label}>
               <span className="flex items-center gap-[8px] text-[13px] font-medium text-[#334155]">
-                <span className="size-[9px] rounded-full" style={{ backgroundColor: i.color }} /> {i.label}
+                <span className="size-[9px] rounded-full" style={{ backgroundColor: s.color }} /> {s.label}
               </span>
-              <span className="text-[13px] font-semibold text-[#0f172a]">{i.pct}</span>
+              <span className="text-[13px] font-semibold text-[#0f172a]">{s.pct}</span>
             </div>
           ))}
         </div>
@@ -426,29 +515,35 @@ function InfluenceDistribution() {
   );
 }
 
-const roles = [
-  { label: "Technology", count: "2 (25%)", value: 2, color: "#7c3aed" },
-  { label: "Engineering", count: "2 (25%)", value: 2, color: "#2563eb" },
-  { label: "Product", count: "1 (12%)", value: 1, color: "#0d9488" },
-  { label: "Finance", count: "1 (12%)", value: 1, color: "#f59e0b" },
-  { label: "Operations", count: "1 (12%)", value: 1, color: "#ec4899" },
-  { label: "Procurement", count: "1 (12%)", value: 1, color: "#ef4444" },
-  { label: "Legal", count: "0 (0%)", value: 0, color: "#cbd5e1" },
-];
+const DEPT_COLORS = ["#7c3aed", "#2563eb", "#0d9488", "#f59e0b", "#ec4899", "#ef4444", "#16a34a", "#94a3b8"];
 
-function RoleDistribution() {
+function buildDeptDistribution(members: Member[]): { label: string; count: string; value: number; color: string }[] {
+  const counts = new Map<string, number>();
+  members.forEach((m) => counts.set(m.dept === "—" ? "Unspecified" : m.dept, (counts.get(m.dept === "—" ? "Unspecified" : m.dept) ?? 0) + 1));
+  const total = members.length || 1;
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, value], i) => ({
+      label,
+      count: `${value} (${Math.round((value / total) * 100)}%)`,
+      value,
+      color: DEPT_COLORS[i % DEPT_COLORS.length],
+    }));
+}
+
+function RoleDistribution({ members }: { members: Member[] }) {
+  const roles = buildDeptDistribution(members);
+  const maxVal = Math.max(1, ...roles.map((r) => r.value));
+
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="flex items-center justify-between">
-        <h2 className="m-0 text-[15px] font-bold text-[#0f172a]">Role Distribution</h2>
-        <button className="text-[12px] font-semibold text-[#5b3df5]" type="button">View Details</button>
-      </div>
+      <h2 className="m-0 text-[15px] font-bold text-[#0f172a]">Role Distribution</h2>
       <div className="mt-[14px] flex flex-col gap-[12px]">
         {roles.map((r) => (
           <div className="flex items-center gap-[12px]" key={r.label}>
             <span className="w-[96px] shrink-0 text-[13px] font-medium text-[#334155]">{r.label}</span>
             <span className="h-[6px] flex-1 rounded-full bg-[#eef1f6]">
-              <span className="block h-full rounded-full" style={{ width: `${(r.value / 2) * 100}%`, backgroundColor: r.color }} />
+              <span className="block h-full rounded-full" style={{ width: `${(r.value / maxVal) * 100}%`, backgroundColor: r.color }} />
             </span>
             <span className="w-[56px] shrink-0 text-right text-[12px] text-[#64748b]">{r.count}</span>
           </div>
@@ -464,10 +559,12 @@ function RoleDistribution() {
 
 export function BuyingCommitteePage() {
   const [members, setMembers] = useState<Member[]>(dummyMembers);
+  const [company, setCompany] = useState<CompanyOut | null>(null);
+  const [score, setScore] = useState<LeadScoreOut | NotScoredOut | null>(null);
+  const companyId = getCompanyIdFromUrl();
 
   useEffect(() => {
     const organisationId = getOrganisationId();
-    const companyId = getCompanyIdFromUrl();
     if (!organisationId || !companyId) {
       return;
     }
@@ -480,7 +577,19 @@ export function BuyingCommitteePage() {
       .catch(() => {
         // No matching company/decision-makers - keep the dummy rows.
       });
-  }, []);
+    getCompany(organisationId, companyId)
+      .then(setCompany)
+      .catch(() => {
+        // No matching company - Header falls back to the dummy identity.
+      });
+    getScore(organisationId, companyId)
+      .then(setScore)
+      .catch(() => {
+        // No score yet - Header's Account Score falls back to the dummy value.
+      });
+  }, [companyId]);
+
+  const companyName = company?.company_name ?? "TechNova Solutions";
 
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
@@ -490,15 +599,15 @@ export function BuyingCommitteePage() {
         <TopBar searchPlaceholder="Search companies, triggers, executives..." showDetection={false} />
 
         <main className="flex-1 overflow-x-hidden px-[28px] py-[22px]">
-          <Header />
+          <Header company={company} companyId={companyId} score={score} />
           <Tabs />
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[minmax(0,1fr)_360px]">
             <MembersTable members={members} />
             <div className="flex flex-col gap-[20px]">
-              <CommitteeInsights />
-              <InfluenceDistribution />
-              <RoleDistribution />
+              <CommitteeInsights companyName={companyName} members={members} />
+              <SeniorityDistribution members={members} />
+              <RoleDistribution members={members} />
             </div>
           </div>
 

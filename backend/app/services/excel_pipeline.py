@@ -62,10 +62,11 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
     so the caller can re-attach scores back onto the original uploaded rows.
     """
     seen_companies: dict[int, dict] = {}
+    seen_dms: dict[int, dict] = {}
+    dm_rows_no_id: list[dict] = []
     seen_intents: dict[str, dict] = {}
     seen_scoops: dict[str, dict] = {}
     seen_news: dict[str, dict] = {}
-    dm_rows = []
     zi_to_company_id: dict[int, UUID] = {}
 
     for row in raw_rows:
@@ -78,7 +79,19 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
             seen_companies[zi_company_id] = company_row
             zi_to_company_id[zi_company_id] = company_row["company_id"]
 
-        dm_rows.append(mapper.build_decision_maker_row(row, organisation_id))
+        # Multiple uploaded files can legitimately contain the same contact
+        # (e.g. overlapping company lists) - a single bulk INSERT can't
+        # ON CONFLICT DO UPDATE the same (organisation_id, zi_person_id) row
+        # twice, so duplicates within this batch are collapsed here (last
+        # occurrence wins), same as seen_companies/seen_intents/etc below.
+        # Rows with no zi_person_id never conflict (NULL != NULL in a unique
+        # constraint), so those are kept as-is.
+        dm_row = mapper.build_decision_maker_row(row, organisation_id)
+        zi_person_id = dm_row["zi_person_id"]
+        if zi_person_id is not None:
+            seen_dms[zi_person_id] = dm_row
+        else:
+            dm_rows_no_id.append(dm_row)
 
         intent_row = mapper.build_intent_row(row, organisation_id)
         if intent_row:
@@ -93,7 +106,7 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
             seen_news[news_row["news_id"]] = news_row
 
     await _upsert_companies(session, list(seen_companies.values()))
-    await _upsert_decision_makers(session, dm_rows)
+    await _upsert_decision_makers(session, list(seen_dms.values()) + dm_rows_no_id)
     await _insert_intents(session, list(seen_intents.values()))
     await _insert_scoops(session, list(seen_scoops.values()))
     await _insert_news(session, list(seen_news.values()))
@@ -102,12 +115,20 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
     return zi_to_company_id
 
 
-async def run_pipeline(session: AsyncSession, organisation_id: UUID, raw_rows: list[dict]) -> dict[int, UUID]:
-    """Full pipeline: upsert data, extract signals, score the whole organisation."""
+async def run_pipeline(
+    session: AsyncSession, organisation_id: UUID, raw_rows: list[dict]
+) -> tuple[dict[int, UUID], dict, dict]:
+    """Full pipeline: upsert data, extract signals, score the whole organisation.
+
+    Returns (zi_to_company_id, signal_result, score_result) so callers (the
+    Excel import endpoint) can report real ingestion numbers instead of just
+    the scored workbook - signal_result is {"inserted", "skipped"} from
+    extract_signals, score_result is {"active", "nurture"} from run_scoring.
+    """
     zi_to_company_id = await upsert_rows(session, organisation_id, raw_rows)
-    await extract_signals(session, organisation_id)
-    await run_scoring(session, organisation_id)
-    return zi_to_company_id
+    signal_result = await extract_signals(session, organisation_id)
+    score_result = await run_scoring(session, organisation_id)
+    return zi_to_company_id, signal_result, score_result
 
 
 async def matching_company_ids(session: AsyncSession, icp: IcpProfile) -> set[UUID]:
@@ -168,6 +189,60 @@ def build_scored_workbook(
         else:
             score_values = [
                 company_id in matching_ids,
+                score.gate_status,
+                score.gate_check_1,
+                score.gate_check_2,
+                score.gate_check_3,
+                score.gate_check_4,
+                score.gate_check_5,
+                float(score.component_score) if score.component_score is not None else None,
+                float(score.p_convert) if score.p_convert is not None else None,
+                float(score.expected_deal_value_usd) if score.expected_deal_value_usd is not None else None,
+                float(score.lead_score) if score.lead_score is not None else None,
+            ]
+        ws.append(base_values + score_values)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+EXPORT_COMPANY_COLUMNS = [
+    "Company Name",
+    "Domain",
+    "Industry",
+    "City",
+    "State",
+    "Country",
+    "Employees",
+    "Revenue (USD)",
+]
+
+
+def build_company_export_workbook(rows: list[tuple[Company, LeadScore | None]]) -> bytes:
+    """Company Directory export for the Enterprise List's "Export" button -
+    real company fields plus whatever scoring exists (score is None for a
+    company that hasn't been through run_scoring yet)."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Companies"
+    ws.append(EXPORT_COMPANY_COLUMNS + SCORE_COLUMNS[1:])  # drop "Matches ICP" - no ICP context on a bare row
+
+    for company, score in rows:
+        base_values = [
+            company.company_name,
+            company.company_domain,
+            (company.industries or [None])[0],
+            company.city,
+            company.state,
+            company.country,
+            company.employee_count,
+            company.revenue_usd,
+        ]
+        if score is None:
+            score_values = ["not scored"] + [None] * 9
+        else:
+            score_values = [
                 score.gate_status,
                 score.gate_check_1,
                 score.gate_check_2,

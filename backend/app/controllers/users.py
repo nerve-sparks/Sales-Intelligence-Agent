@@ -1,7 +1,8 @@
 from uuid import UUID
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
@@ -14,4 +15,11 @@ class UserCreate(BaseModel):
 
 
 async def create(organisation_id: UUID, payload: UserCreate, db: AsyncSession = Depends(get_db)):
-    return await create_user(db, organisation_id, payload.model_dump())
+    try:
+        return await create_user(db, organisation_id, payload.model_dump())
+    except IntegrityError:
+        # app_user.email is unique across the whole table, not just this
+        # organisation - the commit already failed and rolled back nothing
+        # on its own, so roll back explicitly before the session gets reused.
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="A user with this email already exists.")

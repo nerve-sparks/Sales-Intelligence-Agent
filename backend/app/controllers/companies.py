@@ -1,11 +1,14 @@
 from uuid import UUID
 
 from fastapi import Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.services import company_directory
-from app.schemas.company import CompanyListItemOut, CompanyListOut
+from app.services import company_directory, excel_pipeline, icp_filter
+from app.schemas.company import CompanyListItemOut, CompanyListOut, CompanyStatsOut
+
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 async def list_companies(
@@ -37,6 +40,35 @@ async def list_companies(
         for company, lead_score, gate_status in rows
     ]
     return CompanyListOut(items=items, total=total, page=page, page_size=page_size)
+
+
+async def stats(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
+    counts = await company_directory.intent_counts(db, organisation_id)
+    return CompanyStatsOut(
+        total=counts["high"] + counts["medium"] + counts["low"],
+        high_intent=counts["high"],
+        medium_intent=counts["medium"],
+        low_intent=counts["low"],
+    )
+
+
+async def export(organisation_id: UUID, icp_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
+    company_ids = None
+    if icp_id is not None:
+        icp = await icp_filter.get_icp_by_organisation(db, organisation_id, icp_id)
+        if icp is None:
+            raise HTTPException(status_code=404, detail="icp not found")
+        matches = await icp_filter.filter_companies(db, icp)
+        company_ids = {c.company_id for c in matches}
+
+    rows = await company_directory.list_companies_for_export(db, organisation_id, company_ids)
+    workbook_bytes = excel_pipeline.build_company_export_workbook(rows)
+
+    return Response(
+        content=workbook_bytes,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="companies_export.xlsx"'},
+    )
 
 
 async def get_company(organisation_id: UUID, company_id: UUID, db: AsyncSession = Depends(get_db)):

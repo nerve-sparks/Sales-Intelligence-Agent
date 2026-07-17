@@ -1,24 +1,15 @@
 import {
   Activity,
   ArrowRight,
-  Banknote,
   Building2,
   ChevronRight,
   Download,
   Filter,
-  Globe,
-  Heart,
   LayoutGrid,
-  LineChart,
-  Megaphone,
-  Package,
   Plus,
   Search,
   Settings,
-  ShieldCheck,
   TrendingUp,
-  UserPlus,
-  Zap,
 } from "lucide-react";
 import { useEffect, useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
@@ -26,8 +17,15 @@ import { TopBar } from "../../components/layout/TopBar";
 import { Donut } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { getTriggers, type SavedTrigger } from "../../lib/triggers";
-import { listTriggers } from "../../api/triggers";
-import { getWorkspaceId } from "../../lib/session";
+import { getTriggerEvents, listTriggers } from "../../api/triggers";
+import { getSignalStats, type SignalStatsOut } from "../../api/signals";
+import { getOrganisationId, getWorkspaceId } from "../../lib/session";
+import {
+  CATEGORY_DESCRIPTIONS,
+  categoryLabel,
+  categoryStyle,
+  SIGNAL_CATEGORY_OPTIONS,
+} from "../../lib/signalCategories";
 
 /* TriggerDefinition (backend) has no category/description/status fields -
  * those are frontend-only concepts (see onboarding audit). Real id/name
@@ -59,6 +57,7 @@ type IconType = ComponentType<{ className?: string }>;
 /* ------------------------------------------------------------------ */
 
 type Category = {
+  key: string;
   name: string;
   desc: string;
   icon: IconType;
@@ -72,18 +71,56 @@ type Category = {
   score: number;
 };
 
-const categories: Category[] = [
-  { name: "Funding & Investment", desc: "Track funding rounds, investor activity, and capital raises.", icon: Banknote, color: "#7c3aed", bg: "#f3e9ff", count: 42, pct: "17.4%", signals: "1,247", vol: 1247, companies: "8.6K", score: 87 },
-  { name: "Hiring & Talent", desc: "Monitor hiring trends, key hires, and team expansions.", icon: UserPlus, color: "#f97316", bg: "#fff1e3", count: 38, pct: "15.7%", signals: "1,846", vol: 1846, companies: "9.2K", score: 85 },
-  { name: "Product & Innovation", desc: "New product launches, feature releases, and innovations.", icon: Package, color: "#2563eb", bg: "#e6f0ff", count: 36, pct: "14.9%", signals: "1,532", vol: 1532, companies: "7.8K", score: 84 },
-  { name: "Company Expansion", desc: "Track expansions, new offices, and geographic growth.", icon: Building2, color: "#16a34a", bg: "#e7f8ef", count: 32, pct: "13.2%", signals: "1,124", vol: 1124, companies: "6.4K", score: 82 },
-  { name: "Partnership & Alliances", desc: "Strategic partnerships, alliances, and collaborations.", icon: Heart, color: "#ec4899", bg: "#fdeaf4", count: 28, pct: "11.6%", signals: "987", vol: 987, companies: "5.6K", score: 81 },
-  { name: "Marketing & Campaigns", desc: "Monitor marketing campaigns, brand initiatives, and events.", icon: Megaphone, color: "#f59e0b", bg: "#fff7e6", count: 24, pct: "9.9%", signals: "863", vol: 863, companies: "4.9K", score: 79 },
-  { name: "Financial Performance", desc: "Track financial results, revenue growth, and key metrics.", icon: LineChart, color: "#06b6d4", bg: "#e6fafd", count: 18, pct: "7.4%", signals: "654", vol: 654, companies: "3.7K", score: 78 },
-  { name: "Regulatory & Compliance", desc: "Monitor compliance changes, regulatory updates, and filings.", icon: ShieldCheck, color: "#8b5cf6", bg: "#f1ecff", count: 14, pct: "5.8%", signals: "432", vol: 432, companies: "2.8K", score: 77 },
-  { name: "Market & Industry", desc: "Industry trends, market shifts, and competitive moves.", icon: Globe, color: "#f43f5e", bg: "#ffe9ee", count: 12, pct: "5.0%", signals: "387", vol: 387, companies: "2.4K", score: 77 },
-  { name: "Other Events", desc: "Miscellaneous events and custom trigger categories.", icon: Settings, color: "#94a3b8", bg: "#f1f5f9", count: 10, pct: "4.1%", signals: "298", vol: 298, companies: "1.9K", score: 74 },
-];
+type CategoryStat = { count: number; companies: number; score: number };
+
+/* Same 6 real signal_category values as the Trigger Editor's category
+ * select (see signalCategories.ts) - these placeholder numbers are only
+ * shown before real org data loads or when no backend/org is configured. */
+const dummyCategoryStats: Record<string, CategoryStat> = {
+  buying_stage: { count: 210, companies: 175, score: 68 },
+  ai_seriousness: { count: 145, companies: 120, score: 62 },
+  urgency_and_catalysts: { count: 132, companies: 110, score: 59 },
+  ai_pain_points: { count: 98, companies: 80, score: 55 },
+  budget_and_capital: { count: 64, companies: 58, score: 71 },
+  competitive_context: { count: 47, companies: 40, score: 52 },
+};
+
+function realCategoryStats(data: SignalStatsOut): Record<string, CategoryStat> {
+  const stats: Record<string, CategoryStat> = {};
+  for (const key of SIGNAL_CATEGORY_OPTIONS) {
+    const row = data.by_category.find((c) => c.signal_category === key);
+    stats[key] = {
+      count: row?.count ?? 0,
+      companies: row?.company_count ?? 0,
+      score: row ? Math.round((row.avg_confidence ?? 0) * 100) : 0,
+    };
+  }
+  return stats;
+}
+
+function buildCategories(stats: Record<string, CategoryStat>): Category[] {
+  const total = Math.max(1, Object.values(stats).reduce((sum, s) => sum + s.count, 0));
+  return SIGNAL_CATEGORY_OPTIONS.map((key) => {
+    const style = categoryStyle(key);
+    const s = stats[key];
+    return {
+      key,
+      name: categoryLabel(key),
+      desc: CATEGORY_DESCRIPTIONS[key] ?? "",
+      icon: style.icon,
+      color: style.color,
+      bg: style.bg,
+      count: s.count,
+      pct: `${Math.round((s.count / total) * 100)}%`,
+      signals: s.count.toLocaleString(),
+      vol: s.count,
+      companies: s.companies.toLocaleString(),
+      score: s.score,
+    };
+  });
+}
+
+const dummyCategories = buildCategories(dummyCategoryStats);
 
 /* ------------------------------------------------------------------ */
 /* Header                                                              */
@@ -143,14 +180,24 @@ function LibraryHeader() {
 /* Summary stat cards                                                  */
 /* ------------------------------------------------------------------ */
 
-const summary = [
-  { icon: LayoutGrid, bg: "#f3e9ff", color: "#7c3aed", value: "10", label: "Categories", sub: "Total signal categories" },
-  { icon: Activity, bg: "#e7f8ef", color: "#16a34a", value: "242", label: "Signals", sub: "Across all categories" },
-  { icon: Building2, bg: "#e6f0ff", color: "#2563eb", value: "18.6K", label: "Companies Impacted", sub: "Last 30 days" },
-  { icon: Settings, bg: "#fff1e3", color: "#f97316", value: "94.2%", label: "Avg. Accuracy", sub: "Across all categories" },
-];
+type SummaryStat = { icon: IconType; bg: string; color: string; value: string; label: string; sub: string };
 
-function SummaryCards() {
+const dummyCompanyCount = 480;
+const dummyAvgConfidence = 61;
+
+function buildSummary(data: SignalStatsOut | null): SummaryStat[] {
+  const totalSignals = data ? data.total : Object.values(dummyCategoryStats).reduce((sum, s) => sum + s.count, 0);
+  const companies = data ? data.company_count : dummyCompanyCount;
+  const avgAccuracy = `${data && data.avg_confidence !== null ? Math.round(data.avg_confidence * 100) : dummyAvgConfidence}%`;
+  return [
+    { icon: LayoutGrid, bg: "#f3e9ff", color: "#7c3aed", value: String(SIGNAL_CATEGORY_OPTIONS.length), label: "Categories", sub: "Total signal categories" },
+    { icon: Activity, bg: "#e7f8ef", color: "#16a34a", value: totalSignals.toLocaleString(), label: "Signals", sub: "Across all categories" },
+    { icon: Building2, bg: "#e6f0ff", color: "#2563eb", value: companies.toLocaleString(), label: "Companies Impacted", sub: "From uploaded data" },
+    { icon: Settings, bg: "#fff1e3", color: "#f97316", value: avgAccuracy, label: "Avg. Confidence", sub: "Across all categories" },
+  ];
+}
+
+function SummaryCards({ summary }: { summary: SummaryStat[] }) {
   return (
     <div className="grid grid-cols-1 gap-[16px] sm:grid-cols-2 xl:grid-cols-4">
       {summary.map((s) => {
@@ -218,7 +265,7 @@ function CategoryCard({ category }: { category: Category }) {
 
       <div className="mt-[12px] grid grid-cols-3 gap-[6px] border-t border-[#f1f5f9] pt-[10px]">
         {[
-          ["Signals (30D)", category.signals],
+          ["Signals", category.signals],
           ["Companies", category.companies],
           ["Avg. Score", String(category.score)],
         ].map(([label, value]) => (
@@ -234,11 +281,11 @@ function CategoryCard({ category }: { category: Category }) {
   );
 }
 
-function CategoryGrid() {
+function CategoryGrid({ categories }: { categories: Category[] }) {
   return (
     <div className="grid grid-cols-2 gap-[16px] md:grid-cols-3 xl:grid-cols-5">
       {categories.map((c) => (
-        <CategoryCard category={c} key={c.name} />
+        <CategoryCard category={c} key={c.key} />
       ))}
     </div>
   );
@@ -248,21 +295,13 @@ function CategoryGrid() {
 /* User-created triggers                                               */
 /* ------------------------------------------------------------------ */
 
-function categoryStyle(cat: string): { icon: IconType; color: string; bg: string } {
-  const c = cat.toLowerCase();
-  if (c.includes("fund")) return { icon: Banknote, color: "#7c3aed", bg: "#f3e9ff" };
-  if (c.includes("hir")) return { icon: UserPlus, color: "#f97316", bg: "#fff1e3" };
-  if (c.includes("product")) return { icon: Package, color: "#2563eb", bg: "#e6f0ff" };
-  if (c.includes("expansion")) return { icon: Building2, color: "#16a34a", bg: "#e7f8ef" };
-  if (c.includes("partner")) return { icon: Heart, color: "#ec4899", bg: "#fdeaf4" };
-  if (c.includes("campaign") || c.includes("marketing")) return { icon: Megaphone, color: "#f59e0b", bg: "#fff7e6" };
-  if (c.includes("financ")) return { icon: LineChart, color: "#06b6d4", bg: "#e6fafd" };
-  if (c.includes("regul") || c.includes("compliance")) return { icon: ShieldCheck, color: "#8b5cf6", bg: "#f1ecff" };
-  if (c.includes("market") || c.includes("industry")) return { icon: Globe, color: "#f43f5e", bg: "#ffe9ee" };
-  return { icon: Zap, color: "#5b3df5", bg: "#eef1ff" };
-}
+type TriggerStat = { events: number; companies: number } | null;
 
-function TriggerCard({ trigger }: { trigger: SavedTrigger }) {
+/* Same icon/color per signal_category as the Trigger Editor's category
+ * select and the category cards above (signalCategories.CATEGORY_STYLE) -
+ * a trigger created for "buying_stage" always renders with the same icon
+ * everywhere it appears. */
+function TriggerCard({ trigger, stat }: { trigger: SavedTrigger; stat: TriggerStat }) {
   const style = categoryStyle(trigger.category);
   const Icon = style.icon;
   const active = trigger.status === "active";
@@ -300,9 +339,9 @@ function TriggerCard({ trigger }: { trigger: SavedTrigger }) {
 
       <div className="mt-[12px] grid grid-cols-3 gap-[6px] border-t border-[#f1f5f9] pt-[10px]">
         {[
-          ["Signals (30D)", "New"],
-          ["Companies", "—"],
-          ["Avg. Score", "—"],
+          ["Signals", stat ? stat.events.toLocaleString() : "—"],
+          ["Companies", stat ? stat.companies.toLocaleString() : "—"],
+          ["Status", stat ? (stat.events > 0 ? "Matching" : "No matches") : "Checking…"],
         ].map(([label, value]) => (
           <div key={label}>
             <p className="m-0 min-h-[20px] text-[8px] font-medium uppercase leading-[10px] tracking-[0.01em] text-[#94a3b8]">
@@ -316,7 +355,7 @@ function TriggerCard({ trigger }: { trigger: SavedTrigger }) {
   );
 }
 
-function YourTriggers({ triggers }: { triggers: SavedTrigger[] }) {
+function YourTriggers({ triggers, stats }: { triggers: SavedTrigger[]; stats: Record<string, TriggerStat> }) {
   if (triggers.length === 0) {
     return null;
   }
@@ -325,7 +364,7 @@ function YourTriggers({ triggers }: { triggers: SavedTrigger[] }) {
       <h2 className="m-0 mb-[14px] text-[18px] font-bold text-[#0f172a]">Your Triggers</h2>
       <div className="grid grid-cols-2 gap-[16px] md:grid-cols-3 xl:grid-cols-5">
         {triggers.map((t) => (
-          <TriggerCard key={t.id} trigger={t} />
+          <TriggerCard key={t.id} stat={stats[t.id] ?? null} trigger={t} />
         ))}
       </div>
     </div>
@@ -336,9 +375,10 @@ function YourTriggers({ triggers }: { triggers: SavedTrigger[] }) {
 /* Category Distribution Overview                                      */
 /* ------------------------------------------------------------------ */
 
-function DistributionOverview() {
-  const legendLeft = categories.slice(0, 5);
-  const legendRight = categories.slice(5);
+function DistributionOverview({ categories, totalSignals }: { categories: Category[]; totalSignals: number }) {
+  const half = Math.ceil(categories.length / 2);
+  const legendLeft = categories.slice(0, half);
+  const legendRight = categories.slice(half);
 
   const LegendRow = ({ c }: { c: Category }) => (
     <div className="flex items-center justify-between gap-[10px]">
@@ -366,7 +406,7 @@ function DistributionOverview() {
             thickness={26}
           />
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-[26px] font-bold leading-none text-[#0f172a]">242</span>
+            <span className="text-[26px] font-bold leading-none text-[#0f172a]">{totalSignals.toLocaleString()}</span>
             <span className="mt-[4px] text-[12px] text-[#64748b]">Total Signals</span>
           </div>
         </div>
@@ -374,12 +414,12 @@ function DistributionOverview() {
         <div className="grid w-full flex-1 grid-cols-1 gap-x-[40px] gap-y-[12px] md:grid-cols-2">
           <div className="flex flex-col gap-[12px]">
             {legendLeft.map((c) => (
-              <LegendRow c={c} key={c.name} />
+              <LegendRow c={c} key={c.key} />
             ))}
           </div>
           <div className="flex flex-col gap-[12px]">
             {legendRight.map((c) => (
-              <LegendRow c={c} key={c.name} />
+              <LegendRow c={c} key={c.key} />
             ))}
           </div>
         </div>
@@ -394,15 +434,15 @@ function DistributionOverview() {
 
 const perfColumns = "grid-cols-[minmax(0,1.5fr)_0.7fr_0.8fr_0.7fr]";
 
-function CategoryPerformanceCard() {
-  const rows = categories.slice(0, 5);
-  const maxVol = Math.max(...rows.map((r) => r.vol));
+function CategoryPerformanceCard({ categories }: { categories: Category[] }) {
+  const rows = [...categories].sort((a, b) => b.vol - a.vol);
+  const maxVol = Math.max(1, ...rows.map((r) => r.vol));
 
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex items-center justify-between">
         <h2 className="m-0 text-[15px] font-bold text-[#0f172a]">
-          Category Performance (30 Days)
+          Category Performance
         </h2>
         <button className="text-[12px] font-semibold text-[#5b3df5]" type="button">
           View Analytics
@@ -418,7 +458,7 @@ function CategoryPerformanceCard() {
 
       <div className="flex flex-col gap-[14px]">
         {rows.map((r) => (
-          <div className={cn("grid items-center gap-[8px]", perfColumns)} key={r.name}>
+          <div className={cn("grid items-center gap-[8px]", perfColumns)} key={r.key}>
             <div className="min-w-0">
               <p className="m-0 truncate text-[12px] font-semibold text-[#0f172a]">
                 {r.name}
@@ -440,10 +480,15 @@ function CategoryPerformanceCard() {
   );
 }
 
-function AIInsightsCard() {
+function AIInsightsCard({ categories }: { categories: Category[] }) {
+  const byVolume = [...categories].sort((a, b) => b.vol - a.vol);
+  const byScore = [...categories].sort((a, b) => b.score - a.score);
+  const topVolume = byVolume[0];
+  const topScore = byScore[0];
+
   const bullets = [
-    "Funding & Investment triggers have the highest intent score (87 avg).",
-    "Product & Innovation shows strong growth potential (+24% vs last 30 days).",
+    `${topVolume.name} triggers have the highest signal volume (${topVolume.signals} signals, ${topVolume.companies} companies).`,
+    `${topScore.name} shows the strongest average confidence score (${topScore.score}).`,
     "Consider creating custom triggers for your industry-specific use cases.",
   ];
 
@@ -464,8 +509,8 @@ function AIInsightsCard() {
           Top Performing Category
         </p>
         <p className="m-0 mt-[6px] text-[13px] leading-[19px] text-[#475569]">
-          Hiring & Talent shows the highest signal volume with 1,846 signals in the last
-          30 days.
+          {topVolume.name} shows the highest signal volume with {topVolume.signals} signals
+          across {topVolume.companies} companies.
         </p>
       </div>
 
@@ -515,6 +560,8 @@ function QuickActionsCard() {
 
 export function TriggerLibraryPage() {
   const [saved, setSaved] = useState<SavedTrigger[]>(() => getTriggers());
+  const [triggerStats, setTriggerStats] = useState<Record<string, TriggerStat>>({});
+  const [statsData, setStatsData] = useState<SignalStatsOut | null>(null);
 
   useEffect(() => {
     const workspaceId = getWorkspaceId();
@@ -522,11 +569,49 @@ export function TriggerLibraryPage() {
       return;
     }
     listTriggers(workspaceId)
-      .then((triggers) => setSaved(triggers.map(toSavedTrigger)))
+      .then((triggers) => {
+        const mapped = triggers.map(toSavedTrigger);
+        setSaved(mapped);
+
+        // Real per-trigger match counts, computed from the signals the
+        // uploaded Excel actually produced (see trigger_matcher.detect_trigger_events).
+        // Tolerant of individual failures (e.g. a localStorage-only trigger
+        // with no backend id) - those triggers just keep the "—" placeholder.
+        Promise.allSettled(mapped.map((t) => getTriggerEvents(workspaceId, t.id))).then((results) => {
+          const next: Record<string, TriggerStat> = {};
+          results.forEach((result, i) => {
+            if (result.status === "fulfilled") {
+              const companies = new Set(result.value.events.map((e) => e.company_id));
+              next[mapped[i].id] = { events: result.value.event_count, companies: companies.size };
+            }
+          });
+          setTriggerStats(next);
+        });
+      })
       .catch(() => {
         // No backend/workspace yet - keep the localStorage fallback.
       });
   }, []);
+
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    if (!organisationId) {
+      return;
+    }
+    getSignalStats(organisationId)
+      .then((data) => {
+        if (data.total > 0) {
+          setStatsData(data);
+        }
+      })
+      .catch(() => {
+        // No backend/org yet - keep the dummy category numbers.
+      });
+  }, []);
+
+  const categories = statsData ? buildCategories(realCategoryStats(statsData)) : dummyCategories;
+  const summary = buildSummary(statsData);
+  const totalSignals = statsData ? statsData.total : categories.reduce((sum, c) => sum + c.count, 0);
 
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
@@ -540,15 +625,15 @@ export function TriggerLibraryPage() {
 
           <div className="mt-[22px] grid grid-cols-1 gap-[24px] xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="flex flex-col gap-[20px]">
-              <SummaryCards />
-              <YourTriggers triggers={saved} />
-              <CategoryGrid />
-              <DistributionOverview />
+              <SummaryCards summary={summary} />
+              <YourTriggers stats={triggerStats} triggers={saved} />
+              <CategoryGrid categories={categories} />
+              <DistributionOverview categories={categories} totalSignals={totalSignals} />
             </div>
 
             <div className="flex flex-col gap-[20px]">
-              <CategoryPerformanceCard />
-              <AIInsightsCard />
+              <CategoryPerformanceCard categories={categories} />
+              <AIInsightsCard categories={categories} />
               <QuickActionsCard />
             </div>
           </div>

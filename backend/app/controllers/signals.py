@@ -9,7 +9,16 @@ from app.models import Company, Signal
 from app.services import signal_directory
 from app.services.signal_extractor import extract_signals
 from app.services.signal_scorer import rescore_signals
-from app.schemas.signal import SignalListOut, SignalWithCompanyOut
+from app.schemas.signal import (
+    ConfidenceBucketCount,
+    CountryCount,
+    SignalCategoryCount,
+    SignalListOut,
+    SignalStatsOut,
+    SignalTrendPoint,
+    SignalWithCompanyOut,
+    SourceCount,
+)
 
 
 async def extract(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
@@ -44,10 +53,14 @@ def _with_company(signal: Signal, company_name: str) -> SignalWithCompanyOut:
 
 
 async def list_all(
-    organisation_id: UUID, page: int = 1, page_size: int = 25, db: AsyncSession = Depends(get_db)
+    organisation_id: UUID,
+    page: int = 1,
+    page_size: int = 25,
+    category: str | None = None,
+    db: AsyncSession = Depends(get_db),
 ):
     page_size = min(page_size, 100)
-    rows, total = await signal_directory.list_signals(db, organisation_id, page, page_size)
+    rows, total = await signal_directory.list_signals(db, organisation_id, page, page_size, category)
     items = [_with_company(signal, company_name) for signal, company_name in rows]
     return SignalListOut(items=items, total=total, page=page, page_size=page_size)
 
@@ -58,6 +71,47 @@ async def get_by_id(organisation_id: UUID, signal_id: UUID, db: AsyncSession = D
         raise HTTPException(status_code=404, detail="signal not found")
     signal, company_name = row
     return _with_company(signal, company_name)
+
+
+async def stats(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
+    counts = await signal_directory.intent_counts(db, organisation_id)
+    category_rows = await signal_directory.counts_by_category(db, organisation_id)
+    trend_rows = await signal_directory.trend_by_day(db, organisation_id)
+    top_rows = await signal_directory.top_signals(db, organisation_id)
+    totals = await signal_directory.org_totals(db, organisation_id)
+    histogram_rows = await signal_directory.confidence_histogram(db, organisation_id)
+    country_rows = await signal_directory.counts_by_country(db, organisation_id)
+    source_rows = await signal_directory.top_sources(db, organisation_id)
+    executives_impacted = await signal_directory.executives_impacted(db, organisation_id)
+    actionable_count = await signal_directory.actionable_count(db, organisation_id)
+
+    return SignalStatsOut(
+        total=counts["high"] + counts["medium"] + counts["low"],
+        high_intent=counts["high"],
+        medium_intent=counts["medium"],
+        low_intent=counts["low"],
+        company_count=totals["company_count"],
+        avg_confidence=totals["avg_confidence"],
+        executives_impacted=executives_impacted,
+        actionable_count=actionable_count,
+        by_category=[
+            SignalCategoryCount(
+                signal_category=category,
+                count=count,
+                company_count=company_count,
+                avg_confidence=float(avg_confidence) if avg_confidence is not None else None,
+            )
+            for category, count, company_count, avg_confidence in category_rows
+        ],
+        trend=[
+            SignalTrendPoint(date=str(point["date"]), total=point["total"], high=point["high"], medium=point["medium"], low=point["low"])
+            for point in trend_rows
+        ],
+        top_signals=[_with_company(signal, company_name) for signal, company_name in top_rows],
+        histogram=[ConfidenceBucketCount(bucket=row["bucket"], count=row["count"]) for row in histogram_rows],
+        by_country=[CountryCount(country=country, count=count) for country, count in country_rows],
+        by_source=[SourceCount(source=row["source"], count=row["count"]) for row in source_rows],
+    )
 
 
 async def get_signals(organisation_id: UUID, company_id: UUID, db: AsyncSession = Depends(get_db)):

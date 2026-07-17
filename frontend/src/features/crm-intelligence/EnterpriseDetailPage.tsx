@@ -91,7 +91,7 @@ const scoreCards = [
   { label: "Fit Score", value: "88", badge: "Excellent", tone: "purple", spark: "#7c3aed", values: [42, 46, 50, 48, 56, 54, 60] },
 ];
 
-function Header({ company }: { company: CompanyOut | null }) {
+function Header({ company, companyId }: { company: CompanyOut | null; companyId: string | null }) {
   const name = company?.company_name ?? "TechNova Solutions";
   const initials = company
     ? company.company_name
@@ -166,20 +166,35 @@ function Header({ company }: { company: CompanyOut | null }) {
             </button>
           </div>
           <div className="grid grid-cols-2 gap-px overflow-hidden rounded-[16px] border border-[#eef1f6] bg-[#eef1f6] md:grid-cols-3 xl:grid-cols-5">
-            {scoreCards.map((s) => (
-              <div className="bg-white p-[16px]" key={s.label}>
-                <p className="m-0 text-[12px] text-[#94a3b8]">{s.label}</p>
-                <div className="mt-[6px] flex items-center gap-[8px]">
-                  {s.arrow && <ArrowUpRight className="size-[16px] text-[#16a34a]" />}
-                  <span className="text-[20px] font-bold leading-none text-[#0f172a]">{s.value}</span>
-                  {s.badge && <Badge label={s.badge} tone={s.tone} />}
+            {scoreCards.map((s) => {
+              const isAccountScore = s.label === "Account Score";
+              return (
+                <div
+                  className={cn("bg-white p-[16px]", isAccountScore && "cursor-pointer hover:bg-[#fafbff]")}
+                  key={s.label}
+                  onClick={
+                    isAccountScore
+                      ? () => {
+                          window.location.href = companyId ? `/score-breakdown?id=${companyId}` : "/score-breakdown";
+                        }
+                      : undefined
+                  }
+                  role={isAccountScore ? "button" : undefined}
+                  tabIndex={isAccountScore ? 0 : undefined}
+                >
+                  <p className="m-0 text-[12px] text-[#94a3b8]">{s.label}</p>
+                  <div className="mt-[6px] flex items-center gap-[8px]">
+                    {s.arrow && <ArrowUpRight className="size-[16px] text-[#16a34a]" />}
+                    <span className="text-[20px] font-bold leading-none text-[#0f172a]">{s.value}</span>
+                    {s.badge && <Badge label={s.badge} tone={s.tone} />}
+                  </div>
+                  {s.sub && <p className="m-0 mt-[5px] text-[11px] font-semibold text-[#16a34a]">↑ {s.sub}</p>}
+                  <div className="mt-[8px]">
+                    <Sparkline className="h-[28px] w-full" color={s.spark} gradientId={`sc-${s.label.replace(/\s+/g, "")}`} values={s.values} />
+                  </div>
                 </div>
-                {s.sub && <p className="m-0 mt-[5px] text-[11px] font-semibold text-[#16a34a]">↑ {s.sub}</p>}
-                <div className="mt-[8px]">
-                  <Sparkline className="h-[28px] w-full" color={s.spark} gradientId={`sc-${s.label.replace(/\s+/g, "")}`} values={s.values} />
-                </div>
-              </div>
-            ))}
+              );
+            })}
             <div className="bg-white p-[16px]">
               <p className="m-0 text-[12px] text-[#94a3b8]">Opportunity</p>
               <div className="mt-[6px] flex items-center justify-between gap-[8px]">
@@ -201,6 +216,7 @@ function Header({ company }: { company: CompanyOut | null }) {
 
 const tabs = [
   "Overview",
+  "Score Breakdown",
   "Signals & Triggers",
   "Buying Committee",
   "Technographics",
@@ -213,6 +229,7 @@ const tabs = [
 ];
 
 const tabLinks: Record<string, string> = {
+  "Score Breakdown": "/score-breakdown",
   "Buying Committee": "/buying-committee",
 };
 
@@ -627,7 +644,7 @@ export function EnterpriseDetailPage() {
         <TopBar searchPlaceholder="Search companies, triggers, executives..." showDetection={false} />
 
         <main className="flex-1 overflow-x-hidden px-[28px] py-[22px]">
-          <Header company={company} />
+          <Header company={company} companyId={companyId} />
           <Tabs companyId={companyId} />
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] lg:grid-cols-2 xl:grid-cols-[1fr_1.2fr_1fr_1.3fr]">

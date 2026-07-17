@@ -20,6 +20,7 @@ import { TopBar } from "../../components/layout/TopBar";
 import { cn } from "../../lib/cn";
 import { listSignals, type SignalWithCompanyOut } from "../../api/signals";
 import { getOrganisationId } from "../../lib/session";
+import { categoryLabel, SIGNAL_CATEGORY_OPTIONS } from "../../lib/signalCategories";
 
 function relativeTime(iso: string | null): string {
   if (!iso) {
@@ -115,15 +116,33 @@ function IntentBadge({ level }: { level: string }) {
 /* Filters                                                             */
 /* ------------------------------------------------------------------ */
 
-const filters = [
-  "All Intent Levels",
-  "All Categories",
-  "All Industries",
-  "All Signal Types",
-  "All Geographies",
-];
+const filters = ["All Intent Levels", "All Industries", "All Signal Types", "All Geographies"];
 
-function FilterBar() {
+/* signal_category is the only filter dimension backed by a real column
+ * (Signal.signal_category) - it's a functional <select>, wired to the
+ * /signals list endpoint's ?category= param. The rest stay decorative
+ * placeholders since no matching backend field exists yet. */
+function CategoryFilter({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <div className="relative flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-medium text-[#334155]">
+      <select
+        className="cursor-pointer appearance-none bg-transparent pr-[18px] outline-none"
+        onChange={(e) => onChange(e.target.value)}
+        value={value}
+      >
+        <option value="">All Categories</option>
+        {SIGNAL_CATEGORY_OPTIONS.map((option) => (
+          <option key={option} value={option}>
+            {categoryLabel(option)}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-[14px] size-[15px] text-[#94a3b8]" />
+    </div>
+  );
+}
+
+function FilterBar({ category, onCategoryChange }: { category: string; onCategoryChange: (value: string) => void }) {
   return (
     <div className="flex flex-wrap items-center gap-[12px]">
       {filters.map((label) => (
@@ -136,6 +155,7 @@ function FilterBar() {
           <ChevronDown className="size-[15px] text-[#94a3b8]" />
         </button>
       ))}
+      <CategoryFilter onChange={onCategoryChange} value={category} />
       <button
         className="ml-auto flex items-center gap-[10px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-medium text-[#334155]"
         type="button"
@@ -178,7 +198,7 @@ function toSignal(s: SignalWithCompanyOut): Signal {
     title: s.signal_type.replace(/_/g, " "),
     description: s.core_fact ?? "—",
     tags: [
-      { label: s.signal_category.replace(/_/g, " "), tone: "purple" },
+      { label: categoryLabel(s.signal_category), tone: "purple" },
       { label: s.signal_type.replace(/_/g, " "), tone: "gray" },
     ],
     company: s.company_name,
@@ -482,22 +502,26 @@ function Pagination() {
 
 export function SignalFeedPage() {
   const [signals, setSignals] = useState<Signal[]>(dummySignals);
+  const [category, setCategory] = useState("");
 
   useEffect(() => {
     const organisationId = getOrganisationId();
     if (!organisationId) {
       return;
     }
-    listSignals(organisationId, { page: 1, page_size: 20 })
+    listSignals(organisationId, { page: 1, page_size: 20, category: category || undefined })
       .then((res) => {
-        if (res.items.length > 0) {
+        // An explicit category filter trusts a real (possibly empty) result;
+        // the unfiltered initial load keeps the dummy rows if the org has no
+        // signals yet.
+        if (category || res.items.length > 0) {
           setSignals(res.items.map(toSignal));
         }
       })
       .catch(() => {
         // No backend/org yet - keep the dummy rows.
       });
-  }, []);
+  }, [category]);
 
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
@@ -521,7 +545,7 @@ export function SignalFeedPage() {
           </p>
 
           <div className="mt-[22px]">
-            <FilterBar />
+            <FilterBar category={category} onCategoryChange={setCategory} />
           </div>
 
           <div className="mt-[18px]">

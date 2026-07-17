@@ -124,6 +124,13 @@ class CompanyListOut(BaseModel):
     page_size: int
 
 
+class CompanyStatsOut(BaseModel):
+    total: int
+    high_intent: int
+    medium_intent: int
+    low_intent: int
+
+
 class ScoopEnrichOut(BaseModel):
     count: int
     scoops: list[ScoopOut]

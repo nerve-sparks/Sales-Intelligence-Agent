@@ -1,22 +1,62 @@
 import { Scan, Search } from "lucide-react";
-import type { ComponentType } from "react";
+import { useEffect, useState, type ComponentType } from "react";
 import {
   AIAssistantButton,
   DetectionPill,
   NotificationBell,
   UserMenu,
 } from "./TopActions";
+import { listWorkspaceMembers } from "../../api/workspaces";
+import { getWorkspaceId } from "../../lib/session";
+
+function initialsOf(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+function roleLabel(role: string): string {
+  return role === "owner" ? "Founder" : role.charAt(0).toUpperCase() + role.slice(1);
+}
 
 /* Shared application top bar: search + detection status + account actions. */
 export function TopBar({
   searchPlaceholder = "Search companies, signals, executives...",
   detectionIcon = Scan,
   showDetection = true,
+  showAIAssistant = true,
 }: {
   searchPlaceholder?: string;
   detectionIcon?: ComponentType<{ className?: string }>;
   showDetection?: boolean;
+  showAIAssistant?: boolean;
 }) {
+  // Workspace owner is the person who created it (see OnboardingPage's
+  // Workspace Setup step: addWorkspaceMember(..., { role: "owner" })).
+  // UserMenu keeps its "Arjun Kumar" / "Founder" defaults until this loads
+  // or if there's no backend/workspace yet.
+  const [user, setUser] = useState<{ initials: string; name: string; role: string } | null>(null);
+
+  useEffect(() => {
+    const workspaceId = getWorkspaceId();
+    if (!workspaceId) {
+      return;
+    }
+    listWorkspaceMembers(workspaceId)
+      .then((members) => {
+        const owner = members.find((m) => m.role === "owner") ?? members[0];
+        if (owner?.full_name) {
+          setUser({ initials: initialsOf(owner.full_name), name: owner.full_name, role: roleLabel(owner.role) });
+        }
+      })
+      .catch(() => {
+        // No backend/workspace yet - keep the dummy defaults.
+      });
+  }, []);
+
   return (
     <header className="sticky top-0 z-30 flex h-[88px] shrink-0 items-center gap-[16px] border-b border-[#e9edf5] bg-white px-[24px]">
       <div className="relative w-full max-w-[500px]">
@@ -36,9 +76,9 @@ export function TopBar({
       )}
 
       <div className="ml-auto flex items-center gap-[12px]">
-        <AIAssistantButton />
+        {showAIAssistant && <AIAssistantButton />}
         <NotificationBell />
-        <UserMenu />
+        <UserMenu {...(user ?? {})} />
       </div>
     </header>
   );

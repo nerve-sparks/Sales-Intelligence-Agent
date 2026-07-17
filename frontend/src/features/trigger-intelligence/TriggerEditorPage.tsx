@@ -21,24 +21,13 @@ import { TopBar } from "../../components/layout/TopBar";
 import { addTrigger } from "../../lib/triggers";
 import { createTrigger } from "../../api/triggers";
 import { getWorkspaceId } from "../../lib/session";
+import { categoryLabel, categoryStyle, SIGNAL_CATEGORY_OPTIONS } from "../../lib/signalCategories";
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
 
 type IconType = ComponentType<{ className?: string }>;
 type ActionRow = { icon: IconType; label: string; target: string };
-
-/* Real signal_category values the backend actually matches on (see
- * SIGNAL_CATEGORY_MAP in app/services/signal_extractor.py) - this is the
- * only field on this page that maps to something the backend can act on. */
-const SIGNAL_CATEGORY_OPTIONS = [
-  "ai_seriousness",
-  "ai_pain_points",
-  "buying_stage",
-  "budget_and_capital",
-  "urgency_and_catalysts",
-  "competitive_context",
-];
 
 function SelectBox({ icon: Icon, label }: { icon?: IconType; label: string }) {
   return (
@@ -53,9 +42,20 @@ function SelectBox({ icon: Icon, label }: { icon?: IconType; label: string }) {
   );
 }
 
+/* Icon swatch mirrors the same signalCategories.CATEGORY_STYLE used on the
+ * Trigger Library's category and trigger cards, so the category a user
+ * picks here shows up with the identical icon/color there. */
 function CategorySelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const style = categoryStyle(value);
+  const Icon = style.icon;
   return (
-    <div className="relative flex h-[44px] w-full items-center rounded-[10px] border border-[#e9edf5] bg-white px-[14px] text-[14px] text-[#0f172a]">
+    <div className="relative flex h-[44px] w-full items-center gap-[10px] rounded-[10px] border border-[#e9edf5] bg-white pl-[10px] pr-[14px] text-[14px] text-[#0f172a]">
+      <span
+        className="flex size-[26px] shrink-0 items-center justify-center rounded-[7px]"
+        style={{ backgroundColor: style.bg, color: style.color }}
+      >
+        <Icon className="size-[15px]" />
+      </span>
       <select
         className="h-full w-full appearance-none bg-transparent pr-[20px] outline-none"
         onChange={(e) => onChange(e.target.value)}
@@ -63,7 +63,7 @@ function CategorySelect({ value, onChange }: { value: string; onChange: (value: 
       >
         {SIGNAL_CATEGORY_OPTIONS.map((option) => (
           <option key={option} value={option}>
-            {option}
+            {categoryLabel(option)}
           </option>
         ))}
       </select>
@@ -77,7 +77,7 @@ export function TriggerEditorPage() {
   const [description, setDescription] = useState(
     "Detects hiring spikes for target roles in key accounts",
   );
-  const [category, setCategory] = useState(SIGNAL_CATEGORY_OPTIONS[1]);
+  const [category, setCategory] = useState<string>(SIGNAL_CATEGORY_OPTIONS[1]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [actions, setActions] = useState<ActionRow[]>([

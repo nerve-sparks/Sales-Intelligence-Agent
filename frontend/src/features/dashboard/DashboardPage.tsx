@@ -26,7 +26,8 @@ import { cn } from "../../lib/cn";
 import { useEffect, useState } from "react";
 import { getRankedScores, type RankedLeadScoreOut } from "../../api/scores";
 import { listSignals, type SignalWithCompanyOut } from "../../api/signals";
-import { getOrganisationId } from "../../lib/session";
+import { listWorkspaceMembers } from "../../api/workspaces";
+import { getOrganisationId, getWorkspaceId } from "../../lib/session";
 
 function relativeTime(iso: string | null): string {
   if (!iso) {
@@ -860,6 +861,27 @@ function PipelineOverview() {
 export function DashboardPage() {
   const [prospects, setProspects] = useState<typeof dummyProspects>(dummyProspects);
   const [recentSignals, setRecentSignals] = useState<typeof dummyRecentSignals>(dummyRecentSignals);
+  const [firstName, setFirstName] = useState("Arjun");
+
+  // Same "workspace owner" lookup as TopBar's UserMenu (see OnboardingPage's
+  // Workspace Setup step: addWorkspaceMember(..., { role: "owner" })) - just
+  // the first name for the greeting instead of the full name + role.
+  useEffect(() => {
+    const workspaceId = getWorkspaceId();
+    if (!workspaceId) {
+      return;
+    }
+    listWorkspaceMembers(workspaceId)
+      .then((members) => {
+        const owner = members.find((m) => m.role === "owner") ?? members[0];
+        if (owner?.full_name) {
+          setFirstName(owner.full_name.split(/\s+/)[0]);
+        }
+      })
+      .catch(() => {
+        // No backend/workspace yet - keep the dummy name.
+      });
+  }, []);
 
   useEffect(() => {
     const organisationId = getOrganisationId();
@@ -891,13 +913,13 @@ export function DashboardPage() {
       <Sidebar active="Dashboard" />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar />
+        <TopBar showAIAssistant={false} />
 
         <main className="flex-1 overflow-x-hidden px-[24px] py-[24px]">
           <div className="flex items-start justify-between gap-[16px]">
             <div>
               <h1 className="m-0 flex items-center gap-[8px] text-[26px] font-bold text-[#0f172a]">
-                Good morning, Arjun! <span aria-hidden="true">👋</span>
+                Good morning, {firstName}! <span aria-hidden="true">👋</span>
               </h1>
               <p className="m-0 mt-[6px] text-[15px] text-[#64748b]">
                 Your AI is working hard to uncover high-conversion opportunities.

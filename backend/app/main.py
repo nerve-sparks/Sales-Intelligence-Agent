@@ -24,6 +24,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Browsers only expose a small CORS-safelisted set of response headers
+    # to JS by default - custom X-* headers (e.g. the Excel import pipeline
+    # stats) are invisible to fetch()'s response.headers without this.
+    expose_headers=["Content-Disposition", "X-Files-Processed", "X-Total-Rows", "X-Companies-Ingested", "X-Signals-Extracted", "X-Matched-Icp", "X-Active-Count", "X-Nurture-Count"],
 )
 
 app.include_router(organisations.router)

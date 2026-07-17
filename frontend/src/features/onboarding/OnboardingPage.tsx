@@ -5,7 +5,6 @@ import {
   Clock3,
   Code2,
   BarChart3,
-  BriefcaseBusiness,
   Building2,
   Database,
   Ellipsis,
@@ -44,7 +43,7 @@ import {
   setWorkspaceId as setSessionWorkspaceId,
 } from "../../lib/session";
 import { createIcp } from "../../api/icp";
-import { uploadExcel } from "../../api/icpImports";
+import { uploadExcel, type ExcelImportStats } from "../../api/icpImports";
 import goLiveRocketImage from "../../assets/figma/onboarding/go-live-rocket.png";
 import heroImage from "../../assets/figma/onboarding/raw-image-1.png";
 import arrowRightIcon from "../../assets/figma/onboarding/icons/arrow-right.svg";
@@ -94,8 +93,11 @@ const pageBackground =
  * created, a different backend concept from the organisation's own account
  * identity.
  *
- * date_format/time_in_business have no backend column - kept as working UI
- * state but never sent to the API. */
+ * time_in_business has no backend column but keeps a working UI field
+ * (never sent to the API). date_format has no backend column either, and
+ * account_url has a real one - both lost their UI field, so both now stay
+ * in state always submitting their initial default, same as
+ * sub_industry/founded_year above. */
 type OnboardingFormState = {
   workspace_name: string;
   workspace_purpose: string;
@@ -151,7 +153,6 @@ const TIMEZONE_OPTIONS = [
   "(GMT+05:30) India Standard Time",
 ];
 const CURRENCY_OPTIONS = ["USD - US Dollar ( $ )", "EUR - Euro ( € )", "GBP - British Pound ( £ )", "INR - Indian Rupee ( ₹ )"];
-const DATE_FORMAT_OPTIONS = ["MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD"];
 const BUSINESS_TYPE_OPTIONS = ["B2B"];
 // Scoped to Organization Setup's "Industry" field only - the Industry
 // Selection step and ICP Generation's "Primary Industry" field still use
@@ -177,7 +178,7 @@ function getDepartmentOptions(industry: string): string[] {
  * (IcpProfile: name/industries/employee_min/max/revenue_min/max_usd/
  * countries/technologies/buying_committee_personas). Growth Stage and
  * Business Model have no backend column on IcpProfile - kept as working
- * UI state but never sent, same pattern as Language/Date Format earlier. */
+ * UI state but never sent, same pattern as time_in_business earlier. */
 type IcpFormState = {
   industry: string;
   company_size: string;
@@ -650,87 +651,46 @@ const icpLibraryRows = [
   },
 ];
 
-const businessDiscoverySources = [
+/* Real stages of excel_pipeline.run_pipeline (see app/services/
+ * excel_pipeline.py) - this replaces a mockup "AI is scanning your website/
+ * LinkedIn/news" list with what the Excel upload on the ICP step actually
+ * does server-side. All stages complete together once the pipeline
+ * returns (it's one synchronous request, not real per-stage progress). */
+const DISCOVERY_STAGE_DEFS = [
   {
-    name: "Company Website",
-    description: "Scanning homepage, products, solutions, and resources",
-    detail: "128 pages analyzed",
-    time: "2 min ago",
-    status: "Completed",
+    name: "Excel File Parsed",
+    description: "Reading the uploaded ZoomInfo export row by row",
     icon: Database,
     iconClassName: "bg-[#f3e8ff] text-[#7c3aed]",
+    detail: (s: ExcelImportStats) => `${s.totalRows} rows read`,
   },
   {
-    name: "LinkedIn Company Page",
-    description: "Analyzing company overview, posts, and team insights",
-    detail: "1,245 data points",
-    time: "2 min ago",
-    status: "Completed",
+    name: "Companies & Contacts Ingested",
+    description: "Upserting companies and decision-makers into the database",
     icon: Users,
     iconClassName: "bg-[#dbeafe] text-[#005bff]",
+    detail: (s: ExcelImportStats) => `${s.companiesIngested} companies saved`,
   },
   {
-    name: "Public News & Press",
-    description: "Reviewing recent news, announcements, and press releases",
-    detail: "37 articles found",
-    time: "5 min ago",
-    status: "Completed",
-    icon: Mail,
-    iconClassName: "bg-[#eef2ff] text-[#4f46e5]",
-  },
-  {
-    name: "Job Postings",
-    description: "Analyzing open roles to understand growth and priorities",
-    detail: "52 job postings",
-    time: "8 min ago",
-    status: "Completed",
-    icon: BriefcaseBusiness,
-    iconClassName: "bg-[#dbeafe] text-[#005bff]",
-  },
-  {
-    name: "Technology Stack",
-    description: "Detecting technologies and tools in use",
-    detail: "Detecting technologies",
-    time: "Just now",
-    status: "Analyzing",
-    icon: Code2,
-    iconClassName: "bg-[#eef2ff] text-[#005bff]",
-  },
-  {
-    name: "Funding & Financials",
-    description: "Analyzing funding, revenue, and financial signals",
-    detail: "Waiting to start",
-    time: "-",
-    status: "Pending",
-    icon: BarChart3,
-    iconClassName: "bg-[#fef3c7] text-[#b45309]",
-  },
-  {
-    name: "Social Media Presence",
-    description: "Scanning social channels for engagement insights",
-    detail: "Waiting to start",
-    time: "-",
-    status: "Pending",
+    name: "Buying Signals Extracted",
+    description: "Classifying news and scoop rows into buying signals",
     icon: RadioTower,
     iconClassName: "bg-[#dbeafe] text-[#2563eb]",
+    detail: (s: ExcelImportStats) => `${s.signalsExtracted} signals extracted`,
   },
   {
-    name: "Competitors & Market",
-    description: "Identifying competitors and market positioning",
-    detail: "Waiting to start",
-    time: "-",
-    status: "Pending",
+    name: "Lead Scores Computed",
+    description: "Scoring every company across the 7-dimension model",
+    icon: BarChart3,
+    iconClassName: "bg-[#fef3c7] text-[#b45309]",
+    detail: (s: ExcelImportStats) => `${s.activeCount} active, ${s.nurtureCount} nurture`,
+  },
+  {
+    name: "ICP Filtering Applied",
+    description: "Matching ingested companies against your ICP criteria in SQL",
     icon: Target,
     iconClassName: "bg-[#eef2ff] text-[#4f46e5]",
-  },
-  {
-    name: "Customer Reviews",
-    description: "Analyzing reviews and customer feedback",
-    detail: "Waiting to start",
-    time: "-",
-    status: "Pending",
-    icon: Eye,
-    iconClassName: "bg-[#eef2ff] text-[#005bff]",
+    detail: (s: ExcelImportStats) => `${s.matchedIcp} companies matched your ICP`,
   },
 ];
 
@@ -878,27 +838,6 @@ function SelectField({ icon, label, required, value, onChange, options }: Select
   );
 }
 
-function WorkspaceUrlField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  return (
-    <div className="flex flex-col gap-[8px]">
-      <FieldLabel required>Account URL</FieldLabel>
-      <div className="flex h-[42px] w-full overflow-hidden rounded-[8px] font-['Inter'] text-[14px] leading-[20px]">
-        <div className="flex items-center border border-r-0 border-[#e2e8f0] bg-[#f8fafc] px-[13px] text-[#64748b]">
-          https://
-        </div>
-        <input
-          className="min-w-0 flex-1 border border-[#e2e8f0] bg-[#f8fafc] px-[17px] text-[#0f172a] outline-none"
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="acme-corp"
-          type="text"
-          value={value}
-        />
-        <div className="w-[24px] border border-l-0 border-[#e2e8f0] bg-[#f8fafc]" />
-      </div>
-    </div>
-  );
-}
-
 function LogoUpload() {
   return (
     <div className="flex flex-col gap-[8px]">
@@ -1010,7 +949,6 @@ function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
         required
         value={form.timezone}
       />
-      <WorkspaceUrlField onChange={(v) => onFieldChange("account_url", v)} value={form.account_url} />
       <SelectField
         icon={icons.currency}
         label="Currency"
@@ -1018,14 +956,6 @@ function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
         options={CURRENCY_OPTIONS}
         required
         value={form.currency}
-      />
-      <SelectField
-        icon={icons.calendar}
-        label="Date Format"
-        onChange={(v) => onFieldChange("date_format", v)}
-        options={DATE_FORMAT_OPTIONS}
-        required
-        value={form.date_format}
       />
       <LogoUpload />
 
@@ -1038,10 +968,6 @@ function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
           placeholder="Describe what your company does..."
           value={form.company_description}
         />
-        <div className="flex min-h-[36px] items-center rounded-[8px] border border-[#bfdbfe] bg-[#eff6ff] px-[12px] font-['Inter'] text-[12px] leading-[18px] text-[#1e40af]">
-          This information helps our AI models deliver more relevant insights
-          and recommendations.
-        </div>
       </div>
     </div>
   );
@@ -1723,30 +1649,41 @@ type IcpFormProps = {
   onFieldChange: <K extends keyof IcpFormState>(field: K, value: IcpFormState[K]) => void;
   icpId: string | null;
   workspaceId: string | null;
+  onUploadStart: () => void;
+  onUploadComplete: (stats: ExcelImportStats) => void;
 };
 
-function ExcelUploadButton({ icpId, workspaceId }: { icpId: string | null; workspaceId: string | null }) {
+type ExcelUploadButtonProps = {
+  icpId: string | null;
+  workspaceId: string | null;
+  onUploadStart: () => void;
+  onUploadComplete: (stats: ExcelImportStats) => void;
+};
+
+function ExcelUploadButton({ icpId, workspaceId, onUploadStart, onUploadComplete }: ExcelUploadButtonProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [uploadedName, setUploadedName] = useState<string | null>(null);
+  const [uploadedLabel, setUploadedLabel] = useState<string | null>(null);
   const ready = Boolean(icpId && workspaceId);
 
-  const handleFile = async (file: File) => {
-    if (!icpId || !workspaceId) {
+  const handleFiles = async (files: File[]) => {
+    if (!icpId || !workspaceId || files.length === 0) {
       return;
     }
     setUploading(true);
     setError(null);
+    onUploadStart();
     try {
-      const blob = await uploadExcel(workspaceId, icpId, file);
+      const { blob, stats } = await uploadExcel(workspaceId, icpId, files);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `scored_${file.name}`;
+      a.download = files.length === 1 ? `scored_${files[0].name}` : `scored_${files.length}_files.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
-      setUploadedName(file.name);
+      setUploadedLabel(files.length === 1 ? files[0].name : `${files.length} files`);
+      onUploadComplete(stats);
     } catch (err) {
       setError(err instanceof ApiError ? String(err.detail) : "Upload failed. Please try again.");
     }
@@ -1759,10 +1696,11 @@ function ExcelUploadButton({ icpId, workspaceId }: { icpId: string | null; works
         <input
           accept=".csv,.xlsx"
           className="hidden"
+          multiple
           onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) {
-              handleFile(file);
+            const files = Array.from(e.target.files ?? []);
+            if (files.length > 0) {
+              handleFiles(files);
             }
             e.target.value = "";
           }}
@@ -1773,7 +1711,7 @@ function ExcelUploadButton({ icpId, workspaceId }: { icpId: string | null; works
           className="flex h-[36px] items-center gap-[7px] rounded-[8px] border border-[#e2e8f0] bg-white px-[16px] font-['Inter'] text-[12px] font-bold text-[#0f1f6f] disabled:opacity-50"
           disabled={!ready || uploading}
           onClick={() => fileInputRef.current?.click()}
-          title={ready ? "Upload a ZoomInfo export to score against this ICP" : "Click Continue below to create your ICP first"}
+          title={ready ? "Upload one or more ZoomInfo exports to score against this ICP" : "Click Continue below to create your ICP first"}
           type="button"
         >
           <img alt="" className="size-[14px]" src={icons.upload} />
@@ -1781,16 +1719,16 @@ function ExcelUploadButton({ icpId, workspaceId }: { icpId: string | null; works
         </button>
       </div>
       {error && <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#ef4444]">{error}</p>}
-      {!error && uploadedName && (
+      {!error && uploadedLabel && (
         <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#16a34a]">
-          Scored {uploadedName} - check your downloads
+          Scored {uploadedLabel} - check your downloads
         </p>
       )}
     </div>
   );
 }
 
-function IcpGenerationForm({ form, onFieldChange, icpId, workspaceId }: IcpFormProps) {
+function IcpGenerationForm({ form, onFieldChange, icpId, workspaceId, onUploadStart, onUploadComplete }: IcpFormProps) {
   return (
     <div className="flex flex-col gap-[14px]">
       <div className="grid grid-cols-1 gap-[12px] md:grid-cols-2 xl:grid-cols-3">
@@ -1892,7 +1830,12 @@ function IcpGenerationForm({ form, onFieldChange, icpId, workspaceId }: IcpFormP
             </p>
           </div>
           <div className="flex items-center gap-[8px]">
-            <ExcelUploadButton icpId={icpId} workspaceId={workspaceId} />
+            <ExcelUploadButton
+              icpId={icpId}
+              onUploadComplete={onUploadComplete}
+              onUploadStart={onUploadStart}
+              workspaceId={workspaceId}
+            />
             <button
               className="h-[36px] rounded-[8px] bg-[#005bff] px-[16px] font-['Inter'] text-[12px] font-bold text-white"
               type="button"
@@ -1985,7 +1928,22 @@ function DiscoveryStatus({ status }: { status: string }) {
   );
 }
 
-function AiBusinessDiscoveryForm() {
+function AiBusinessDiscoveryForm({ uploadStats }: { uploadStats: "idle" | "uploading" | ExcelImportStats }) {
+  const isUploading = uploadStats === "uploading";
+  const stats = uploadStats === "idle" || uploadStats === "uploading" ? null : uploadStats;
+
+  const headline = stats
+    ? "Data Ingestion Complete"
+    : isUploading
+      ? "Processing Your Data"
+      : "No Data Uploaded Yet";
+  const subtext = stats
+    ? `${stats.companiesIngested} companies ingested from ${stats.totalRows} rows${stats.filesProcessed > 1 ? ` across ${stats.filesProcessed} files` : ""} - ${stats.matchedIcp} matched your ICP, ${stats.activeCount} scored active.`
+    : isUploading
+      ? "Ingesting companies, extracting buying signals, computing lead scores, and filtering by your ICP - this runs as one pipeline on the server."
+      : "Go back to the ICP Generation step and upload a ZoomInfo export to see real ingestion results here.";
+  const progressPct = stats ? 100 : isUploading ? 50 : 0;
+
   return (
     <div className="flex h-full flex-col gap-[14px]">
       <div className="rounded-[12px] border border-[#e2e8f0] bg-white p-[20px]">
@@ -1996,32 +1954,28 @@ function AiBusinessDiscoveryForm() {
           </span>
           <div className="max-w-[420px]">
             <h3 className="m-0 font-['Inter'] text-[22px] font-bold leading-[28px] text-[#0f1f6f]">
-              Analysis in Progress
+              {headline}
             </h3>
             <p className="m-0 mt-[14px] font-['Inter'] text-[13px] font-medium leading-[21px] text-[#0f1f6f]">
-              XSparks is discovering key information about your business from
-              multiple sources.
+              {subtext}
             </p>
-            <button
-              className="mt-[12px] font-['Inter'] text-[13px] font-bold leading-[20px] text-[#005bff]"
-              type="button"
-            >
-              Learn more about our discovery process
-            </button>
           </div>
         </div>
 
           <div className="w-full max-w-[300px] pt-[6px]">
           <div className="mb-[14px] flex items-center justify-between">
             <span className="font-['Inter'] text-[13px] font-bold text-[#0f1f6f]">
-              Analyzing... 7 of 9 sources
+              {stats ? "5 of 5 stages" : isUploading ? "Processing..." : "Not started"}
             </span>
             <span className="font-['Inter'] text-[13px] font-bold text-[#0f1f6f]">
-              78% Complete
+              {progressPct}% Complete
             </span>
           </div>
           <span className="block h-[8px] overflow-hidden rounded-full bg-[#e2e8f0]">
-            <span className="block h-full w-[78%] rounded-full bg-gradient-to-r from-[#005bff] via-[#7c3aed] to-[#db2777]" />
+            <span
+              className="block h-full rounded-full bg-gradient-to-r from-[#005bff] via-[#7c3aed] to-[#db2777] transition-[width] duration-500"
+              style={{ width: `${progressPct}%` }}
+            />
           </span>
         </div>
         </div>
@@ -2029,43 +1983,40 @@ function AiBusinessDiscoveryForm() {
 
       <div className="rounded-[12px] border border-[#e2e8f0] bg-white p-[20px]">
         <h3 className="m-0 font-['Inter'] text-[22px] font-bold leading-[28px] text-[#0f1f6f]">
-          Sources Being Analyzed
+          Pipeline Stages
         </h3>
 
         <div className="mt-[16px] flex flex-col gap-[10px]">
-          {businessDiscoverySources.map((source) => {
-            const Icon = source.icon;
+          {DISCOVERY_STAGE_DEFS.map((stage) => {
+            const Icon = stage.icon;
+            const status = stats ? "Completed" : isUploading ? "Analyzing" : "Pending";
+            const detail = stats ? stage.detail(stats) : isUploading ? "Processing..." : "Waiting for Excel upload";
 
             return (
               <div
-                className="grid grid-cols-1 gap-[10px] rounded-[8px] px-[8px] py-[4px] sm:grid-cols-[minmax(0,1fr)_110px_132px] sm:items-center sm:gap-[18px]"
-                key={source.name}
+                className="grid grid-cols-1 gap-[10px] rounded-[8px] px-[8px] py-[4px] sm:grid-cols-[minmax(0,1fr)_110px_180px] sm:items-center sm:gap-[18px]"
+                key={stage.name}
               >
                 <div className="flex min-w-0 items-center gap-[14px]">
                   <span
-                    className={`flex size-[34px] shrink-0 items-center justify-center rounded-[8px] ${source.iconClassName}`}
+                    className={`flex size-[34px] shrink-0 items-center justify-center rounded-[8px] ${stage.iconClassName}`}
                   >
                     <Icon aria-hidden="true" className="size-[18px]" />
                   </span>
                   <div className="min-w-0">
                     <p className="m-0 font-['Inter'] text-[13px] font-bold leading-[18px] text-[#0f1f6f]">
-                      {source.name}
+                      {stage.name}
                     </p>
                     <p className="m-0 mt-[2px] font-['Inter'] text-[11px] font-medium leading-[16px] text-[#0f1f6f]">
-                      {source.description}
+                      {stage.description}
                     </p>
                   </div>
                 </div>
 
-                <DiscoveryStatus status={source.status} />
-                <div>
-                  <p className="m-0 font-['Inter'] text-[11px] font-bold leading-[16px] text-[#0f1f6f]">
-                    {source.detail}
-                  </p>
-                  <p className="m-0 mt-[1px] font-['Inter'] text-[11px] font-medium leading-[16px] text-[#0f1f6f]">
-                    {source.time}
-                  </p>
-                </div>
+                <DiscoveryStatus status={status} />
+                <p className="m-0 font-['Inter'] text-[11px] font-bold leading-[16px] text-[#0f1f6f]">
+                  {detail}
+                </p>
               </div>
             );
           })}
@@ -2261,6 +2212,11 @@ function OnboardingCard() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [icpForm, setIcpForm] = useState<IcpFormState>(initialIcpFormState);
   const [icpId, setIcpId] = useState<string | null>(null);
+  // Business Discovery (step 8) shows the REAL result of the Excel upload
+  // pipeline triggered from the ICP step, not fake "AI is analyzing"
+  // content - "idle" (nothing uploaded yet), "uploading" (pipeline running
+  // server-side, synchronous), or the real stats once it returns.
+  const [uploadStats, setUploadStats] = useState<"idle" | "uploading" | ExcelImportStats>("idle");
   const isOrganizationStep = activeStep === 0;
   const isWorkspaceStep = activeStep === 1;
   const isTeamStep = activeStep === 2;
@@ -2513,10 +2469,17 @@ function OnboardingCard() {
             <TriggerGenerationForm />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <IcpGenerationForm form={icpForm} icpId={icpId} onFieldChange={handleIcpFieldChange} workspaceId={workspaceId} />
+            <IcpGenerationForm
+              form={icpForm}
+              icpId={icpId}
+              onFieldChange={handleIcpFieldChange}
+              onUploadComplete={setUploadStats}
+              onUploadStart={() => setUploadStats("uploading")}
+              workspaceId={workspaceId}
+            />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <AiBusinessDiscoveryForm />
+            <AiBusinessDiscoveryForm uploadStats={uploadStats} />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <GoLiveForm />

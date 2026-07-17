@@ -3,6 +3,7 @@ import {
   Aperture,
   ArrowRight,
   Briefcase,
+  Building2,
   Calendar,
   ChevronDown,
   CircleDollarSign,
@@ -21,11 +22,27 @@ import {
   UserPlus,
   Wrench,
 } from "lucide-react";
-import type { ComponentType } from "react";
+import { useEffect, useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Delta, Sparkline } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
+import { getSignalStats, type SignalStatsOut, type SignalWithCompanyOut } from "../../api/signals";
+import { getOrganisationId } from "../../lib/session";
+import { CATEGORY_COLORS, CATEGORY_LABELS, categoryStyle } from "../../lib/signalCategories";
+
+function relativeTime(iso: string | null): string {
+  if (!iso) {
+    return "—";
+  }
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const minutes = Math.round(diffMs / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -36,7 +53,18 @@ type IconType = ComponentType<{ className?: string }>;
 /* Stat cards                                                          */
 /* ------------------------------------------------------------------ */
 
-const stats = [
+type StatCard = {
+  icon: IconType;
+  iconBg: string;
+  iconColor: string;
+  label: string;
+  value: string;
+  delta: string | null;
+  color: string;
+  values: number[];
+};
+
+const dummyStats: StatCard[] = [
   {
     icon: Target,
     iconBg: "bg-[#e8f0ff]",
@@ -79,7 +107,66 @@ const stats = [
   },
 ];
 
-function StatCards() {
+/* SignalStatsOut has no vs-last-7-days baseline - deltas would have to be
+ * fabricated. Where trend has enough real days to compare first-vs-last,
+ * show a real delta; otherwise omit the line rather than invent one. */
+function toStatCards(data: SignalStatsOut): StatCard[] {
+  const trendLongEnough = data.trend.length >= 2;
+  const deltaFor = (pickFrom: (p: SignalStatsOut["trend"][number]) => number): string | null => {
+    if (!trendLongEnough) return null;
+    const first = pickFrom(data.trend[0]);
+    const last = pickFrom(data.trend[data.trend.length - 1]);
+    if (first === 0) return null;
+    return `${(((last - first) / first) * 100).toFixed(1)}%`;
+  };
+  const seriesFor = (pickFrom: (p: SignalStatsOut["trend"][number]) => number, flatValue: number): number[] =>
+    trendLongEnough ? data.trend.map(pickFrom) : [flatValue, flatValue];
+
+  return [
+    {
+      icon: Target,
+      iconBg: "bg-[#e8f0ff]",
+      iconColor: "text-[#2563eb]",
+      label: "Total Signals",
+      value: data.total.toLocaleString(),
+      delta: deltaFor((p) => p.total),
+      color: "#2563eb",
+      values: seriesFor((p) => p.total, data.total),
+    },
+    {
+      icon: Crosshair,
+      iconBg: "bg-[#f3e8ff]",
+      iconColor: "text-[#7c3aed]",
+      label: "High-Intent Signals",
+      value: data.high_intent.toLocaleString(),
+      delta: deltaFor((p) => p.high),
+      color: "#7c3aed",
+      values: seriesFor((p) => p.high, data.high_intent),
+    },
+    {
+      icon: Activity,
+      iconBg: "bg-[#fff1e8]",
+      iconColor: "text-[#f97316]",
+      label: "Medium-Intent Signals",
+      value: data.medium_intent.toLocaleString(),
+      delta: deltaFor((p) => p.medium),
+      color: "#f97316",
+      values: seriesFor((p) => p.medium, data.medium_intent),
+    },
+    {
+      icon: DollarSign,
+      iconBg: "bg-[#e7f8ef]",
+      iconColor: "text-[#16a34a]",
+      label: "Low-Intent Signals",
+      value: data.low_intent.toLocaleString(),
+      delta: deltaFor((p) => p.low),
+      color: "#16a34a",
+      values: seriesFor((p) => p.low, data.low_intent),
+    },
+  ];
+}
+
+function StatCards({ stats }: { stats: StatCard[] }) {
   return (
     <div className="grid grid-cols-1 gap-[16px] sm:grid-cols-2 xl:grid-cols-4">
       {stats.map((stat) => {
@@ -116,10 +203,12 @@ function StatCards() {
               />
             </div>
 
-            <p className="m-0 mt-[12px] flex items-center gap-[8px] text-[12px] text-[#94a3b8]">
-              <Delta value={stat.delta} />
-              vs last 7 days
-            </p>
+            {stat.delta && (
+              <p className="m-0 mt-[12px] flex items-center gap-[8px] text-[12px] text-[#94a3b8]">
+                <Delta value={stat.delta} />
+                vs last 7 days
+              </p>
+            )}
           </div>
         );
       })}
@@ -131,40 +220,43 @@ function StatCards() {
 /* Signal Trend Over Time (multi-line chart)                           */
 /* ------------------------------------------------------------------ */
 
-const trendLabels = [
-  "May 21",
-  "May 22",
-  "May 23",
-  "May 24",
-  "May 25",
-  "May 26",
-  "May 27",
-];
+type TrendSeries = { label: string; color: string; values: number[] };
 
-const trendSeries = [
+const dummyTrendLabels = ["May 21", "May 22", "May 23", "May 24", "May 25", "May 26", "May 27"];
+
+const dummyTrendSeries: TrendSeries[] = [
   { label: "Total Signals", color: "#2563eb", values: [1050, 1300, 1300, 1560, 1280, 1540, 1450] },
   { label: "High-Intent Signals", color: "#7c3aed", values: [500, 560, 600, 640, 590, 680, 700] },
   { label: "Medium-Intent Signals", color: "#f97316", values: [270, 320, 340, 330, 320, 350, 360] },
   { label: "Low-Intent Signals", color: "#16a34a", values: [60, 70, 80, 75, 70, 85, 90] },
 ];
 
-function TrendChart() {
+function niceStep(maxValue: number): number {
+  const rough = maxValue / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(rough || 1));
+  const normalized = rough / magnitude;
+  const step = normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1;
+  return step * magnitude;
+}
+
+function formatTick(v: number): string {
+  return v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}K` : String(v);
+}
+
+function TrendChart({ labels, series }: { labels: string[]; series: TrendSeries[] }) {
   const w = 640;
   const h = 300;
   const left = 44;
   const right = w - 16;
   const top = 16;
   const bottom = 250;
-  const yMax = 2000;
-  const gridValues = [
-    { v: 0, label: "0" },
-    { v: 500, label: "500" },
-    { v: 1000, label: "1K" },
-    { v: 1500, label: "1.5K" },
-    { v: 2000, label: "2K" },
-  ];
 
-  const xOf = (i: number) => left + (i * (right - left)) / (trendLabels.length - 1);
+  const maxSeriesValue = Math.max(1, ...series.flatMap((s) => s.values));
+  const step = niceStep(maxSeriesValue);
+  const yMax = step * 4;
+  const gridValues = [0, step, step * 2, step * 3, step * 4].map((v) => ({ v, label: formatTick(v) }));
+
+  const xOf = (i: number) => left + (labels.length > 1 ? (i * (right - left)) / (labels.length - 1) : 0);
   const yOf = (v: number) => bottom - (v / yMax) * (bottom - top);
 
   return (
@@ -185,7 +277,7 @@ function TrendChart() {
         </g>
       ))}
 
-      {trendSeries.map((s) => {
+      {series.map((s) => {
         const points = s.values.map((v, i) => `${xOf(i)},${yOf(v)}`).join(" ");
 
         return (
@@ -205,12 +297,12 @@ function TrendChart() {
         );
       })}
 
-      {trendLabels.map((label, i) => (
+      {labels.map((label, i) => (
         <text
           fill="#94a3b8"
           fontSize="11"
           key={label}
-          textAnchor={i === 0 ? "start" : i === trendLabels.length - 1 ? "end" : "middle"}
+          textAnchor={i === 0 ? "start" : i === labels.length - 1 ? "end" : "middle"}
           x={xOf(i)}
           y={bottom + 28}
         >
@@ -221,7 +313,7 @@ function TrendChart() {
   );
 }
 
-function SignalTrendCard() {
+function SignalTrendCard({ labels, series }: { labels: string[]; series: TrendSeries[] }) {
   return (
     <section className="flex flex-col rounded-[18px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex items-start justify-between gap-[16px]">
@@ -243,7 +335,7 @@ function SignalTrendCard() {
       </div>
 
       <div className="mt-[16px] flex flex-wrap items-center gap-x-[20px] gap-y-[8px]">
-        {trendSeries.map((s) => (
+        {series.map((s) => (
           <span className="flex items-center gap-[8px]" key={s.label}>
             <span
               className="size-[10px] rounded-full"
@@ -255,17 +347,19 @@ function SignalTrendCard() {
       </div>
 
       <div className="mt-[12px] flex-1">
-        <TrendChart />
+        <TrendChart labels={labels} series={series} />
       </div>
     </section>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Signals by Source Type (donut)                                      */
+/* Signals by Category (donut)                                         */
 /* ------------------------------------------------------------------ */
 
-const sourceSegments = [
+type CategorySegment = { label: string; color: string; pct: string; count: string; value: number };
+
+const dummySegments: CategorySegment[] = [
   { label: "News & Media", color: "#2563eb", pct: "38%", count: "1,082", value: 1082 },
   { label: "Social Signals", color: "#10b981", pct: "28%", count: "796", value: 796 },
   { label: "Web & Tech", color: "#f59e0b", pct: "16%", count: "455", value: 455 },
@@ -273,18 +367,32 @@ const sourceSegments = [
   { label: "Other Sources", color: "#94a3b8", pct: "6%", count: "173", value: 173 },
 ];
 
-function DonutChart() {
+/* Real signal.source is always "zoominfo" - no meaningful source-type split
+ * exists in the data, so this breaks down by the real signal_category field
+ * (see CATEGORY_LABELS) instead of the dummy "News & Media" style buckets. */
+function toCategorySegments(data: SignalStatsOut): CategorySegment[] {
+  const total = data.by_category.reduce((sum, c) => sum + c.count, 0) || 1;
+  return data.by_category.map((c, i) => ({
+    label: CATEGORY_LABELS[c.signal_category] ?? c.signal_category.replace(/_/g, " "),
+    color: CATEGORY_COLORS[i % CATEGORY_COLORS.length],
+    pct: `${Math.round((c.count / total) * 100)}%`,
+    count: c.count.toLocaleString(),
+    value: c.count,
+  }));
+}
+
+function DonutChart({ segments }: { segments: CategorySegment[] }) {
   const size = 220;
   const thickness = 28;
   const radius = (size - thickness) / 2;
   const circumference = 2 * Math.PI * radius;
-  const total = sourceSegments.reduce((sum, s) => sum + s.value, 0);
+  const total = segments.reduce((sum, s) => sum + s.value, 0) || 1;
   let offset = 0;
 
   return (
     <svg className="size-full" viewBox={`0 0 ${size} ${size}`}>
       <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
-        {sourceSegments.map((s) => {
+        {segments.map((s) => {
           const len = (s.value / total) * circumference;
           const dash = Math.max(len - 3, 0);
           const el = (
@@ -308,26 +416,26 @@ function DonutChart() {
   );
 }
 
-function SourceTypeCard() {
+function SourceTypeCard({ segments, total }: { segments: CategorySegment[]; total: number }) {
   return (
     <section className="flex flex-col rounded-[18px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <h2 className="m-0 text-[18px] font-bold text-[#0f172a]">
-        Signals by Source Type
+        Signals by Category
       </h2>
 
       <div className="mt-[18px] flex flex-1 flex-col items-center gap-[24px] lg:flex-row lg:items-center">
         <div className="relative size-[200px] shrink-0">
-          <DonutChart />
+          <DonutChart segments={segments} />
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="text-[28px] font-bold leading-none text-[#0f172a]">
-              2,847
+              {total.toLocaleString()}
             </span>
             <span className="mt-[4px] text-[13px] text-[#64748b]">Total</span>
           </div>
         </div>
 
         <div className="flex w-full flex-1 flex-col gap-[14px]">
-          {sourceSegments.map((s) => (
+          {segments.map((s) => (
             <div className="flex items-center justify-between gap-[12px]" key={s.label}>
               <span className="flex items-center gap-[10px]">
                 <span
@@ -351,7 +459,7 @@ function SourceTypeCard() {
         className="mt-[20px] flex items-center gap-[8px] text-[14px] font-semibold text-[#4f46e5]"
         type="button"
       >
-        View all source breakdown
+        View all category breakdown
         <ArrowRight className="size-[16px]" />
       </button>
     </section>
@@ -396,6 +504,7 @@ const impactTones: Record<string, string> = {
   "Very High": "text-[#e11d48]",
   High: "text-[#f97316]",
   Medium: "text-[#d97706]",
+  Low: "text-[#64748b]",
 };
 
 type SignalRow = {
@@ -411,7 +520,42 @@ type SignalRow = {
   impact: string;
 };
 
-const signalRows: SignalRow[] = [
+function titleCase(s: string): string {
+  return s
+    .replace(/_/g, " ")
+    .split(" ")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
+function impactFor(confidence: number): string {
+  if (confidence >= 0.85) return "Very High";
+  if (confidence >= 0.6) return "High";
+  if (confidence >= 0.4) return "Medium";
+  return "Low";
+}
+
+/* SignalWithCompanyOut has no logo/domain vocabulary - account/source
+ * brand colors here are generic, decorative fallbacks. Real
+ * title/company/score/impact/detected-at all come from the API. */
+function toSignalRow(s: SignalWithCompanyOut): SignalRow {
+  const confidence = s.signal_confidence ?? 0;
+  const cat = categoryStyle(s.signal_category);
+  return {
+    icon: cat.icon,
+    iconBg: cat.bg,
+    iconColor: cat.color,
+    title: titleCase(s.signal_type),
+    subtitle: s.core_fact ? s.core_fact.slice(0, 60) : CATEGORY_LABELS[s.signal_category] ?? titleCase(s.signal_category),
+    account: { label: s.company_name, bg: "#eef1ff", color: "#4f46e5", icon: Building2 },
+    source: { label: titleCase(s.source ?? "ZoomInfo"), bg: "#f1f5f9", color: "#64748b", icon: Database },
+    score: Math.round(confidence * 100),
+    detected: relativeTime(s.ingested_at),
+    impact: impactFor(confidence),
+  };
+}
+
+const dummySignalRows: SignalRow[] = [
   {
     icon: CircleDollarSign,
     iconBg: "#f3e8ff",
@@ -477,7 +621,7 @@ const signalRows: SignalRow[] = [
 const tableColumns =
   "grid-cols-[minmax(0,2fr)_minmax(0,1.1fr)_minmax(0,1.1fr)_0.9fr_1fr_0.8fr]";
 
-function TopHighIntentSignals() {
+function TopHighIntentSignals({ rows }: { rows: SignalRow[] }) {
   return (
     <section className="rounded-[18px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex items-start justify-between gap-[16px]">
@@ -515,13 +659,13 @@ function TopHighIntentSignals() {
           </div>
 
           <div className="divide-y divide-[#f1f5f9]">
-            {signalRows.map((row) => {
+            {rows.map((row, i) => {
               const Icon = row.icon;
 
               return (
                 <div
                   className={cn("grid items-center gap-[16px] py-[14px]", tableColumns)}
-                  key={row.title}
+                  key={`${row.title}-${i}`}
                 >
                   <div className="flex min-w-0 items-center gap-[12px]">
                     <span
@@ -579,6 +723,40 @@ function TopHighIntentSignals() {
 /* ------------------------------------------------------------------ */
 
 export function SignalIntelligencePage() {
+  const [statsData, setStatsData] = useState<SignalStatsOut | null>(null);
+
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    if (!organisationId) {
+      return;
+    }
+    getSignalStats(organisationId)
+      .then((data) => {
+        if (data.total > 0) {
+          setStatsData(data);
+        }
+      })
+      .catch(() => {
+        // No backend/org yet - keep the dummy rows.
+      });
+  }, []);
+
+  const statCards = statsData ? toStatCards(statsData) : dummyStats;
+  const trendLabels = statsData && statsData.trend.length >= 2
+    ? statsData.trend.map((p) => p.date)
+    : dummyTrendLabels;
+  const trendSeries: TrendSeries[] = statsData && statsData.trend.length >= 2
+    ? [
+        { label: "Total Signals", color: "#2563eb", values: statsData.trend.map((p) => p.total) },
+        { label: "High-Intent Signals", color: "#7c3aed", values: statsData.trend.map((p) => p.high) },
+        { label: "Medium-Intent Signals", color: "#f97316", values: statsData.trend.map((p) => p.medium) },
+        { label: "Low-Intent Signals", color: "#16a34a", values: statsData.trend.map((p) => p.low) },
+      ]
+    : dummyTrendSeries;
+  const categorySegments = statsData && statsData.by_category.length > 0 ? toCategorySegments(statsData) : dummySegments;
+  const categoryTotal = statsData ? statsData.total : 2847;
+  const topRows = statsData && statsData.top_signals.length > 0 ? statsData.top_signals.map(toSignalRow) : dummySignalRows;
+
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Signal Intelligence" />
@@ -617,16 +795,16 @@ export function SignalIntelligencePage() {
           </div>
 
           <div className="mt-[22px]">
-            <StatCards />
+            <StatCards stats={statCards} />
           </div>
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[1.6fr_1fr]">
-            <SignalTrendCard />
-            <SourceTypeCard />
+            <SignalTrendCard labels={trendLabels} series={trendSeries} />
+            <SourceTypeCard segments={categorySegments} total={categoryTotal} />
           </div>
 
           <div className="mt-[22px]">
-            <TopHighIntentSignals />
+            <TopHighIntentSignals rows={topRows} />
           </div>
         </main>
       </div>

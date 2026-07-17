@@ -31,6 +31,19 @@ async def list_icps(session: AsyncSession, workspace_id: UUID) -> list[IcpProfil
     return (await session.execute(stmt)).scalars().all()
 
 
+async def get_icp_by_organisation(session: AsyncSession, organisation_id: UUID, icp_id: UUID) -> IcpProfile | None:
+    """Same lookup as get_icp, but for organisation-scoped routes (e.g. the
+    Enterprise List export) that only have organisation_id, not workspace_id,
+    in the path - joins through Workspace to confirm the ICP actually
+    belongs to this organisation."""
+    stmt = (
+        select(IcpProfile)
+        .join(Workspace, Workspace.workspace_id == IcpProfile.workspace_id)
+        .where(IcpProfile.icp_id == icp_id, Workspace.organisation_id == organisation_id)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
 async def filter_companies(session: AsyncSession, icp: IcpProfile) -> list[Company]:
     # An ICP's Workspace belongs to exactly one Organisation - companies are
     # shared across all Workspaces in that Organisation, so scope by

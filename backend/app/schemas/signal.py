@@ -54,6 +54,53 @@ class SignalListOut(BaseModel):
     page_size: int
 
 
+class SignalCategoryCount(BaseModel):
+    signal_category: str
+    count: int
+    company_count: int
+    avg_confidence: float | None = None
+
+
+class SignalTrendPoint(BaseModel):
+    date: str
+    total: int
+    high: int
+    medium: int
+    low: int
+
+
+class ConfidenceBucketCount(BaseModel):
+    bucket: str
+    count: int
+
+
+class CountryCount(BaseModel):
+    country: str
+    count: int
+
+
+class SourceCount(BaseModel):
+    source: str
+    count: int
+
+
+class SignalStatsOut(BaseModel):
+    total: int
+    high_intent: int
+    medium_intent: int
+    low_intent: int
+    company_count: int
+    avg_confidence: float | None = None
+    executives_impacted: int
+    actionable_count: int
+    by_category: list[SignalCategoryCount]
+    trend: list[SignalTrendPoint]
+    top_signals: list[SignalWithCompanyOut]
+    histogram: list[ConfidenceBucketCount]
+    by_country: list[CountryCount]
+    by_source: list[SourceCount]
+
+
 class SignalExtractResult(BaseModel):
     inserted: int
     skipped: int

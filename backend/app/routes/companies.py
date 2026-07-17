@@ -1,11 +1,13 @@
 from fastapi import APIRouter
 
 from app.controllers import companies as companies_controller
-from app.schemas.company import CompanyListOut, CompanyWithDecisionMakersOut, DecisionMakerOut
+from app.schemas.company import CompanyListOut, CompanyStatsOut, CompanyWithDecisionMakersOut, DecisionMakerOut
 
 router = APIRouter(prefix="/organisations/{organisation_id}/companies", tags=["companies"])
 
 router.get("", response_model=CompanyListOut)(companies_controller.list_companies)
+router.get("/stats", response_model=CompanyStatsOut)(companies_controller.stats)
+router.get("/export")(companies_controller.export)
 router.get("/{company_id}", response_model=CompanyWithDecisionMakersOut)(companies_controller.get_company)
 router.get("/{company_id}/decision-makers", response_model=list[DecisionMakerOut])(
     companies_controller.list_decision_makers

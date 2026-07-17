@@ -51,11 +51,12 @@ export function rescoreSignals(organisationId: string): Promise<SignalRescoreRes
 
 export function listSignals(
   organisationId: string,
-  params: { page?: number; page_size?: number } = {},
+  params: { page?: number; page_size?: number; category?: string } = {},
 ): Promise<SignalListOut> {
   const query = new URLSearchParams();
   if (params.page) query.set("page", String(params.page));
   if (params.page_size) query.set("page_size", String(params.page_size));
+  if (params.category) query.set("category", params.category);
   const qs = query.toString();
   return apiGet<SignalListOut>(`/organisations/${organisationId}/signals${qs ? `?${qs}` : ""}`);
 }
@@ -66,4 +67,55 @@ export function getSignalById(organisationId: string, signalId: string): Promise
 
 export function getSignals(organisationId: string, companyId: string): Promise<SignalOut[]> {
   return apiGet<SignalOut[]>(`/organisations/${organisationId}/signals/${companyId}`);
+}
+
+export type SignalCategoryCount = {
+  signal_category: string;
+  count: number;
+  company_count: number;
+  avg_confidence: number | null;
+};
+
+export type SignalTrendPoint = {
+  date: string;
+  total: number;
+  high: number;
+  medium: number;
+  low: number;
+};
+
+export type ConfidenceBucketCount = {
+  bucket: string;
+  count: number;
+};
+
+export type CountryCount = {
+  country: string;
+  count: number;
+};
+
+export type SourceCount = {
+  source: string;
+  count: number;
+};
+
+export type SignalStatsOut = {
+  total: number;
+  high_intent: number;
+  medium_intent: number;
+  low_intent: number;
+  company_count: number;
+  avg_confidence: number | null;
+  executives_impacted: number;
+  actionable_count: number;
+  by_category: SignalCategoryCount[];
+  trend: SignalTrendPoint[];
+  top_signals: SignalWithCompanyOut[];
+  histogram: ConfidenceBucketCount[];
+  by_country: CountryCount[];
+  by_source: SourceCount[];
+};
+
+export function getSignalStats(organisationId: string): Promise<SignalStatsOut> {
+  return apiGet<SignalStatsOut>(`/organisations/${organisationId}/signals/stats`);
 }
