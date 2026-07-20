@@ -680,6 +680,19 @@ export function LoginPage() {
       style={{ backgroundImage: pageBackground }}
     >
       <div className="relative mx-auto flex h-full w-full max-w-[1280px] flex-col px-[clamp(1.5rem,4vw,3rem)] py-[clamp(0.75rem,2.4vh,2.5rem)]">
+        {/* Ambient globe/city artwork — pinned to the bottom-left of the page
+            (not the content column) and capped in vh, so it always sits in the
+            lower-left and scales down on short screens instead of climbing into
+            the headline/feature text. Bleed off the edges is clipped by the
+            main's overflow-hidden, so it can never introduce a scrollbar. */}
+        <img
+          alt=""
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-[8vh] left-[-6rem] z-0 hidden h-[clamp(260px,42vh,640px)] w-auto max-w-none select-none object-contain object-bottom md:block"
+          draggable={false}
+          src={image3}
+        />
+
         <header className="relative z-20 flex shrink-0 items-center">
           <FigmaLogo className="origin-left -translate-x-[clamp(0.5rem,0.9vw,1rem)] scale-105 sm:scale-125" />
         </header>
@@ -705,13 +718,6 @@ export function LoginPage() {
             <div className="mt-[clamp(1rem,4vh,3.75rem)]">
               <FeatureList mode={mode} />
             </div>
-
-            <img
-              alt=""
-              className="pointer-events-none absolute bottom-[-17rem] left-[-11rem] z-0 hidden w-[min(74vw,863px)] max-w-none select-none md:block lg:bottom-[-10rem]"
-              draggable={false}
-              src={image3}
-            />
           </div>
 
           <div className="relative z-20 flex min-h-0 w-full flex-col items-center gap-[clamp(1.25rem,2.5vh,2rem)] overflow-y-auto lg:w-2/5 lg:items-start">
