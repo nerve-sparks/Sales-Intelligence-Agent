@@ -91,7 +91,7 @@ function Header() {
   );
 }
 
-const tabs = ["Score History", "Score Breakdown History", "Score Drivers History", "Events Timeline"];
+const tabs = ["Score History"];
 
 function Tabs() {
   return (

@@ -653,8 +653,16 @@ export function LoginPage() {
   const [mode, setMode] = useState<AuthMode>(getInitialMode);
   const copy = screenCopy[mode];
   const isMfa = mode === "mfa";
+  // A grid row's default sizing is content-based ("auto"), so items-start on
+  // a grid doesn't let a flex-1/min-h-0 wrapper actually squeeze this row
+  // down to fit - the row just grows to whatever its tallest column needs
+  // (same trap the onboarding page hit). flex (not grid) sidesteps that:
+  // stretch is flexbox's default cross-axis behavior, no extra row-sizing
+  // needed. The scroll safety-net below lives only on the form column, so
+  // if a short viewport still can't fit the card, the scrollbar hugs the
+  // card itself instead of floating in the blank space next to it.
   const sectionClassName =
-    "relative z-10 grid flex-1 items-start gap-[clamp(1.25rem,3.4vw,4rem)] pb-[clamp(1rem,2vh,2rem)] pt-[clamp(1.5rem,4vh,3rem)] lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]";
+    "relative z-10 flex min-h-0 flex-1 flex-col gap-[clamp(1.25rem,3.4vw,4rem)] pb-[clamp(1rem,2vh,2rem)] pt-[clamp(1.5rem,4vh,3rem)] lg:flex-row lg:items-stretch";
 
   const goToLogin = () => {
     setMode("login");
@@ -668,16 +676,16 @@ export function LoginPage() {
 
   return (
     <main
-      className="min-h-screen overflow-x-hidden"
+      className="h-screen overflow-hidden"
       style={{ backgroundImage: pageBackground }}
     >
-      <div className="relative mx-auto flex min-h-screen w-full max-w-[1280px] flex-col px-[clamp(1.5rem,4vw,3rem)] py-[clamp(0.75rem,2.4vh,2.5rem)]">
+      <div className="relative mx-auto flex h-full w-full max-w-[1280px] flex-col px-[clamp(1.5rem,4vw,3rem)] py-[clamp(0.75rem,2.4vh,2.5rem)]">
         <header className="relative z-20 flex shrink-0 items-center">
           <FigmaLogo className="origin-left -translate-x-[clamp(0.5rem,0.9vw,1rem)] scale-105 sm:scale-125" />
         </header>
 
         <section className={sectionClassName}>
-          <div className="relative min-h-0 md:min-h-[clamp(460px,56vh,600px)] 2xl:min-h-[690px]">
+          <div className="relative min-h-0 self-start md:min-h-[clamp(460px,56vh,600px)] lg:w-3/5 lg:shrink-0 2xl:min-h-[690px]">
             <div className="relative z-10 max-w-[620px]">
               <h1 className="m-0 font-['IBM_Plex_Sans'] text-[clamp(2.35rem,4vw,54px)] font-bold leading-[1.05] tracking-normal text-[#0f172a]">
                 {copy.headline.map((line) => (
@@ -706,7 +714,7 @@ export function LoginPage() {
             />
           </div>
 
-          <div className="relative z-20 flex w-full flex-col items-center gap-[clamp(1.25rem,2.5vh,2rem)] lg:items-start">
+          <div className="relative z-20 flex min-h-0 w-full flex-col items-center gap-[clamp(1.25rem,2.5vh,2rem)] overflow-y-auto lg:w-2/5 lg:items-start">
             <LoginForm
               mode={mode}
               onBack={goToLogin}

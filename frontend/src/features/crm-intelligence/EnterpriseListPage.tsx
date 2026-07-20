@@ -109,7 +109,7 @@ function StatCards({ stats }: { stats: StatCard[] }) {
 /* Toolbar                                                             */
 /* ------------------------------------------------------------------ */
 
-const tabs = ["All Enterprises", "My Enterprises", "Watchlist", "High Intent", "At Risk", "Archived"];
+const tabs = ["All Enterprises"];
 
 function EnterpriseTabs() {
   return (

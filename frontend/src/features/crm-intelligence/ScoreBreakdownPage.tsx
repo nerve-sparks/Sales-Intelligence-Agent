@@ -127,7 +127,7 @@ function Header({ company, score }: { company: CompanyOut | null; score: LeadSco
   );
 }
 
-const tabs = ["Score Breakdown", "Score History", "Signals (28)", "Peer Comparison", "Model Insights"];
+const tabs = ["Score Breakdown", "Score History"];
 
 function Tabs() {
   return (

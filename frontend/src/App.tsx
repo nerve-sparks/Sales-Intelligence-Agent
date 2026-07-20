@@ -1,3 +1,6 @@
+import type { ReactElement } from "react";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { PageTransition } from "./components/layout/PageTransition";
 import { LoginPage } from "./features/auth/LoginPage";
 import { OnboardingPage } from "./features/onboarding/OnboardingPage";
 import { DashboardPage } from "./features/dashboard/DashboardPage";
@@ -15,68 +18,40 @@ import { MemberDetailPage } from "./features/crm-intelligence/MemberDetailPage";
 import { ScoreBreakdownPage } from "./features/crm-intelligence/ScoreBreakdownPage";
 import { ScoreHistoryPage } from "./features/crm-intelligence/ScoreHistoryPage";
 
+// Order mirrors the old pathname.includes() checks (most specific first),
+// though react-router's exact path matching makes that ordering no longer
+// load-bearing the way it was before.
+const routes: { path: string; element: ReactElement }[] = [
+  { path: "/score-history", element: <ScoreHistoryPage /> },
+  { path: "/score-breakdown", element: <ScoreBreakdownPage /> },
+  { path: "/member-detail", element: <MemberDetailPage /> },
+  { path: "/buying-committee", element: <BuyingCommitteePage /> },
+  { path: "/enterprise-detail", element: <EnterpriseDetailPage /> },
+  { path: "/enterprise-list", element: <EnterpriseListPage /> },
+  { path: "/trigger-editor", element: <TriggerEditorPage /> },
+  { path: "/trigger-details", element: <TriggerDetailPage /> },
+  { path: "/trigger-library", element: <TriggerLibraryPage /> },
+  { path: "/signal-analytics", element: <SignalAnalyticsPage /> },
+  { path: "/signal-detail", element: <SignalDetailPage /> },
+  { path: "/signal-feed", element: <SignalFeedPage /> },
+  { path: "/signal-intelligence", element: <SignalIntelligencePage /> },
+  { path: "/dashboard", element: <DashboardPage /> },
+  { path: "/onboarding", element: <OnboardingPage /> },
+];
+
 export default function App() {
-  const pathname = typeof window === "undefined" ? "" : window.location.pathname;
-
-  if (pathname.includes("score-history")) {
-    return <ScoreHistoryPage />;
-  }
-
-  if (pathname.includes("score-breakdown")) {
-    return <ScoreBreakdownPage />;
-  }
-
-  if (pathname.includes("member-detail")) {
-    return <MemberDetailPage />;
-  }
-
-  if (pathname.includes("buying-committee")) {
-    return <BuyingCommitteePage />;
-  }
-
-  if (pathname.includes("enterprise-detail")) {
-    return <EnterpriseDetailPage />;
-  }
-
-  if (pathname.includes("enterprise-list")) {
-    return <EnterpriseListPage />;
-  }
-
-  if (pathname.includes("trigger-editor")) {
-    return <TriggerEditorPage />;
-  }
-
-  if (pathname.includes("trigger-details")) {
-    return <TriggerDetailPage />;
-  }
-
-  if (pathname.includes("trigger-library")) {
-    return <TriggerLibraryPage />;
-  }
-
-  if (pathname.includes("signal-analytics")) {
-    return <SignalAnalyticsPage />;
-  }
-
-  if (pathname.includes("signal-detail")) {
-    return <SignalDetailPage />;
-  }
-
-  if (pathname.includes("signal-feed")) {
-    return <SignalFeedPage />;
-  }
-
-  if (pathname.includes("signal-intelligence")) {
-    return <SignalIntelligencePage />;
-  }
-
-  if (pathname.includes("dashboard")) {
-    return <DashboardPage />;
-  }
-
-  if (pathname.includes("onboarding")) {
-    return <OnboardingPage />;
-  }
-
-  return <LoginPage />;
+  return (
+    <BrowserRouter>
+      <Routes>
+        {routes.map(({ path, element }) => (
+          <Route element={<PageTransition>{element}</PageTransition>} key={path} path={path} />
+        ))}
+        {/* LoginPage covers "/", "/forgot-password" and "/mfa-verification"
+            itself (reads window.location.pathname to pick a mode) - the
+            wildcard catches all three plus anything unrecognized, same as
+            the old fallback. */}
+        <Route element={<PageTransition><LoginPage /></PageTransition>} path="*" />
+      </Routes>
+    </BrowserRouter>
+  );
 }

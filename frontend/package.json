@@ -16,6 +16,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-globe.gl": "^2.38.0",
+    "react-router-dom": "^7.18.1",
     "react-svg-worldmap": "^2.0.2",
     "tailwind-merge": "^2.5.5",
     "tailwindcss": "^4.1.11",

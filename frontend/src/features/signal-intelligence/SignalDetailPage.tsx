@@ -223,14 +223,7 @@ function DetailHeader({ signal }: { signal: SignalWithCompanyOut | null }) {
   );
 }
 
-const tabs = [
-  "Overview",
-  "Signal Data",
-  "Source & Evidence",
-  "Impact Analysis",
-  "History",
-  "Related Signals",
-];
+const tabs = ["Overview"];
 
 function DetailTabs() {
   return (

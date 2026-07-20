@@ -73,16 +73,7 @@ function AnalyticsHeader() {
   );
 }
 
-const tabs = [
-  "Overview",
-  "Trend Analysis",
-  "Category Performance",
-  "Source Analysis",
-  "Intent Analysis",
-  "Signal Quality",
-  "Impact Analysis",
-  "Benchmarking",
-];
+const tabs = ["Overview"];
 
 function AnalyticsTabs() {
   return (

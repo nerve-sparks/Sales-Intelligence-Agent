@@ -33,6 +33,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { FigmaLogo } from "../auth/LoginPage";
 import { ApiError } from "../../api/client";
 import { createOrganisation } from "../../api/organisations";
@@ -241,7 +242,6 @@ const steps = [
   ["Organization", "Setup"],
   ["Workspace", "Setup"],
   ["Team", "Invitations"],
-  ["Industry", "Selection"],
   ["Data Source", "Setup"],
   ["CRM", "Integration"],
   ["Trigger", "Generation"],
@@ -1190,56 +1190,6 @@ function TeamInvitationsForm() {
           <Upload aria-hidden="true" className="size-[17px]" />
           Import from CSV
         </button>
-      </div>
-    </div>
-  );
-}
-
-function IndustrySelectionForm() {
-  return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="grid grid-cols-1 gap-[12px] md:grid-cols-2 xl:grid-cols-3">
-        {industries.map((industry) => {
-          const Icon = industry.icon;
-
-          return (
-            <button
-              className={`relative flex min-h-[96px] items-start gap-[14px] rounded-[10px] border bg-white p-[13px] text-left transition ${
-                industry.selected
-                  ? "border-[#4f46e5] shadow-[0px_0px_0px_1px_rgba(79,70,229,0.08)]"
-                  : "border-[#e2e8f0]"
-              }`}
-              key={industry.title}
-              type="button"
-            >
-              <span
-                className={`flex size-[48px] shrink-0 items-center justify-center rounded-[8px] ${industry.iconClassName}`}
-              >
-                <Icon aria-hidden="true" className="size-[25px]" strokeWidth={2.1} />
-              </span>
-              <span className="min-w-0">
-                <span className="block font-['Inter'] text-[14px] font-bold leading-[20px] text-[#0f1f6f]">
-                  {industry.title}
-                </span>
-                <span className="mt-[5px] block font-['Inter'] text-[11px] font-medium leading-[18px] text-[#0f1f6f]">
-                  {industry.text}
-                </span>
-              </span>
-              {industry.selected && (
-                <span className="absolute right-[8px] top-[8px] flex size-[22px] items-center justify-center rounded-full bg-[#005bff] text-white">
-                  <Check aria-hidden="true" className="size-[14px]" strokeWidth={3} />
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="flex min-h-[40px] items-center gap-[10px] rounded-[8px] border border-[#bfdbfe] bg-[#eff6ff] px-[14px] font-['Inter'] text-[12px] font-medium leading-[18px] text-[#1e40af]">
-        <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full border border-[#005bff] text-[#005bff]">
-          i
-        </span>
-        You can update or add multiple industries later in Workspace Settings.
       </div>
     </div>
   );
@@ -2204,6 +2154,7 @@ function OnboardingStepper({ activeStep }: { activeStep: number }) {
 }
 
 function OnboardingCard() {
+  const navigate = useNavigate();
   const [activeStep, setActiveStep] = useState(0);
   const [form, setForm] = useState<OnboardingFormState>(initialFormState);
   const [organisationId, setOrganisationId] = useState<string | null>(null);
@@ -2220,16 +2171,18 @@ function OnboardingCard() {
   const isOrganizationStep = activeStep === 0;
   const isWorkspaceStep = activeStep === 1;
   const isTeamStep = activeStep === 2;
-  const isIndustryStep = activeStep === 3;
-  const isDataSourceStep = activeStep === 4;
-  const isCrmStep = activeStep === 5;
-  const isTriggerStep = activeStep === 6;
-  const isIcpStep = activeStep === 7;
-  const isAiBusinessStep = activeStep === 8;
-  const isGoLiveStep = activeStep === 9;
+  const isDataSourceStep = activeStep === 3;
+  const isCrmStep = activeStep === 4;
+  const isTriggerStep = activeStep === 5;
+  const isIcpStep = activeStep === 6;
+  const isAiBusinessStep = activeStep === 7;
+  const isGoLiveStep = activeStep === 8;
   const stepperStep = activeStep;
-  const formViewportClassName =
-    "mt-[18px] h-[430px] overflow-hidden transition-[height] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]";
+  // Flexes to fill whatever space is left after the fixed-size stepper/
+  // title/footer chrome, instead of a fixed pixel height - that fixed
+  // height was the reason the whole page grew taller than the viewport
+  // and forced the browser (not just this panel) to scroll on laptops.
+  const formViewportClassName = "mt-[18px] min-h-0 flex-1 overflow-hidden";
   const trackRef = useRef<HTMLDivElement>(null);
 
   // Each step panel keeps its own scrollTop even while off-screen (they're
@@ -2254,7 +2207,7 @@ function OnboardingCard() {
 
   const handlePrimaryAction = async () => {
     if (isGoLiveStep) {
-      window.location.href = "/dashboard";
+      navigate("/dashboard");
       return;
     }
 
@@ -2383,7 +2336,7 @@ function OnboardingCard() {
       }
     }
 
-    setActiveStep((step) => Math.min(step + 1, 9));
+    setActiveStep((step) => Math.min(step + 1, 8));
   };
 
   const handleSecondaryAction = () => {
@@ -2393,7 +2346,7 @@ function OnboardingCard() {
   };
 
   return (
-    <section className="relative z-20 flex min-h-[720px] w-full flex-col bg-white px-[36px] pb-[18px] pt-[34px]">
+    <section className="relative z-20 flex h-full w-full flex-col bg-white px-[36px] pb-[18px] pt-[34px]">
       <OnboardingStepper activeStep={stepperStep} />
 
       <div className="mt-[39px]">
@@ -2410,13 +2363,11 @@ function OnboardingCard() {
                   ? "Connect Your CRM"
                   : isDataSourceStep
                     ? "Connect Your Data Sources"
-                    : isIndustryStep
-                      ? "Choose Your Primary Industry"
-                      : isTeamStep
-                        ? "Invite Team Members"
-                        : isOrganizationStep
-                          ? "Organization Information"
-                          : "Workspace Information"}
+                    : isTeamStep
+                      ? "Invite Team Members"
+                      : isOrganizationStep
+                        ? "Organization Information"
+                        : "Workspace Information"}
         </h2>
         <p className="m-0 mt-[2px] font-['Inter'] text-[14px] font-normal leading-[21px] text-[#64748b]">
           {isGoLiveStep
@@ -2431,13 +2382,11 @@ function OnboardingCard() {
                   ? "Connect your CRM to sync data, track activities, and unlock actionable insights."
                   : isDataSourceStep
                     ? "Connect external data sources to enrich profiles, detect buying signals, and power AI insights."
-                    : isIndustryStep
-                      ? "Your selection helps our AI deliver relevant triggers, benchmarks, and recommendations."
-                      : isTeamStep
-                        ? "Add your teammates by email and assign appropriate roles."
-                        : isOrganizationStep
-                          ? "Tell us about your organization so we can personalize your XSparks experience."
-                          : "This will be your organization's dedicated workspace in XSparks."}
+                    : isTeamStep
+                      ? "Add your teammates by email and assign appropriate roles."
+                      : isOrganizationStep
+                        ? "Tell us about your organization so we can personalize your XSparks experience."
+                        : "This will be your organization's dedicated workspace in XSparks."}
         </p>
       </div>
 
@@ -2455,9 +2404,6 @@ function OnboardingCard() {
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <TeamInvitationsForm />
-          </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <IndustrySelectionForm />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <DataSourceSetupForm />
@@ -2551,20 +2497,66 @@ function OnboardingCard() {
 export function OnboardingPage() {
   return (
     <main
-      className="min-h-screen overflow-x-hidden px-[clamp(1.5rem,4vw,3rem)] py-[clamp(1.125rem,2.4vh,2rem)]"
+      className="h-screen overflow-hidden px-[clamp(1.5rem,4vw,3rem)] py-[clamp(1.125rem,2.4vh,2rem)]"
       style={{ backgroundImage: pageBackground }}
     >
-      <div className="relative mx-auto grid min-h-[720px] w-full max-w-[1440px] overflow-hidden rounded-[24px] bg-white shadow-[0px_18px_45px_rgba(15,23,42,0.10)] lg:grid-cols-[clamp(300px,26vw,350px)_minmax(0,1fr)]">
-        <section className="relative z-10 flex min-h-[360px] flex-col overflow-hidden bg-[#eef2ff] px-[28px] py-[30px] lg:min-h-0 lg:px-[38px] lg:py-[42px]">
+      {/* <main> is a hard, definite h-screen at every width, so h-full down
+          the tree (wrapper -> card section) is an unambiguous fill instead
+          of a floor - a min-height alone can't stop a tall child from
+          growing past it and dragging the whole page into scrolling, which
+          is what happened with the first pass at this fix.
+
+          This row is flex, not grid: CSS Grid's implicit row track sizes to
+          its content's auto/intrinsic height by default (align-items:
+          stretch only stretches an item within that content-sized track,
+          it does NOT make the track fill the grid container the way flex's
+          stretch fills a definite-height flex container) - so h-full on a
+          grid child was being silently ignored, the card grew to its
+          natural unbounded height, and paired with overflow-hidden here
+          (for the rounded corners) that excess was clipped with no way to
+          scroll to it instead of properly shrinking. Flexbox's stretch has
+          no such trap: a flex item with no explicit size reliably fills a
+          definite-height flex container.
+
+          The hero branding panel is hidden below lg: its min-h-[360px]
+          floor was competing with the form for a share of a much shorter
+          viewport once the two are stacked instead of side by side; the
+          form is the part that actually needs the room. */}
+      <div className="relative mx-auto flex h-full w-full max-w-[1440px] flex-col lg:flex-row lg:gap-[24px]">
+        <section className="relative z-10 hidden flex-col overflow-hidden px-[28px] py-[30px] lg:flex lg:h-full lg:min-h-0 lg:w-[clamp(300px,26vw,350px)] lg:shrink-0 lg:px-[38px] lg:py-[42px]">
+          {/* The image + white fade are clipped hard at the section's own
+              box (overflow-hidden + inset-0), which is what reads as a
+              "boundary" once the section lost its own background fill - a
+              rectangular cutout still looks like a separate card even with
+              no bg-color, border, or shadow. A mask-image attempt to fade
+              this didn't render (still showed a hard edge), so instead an
+              actual vignette is painted on top, transparent in the middle
+              and fading to an opaque colour matching the page's own
+              gradient at the edges - a plain radial-gradient background,
+              not relying on mask support. */}
           <img
             alt=""
             className="pointer-events-none absolute inset-0 z-0 h-full w-full select-none object-cover object-bottom opacity-95"
             draggable={false}
             src={heroImage}
           />
-          <div className="pointer-events-none absolute inset-0 z-0 bg-gradient-to-b from-white/90 via-white/55 via-[34%] to-white/10" />
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[52%] bg-white/25 backdrop-blur-[1px]" />
-          <FigmaLogo className="relative z-10 origin-left scale-95 lg:scale-100" />
+          {/* Was pure white (from-white/90 etc.) - a different hue from the
+              page's pale lavender background, so the text-readability fade
+              at the top of the panel never matched the page even with the
+              vignette below correctly fading everything else. Recoloured
+              to the page's own rgb(228,227,251) so brightness/opacity
+              still varies for contrast, but the hue stays consistent with
+              what's actually behind this panel. */}
+          <div className="pointer-events-none absolute inset-0 z-0 bg-gradient-to-b from-[rgb(228,227,251)]/90 via-[rgb(228,227,251)]/55 via-[34%] to-[rgb(228,227,251)]/10" />
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[52%] bg-[rgb(228,227,251)]/25 backdrop-blur-[1px]" />
+          <div
+            className="pointer-events-none absolute inset-0 z-[1]"
+            style={{
+              background:
+                "radial-gradient(ellipse 65% 62% at 50% 40%, transparent 40%, rgba(224,224,250,0.85) 78%, rgb(228,227,251) 100%)",
+            }}
+          />
+          <FigmaLogo className="relative z-10 origin-left scale-110 lg:scale-[1.12]" />
 
           <div className="relative z-10 mt-[42px] max-w-[360px] lg:mt-[58px]">
             <h1 className="m-0 font-['Inter'] text-[clamp(2rem,3.4vw,34px)] font-bold leading-[1.2] text-[#1e293b]">
@@ -2596,7 +2588,7 @@ export function OnboardingPage() {
           </div>
         </section>
 
-        <div className="relative z-20 min-w-0 border-t border-[#e2e8f0] lg:border-l lg:border-t-0">
+        <div className="relative z-20 h-full min-w-0 overflow-hidden rounded-[24px] shadow-[0px_18px_45px_rgba(15,23,42,0.10)] lg:flex-1">
           <OnboardingCard />
         </div>
       </div>

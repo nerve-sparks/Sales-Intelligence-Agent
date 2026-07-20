@@ -223,9 +223,6 @@ const tabs = [
   "Firmographics",
   "Financials",
   "News & Insights",
-  "Relationships",
-  "Activities",
-  "Files",
 ];
 
 const tabLinks: Record<string, string> = {

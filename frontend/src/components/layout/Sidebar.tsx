@@ -9,6 +9,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { FigmaLogo } from "../../features/auth/LoginPage";
 import { cn } from "../../lib/cn";
 
@@ -41,7 +42,7 @@ const itemClass = (isActive: boolean) =>
   cn(
     "flex items-center gap-[12px] rounded-[10px] px-[13px] py-[10px] text-[14px] transition",
     isActive
-      ? "bg-[#eef1ff] font-semibold text-[#0f172a]"
+      ? "bg-[#fff1e6] font-semibold text-[#0f172a]"
       : "font-medium text-[#64748b] hover:bg-[#f6f7fb]",
   );
 
@@ -57,13 +58,13 @@ function NavLink({
   children: ReactNode;
 }) {
   return href ? (
-    <a
+    <Link
       aria-current={isActive ? "page" : undefined}
       className={cn(className, "no-underline")}
-      href={href}
+      to={href}
     >
       {children}
-    </a>
+    </Link>
   ) : (
     <button className={className} type="button">
       {children}
@@ -98,7 +99,7 @@ export function Sidebar({
                 <Icon
                   className={cn(
                     "size-[19px] shrink-0",
-                    isActive ? "text-[#4f46e5]" : "text-[#94a3b8]",
+                    isActive ? "text-[#f97316]" : "text-[#94a3b8]",
                   )}
                   strokeWidth={2}
                 />
@@ -118,7 +119,7 @@ export function Sidebar({
                         className={cn(
                           "flex items-center gap-[10px] rounded-[8px] px-[12px] py-[8px] text-[13px] transition",
                           subActive
-                            ? "bg-[#eef1ff] font-semibold text-[#4f46e5]"
+                            ? "bg-[#fff1e6] font-semibold text-[#f97316]"
                             : "font-medium text-[#64748b] hover:bg-[#f6f7fb]",
                         )}
                         href={child.href}
@@ -128,7 +129,7 @@ export function Sidebar({
                         <span
                           className={cn(
                             "size-[7px] shrink-0 rounded-full",
-                            subActive ? "bg-[#4f46e5]" : "bg-[#cbd5e1]",
+                            subActive ? "bg-[#f97316]" : "bg-[#cbd5e1]",
                           )}
                         />
                         {child.label}
