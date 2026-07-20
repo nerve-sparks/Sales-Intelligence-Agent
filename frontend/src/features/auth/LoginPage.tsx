@@ -688,7 +688,7 @@ export function LoginPage() {
         <img
           alt=""
           aria-hidden="true"
-          className="pointer-events-none absolute bottom-[8vh] left-[-6rem] z-0 hidden h-[clamp(260px,42vh,640px)] w-auto max-w-none select-none object-contain object-bottom md:block"
+          className="pointer-events-none absolute bottom-[-2vh] left-[-5rem] z-0 hidden h-[clamp(300px,54vh,740px)] w-auto max-w-none select-none object-contain object-bottom md:block"
           draggable={false}
           src={image3}
         />
