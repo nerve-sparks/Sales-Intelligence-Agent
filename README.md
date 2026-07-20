@@ -1,19 +1,6 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11">
-  <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white" alt="FastAPI 0.115">
-  <img src="https://img.shields.io/badge/SQLAlchemy-2.0%20async-D71F00" alt="SQLAlchemy 2.0 async">
-  <img src="https://img.shields.io/badge/PostgreSQL-async-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL">
-  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React 19">
-  <img src="https://img.shields.io/badge/Vite-6-646CFF?logo=vite&logoColor=white" alt="Vite 6">
-  <img src="https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white" alt="Tailwind CSS 4">
-  <img src="https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5.7">
-</p>
-
 # SIGNAL — Sales Intelligence Agent
 
 A sales intelligence platform and it ingests firmographic and buying-intent data, extracts signals, scores leads against a 5-gate / 7-dimension model, matches companies against configurable Ideal Customer Profiles (ICPs) and Triggers.
-
-> **Project status:** active development, pre-authentication. See [Known limitations](#known-limitations) before treating anything here as production-ready.
 
 ## Table of contents
 
