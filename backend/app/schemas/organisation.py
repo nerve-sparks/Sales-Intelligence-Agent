@@ -25,3 +25,18 @@ class OrganisationOut(BaseModel):
     business_type: str | None = None
     company_description: str | None = None
     created_at: datetime | None = None
+
+
+class IcpRecommendationOut(BaseModel):
+    name: str
+    industries: list[str] = []
+    employee_min: int | None = None
+    employee_max: int | None = None
+    revenue_min_usd: int | None = None
+    revenue_max_usd: int | None = None
+    countries: list[str] = []
+    rationale: str
+
+
+class IcpRecommendationsOut(BaseModel):
+    recommendations: list[IcpRecommendationOut] = []

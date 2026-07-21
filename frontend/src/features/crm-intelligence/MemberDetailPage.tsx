@@ -607,7 +607,11 @@ export function MemberDetailPage() {
       <Sidebar active="Enterprise List" />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar searchPlaceholder="Search companies, triggers, executives..." showDetection={false} />
+        <TopBar
+          searchPlaceholder="Search companies, triggers, executives..."
+          showDetection={false}
+          showNotificationBell={false}
+        />
 
         <main className="flex-1 overflow-x-hidden px-[28px] py-[22px]">
           <Header dm={dm} />

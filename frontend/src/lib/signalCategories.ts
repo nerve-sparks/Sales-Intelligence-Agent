@@ -34,6 +34,44 @@ export const CATEGORY_DESCRIPTIONS: Record<string, string> = {
   competitive_context: "Vendor landscape signals - existing vendors mentioned, replacement signals, competitive evaluation.",
 };
 
+/* Real signal_type values per category, from SIGNAL_CATEGORY_MAP in
+ * backend/app/services/signal_extractor.py (company_identity/reachability
+ * types omitted - same 6-category scope as SIGNAL_CATEGORY_OPTIONS above).
+ * Lets the Trigger Editor offer specific types, not just whole categories. */
+export const SIGNAL_TYPES_BY_CATEGORY: Record<string, string[]> = {
+  ai_seriousness: [
+    "ai_engineer_job_posting", "ai_budget_announcement", "ai_tool_adoption",
+    "ai_partnership_signed", "ai_pilot_announced", "ai_transformation_program",
+  ],
+  ai_pain_points: [
+    "operational_inefficiency", "quality_control_issue", "supply_chain_disruption",
+    "labour_shortage", "cost_pressure_mentioned", "compliance_burden",
+  ],
+  buying_stage: [
+    "rfp_published", "procurement_signal", "vendor_evaluation_mentioned",
+    "pilot_in_progress", "contract_awarded", "technology_assessment",
+  ],
+  budget_and_capital: [
+    "pe_investment_received", "funding_round_announced", "government_contract_awarded",
+    "tech_budget_announced", "acquisition_completed", "ipo_filed",
+  ],
+  urgency_and_catalysts: [
+    "ceo_change", "cto_change", "cfo_change", "leadership_mandate_announced",
+    "competitor_ai_adoption", "regulatory_change", "plant_expansion", "merger_announced",
+  ],
+  competitive_context: [
+    "existing_vendor_mentioned", "vendor_replacement_signal",
+    "greenfield_opportunity", "competitive_evaluation",
+  ],
+};
+
+export function typeLabel(type: string): string {
+  return type
+    .split("_")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
 export type CategoryStyle = { icon: LucideIcon; color: string; bg: string };
 
 export const CATEGORY_STYLE: Record<string, CategoryStyle> = {

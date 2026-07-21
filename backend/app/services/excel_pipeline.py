@@ -6,7 +6,16 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Company, CompanyIntent, CompanyNews, CompanyScoop, DecisionMaker, IcpProfile, LeadScore
+from app.models import (
+    Company,
+    CompanyIntent,
+    CompanyNews,
+    CompanyScoop,
+    DecisionMaker,
+    IcpImportBatch,
+    IcpProfile,
+    LeadScore,
+)
 from app.services import zoominfo_mapper as mapper
 from app.services.icp_filter import filter_companies
 from app.services.lead_scorer import run_scoring
@@ -108,7 +117,8 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
     await _upsert_companies(session, list(seen_companies.values()))
     await _upsert_decision_makers(session, list(seen_dms.values()) + dm_rows_no_id)
     await _insert_intents(session, list(seen_intents.values()))
-    await _insert_scoops(session, list(seen_scoops.values()))
+    await _insert_scoops(session, list
+    (seen_scoops.values()))
     await _insert_news(session, list(seen_news.values()))
     await session.commit()
 
@@ -116,19 +126,27 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
 
 
 async def run_pipeline(
-    session: AsyncSession, organisation_id: UUID, raw_rows: list[dict]
-) -> tuple[dict[int, UUID], dict, dict]:
-    """Full pipeline: upsert data, extract signals, score the whole organisation.
+    session: AsyncSession, organisation_id: UUID, raw_rows: list[dict], icp: IcpProfile
+) -> tuple[dict[int, UUID], dict, dict, set[UUID]]:
+    """Full pipeline: upsert data, extract signals (org-wide), score only
+    the companies matching the given ICP - the ICP is the actual target
+    list for this upload, not every company that happened to be in the
+    file. Signal extraction stays org-wide since it's just recording facts
+    about companies, not a judgment call the ICP should gate.
 
-    Returns (zi_to_company_id, signal_result, score_result) so callers (the
-    Excel import endpoint) can report real ingestion numbers instead of just
-    the scored workbook - signal_result is {"inserted", "skipped"} from
-    extract_signals, score_result is {"active", "nurture"} from run_scoring.
+    Returns (zi_to_company_id, signal_result, score_result, matching_ids)
+    so callers (the Excel import endpoint) can report real ingestion
+    numbers and reuse matching_ids for the "Matches ICP" export column
+    without re-querying it - signal_result is {"inserted", "skipped"} from
+    extract_signals, score_result is {"active", "nurture"} from run_scoring
+    (counts only cover the ICP-matched companies that were actually scored).
     """
     zi_to_company_id = await upsert_rows(session, organisation_id, raw_rows)
     signal_result = await extract_signals(session, organisation_id)
-    score_result = await run_scoring(session, organisation_id)
-    return zi_to_company_id, signal_result, score_result
+    matches = await filter_companies(session, icp)
+    matching_ids = {c.company_id for c in matches}
+    score_result = await run_scoring(session, organisation_id, company_ids=matching_ids)
+    return zi_to_company_id, signal_result, score_result, matching_ids
 
 
 async def matching_company_ids(session: AsyncSession, icp: IcpProfile) -> set[UUID]:
@@ -165,30 +183,34 @@ def build_scored_workbook(
     scores: dict[UUID, LeadScore],
     matching_ids: set[UUID],
 ) -> bytes:
-    """Returns the original uploaded rows, in the same order, with score
-    columns appended - as raw .xlsx bytes ready to stream back for download.
+    """Returns the uploaded rows with score columns appended, as raw .xlsx
+    bytes ready to stream back for download. Every row is still scored
+    regardless of ICP match (see run_scoring - scoring has no ICP
+    dependency), but the ICP is the actual target list a user is asking
+    for, so the output is ordered ICP matches first (ranked by lead_score
+    within that group), then non-matches after (also ranked by
+    lead_score) - not left in raw upload order.
     """
     if not raw_rows:
         header = []
     else:
         header = list(raw_rows[0].keys())
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Scored Companies"
-    ws.append(header + SCORE_COLUMNS)
-
+    scored_rows: list[tuple[bool, float | None, list]] = []
     for row in raw_rows:
         zi_company_id = mapper.parse_int(row.get("ZoomInfo Company ID"))
         company_id = zi_to_company_id.get(zi_company_id)
         score = scores.get(company_id) if company_id else None
+        matches_icp = company_id in matching_ids if company_id else False
 
         base_values = [row.get(col) for col in header]
         if score is None:
-            score_values = [company_id in matching_ids if company_id else False, "not scored"] + [None] * 9
+            lead_score_value = None
+            score_values = [matches_icp, "not scored"] + [None] * 9
         else:
+            lead_score_value = float(score.lead_score) if score.lead_score is not None else None
             score_values = [
-                company_id in matching_ids,
+                matches_icp,
                 score.gate_status,
                 score.gate_check_1,
                 score.gate_check_2,
@@ -198,13 +220,67 @@ def build_scored_workbook(
                 float(score.component_score) if score.component_score is not None else None,
                 float(score.p_convert) if score.p_convert is not None else None,
                 float(score.expected_deal_value_usd) if score.expected_deal_value_usd is not None else None,
-                float(score.lead_score) if score.lead_score is not None else None,
+                lead_score_value,
             ]
-        ws.append(base_values + score_values)
+        scored_rows.append((matches_icp, lead_score_value, base_values + score_values))
+
+    # ICP matches first; unscored rows (lead_score_value None) sort to the
+    # bottom of their group instead of breaking the sort.
+    scored_rows.sort(key=lambda r: (not r[0], -(r[1] if r[1] is not None else float("-inf"))))
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Scored Companies"
+    ws.append(header + SCORE_COLUMNS)
+    for _, _, full_row in scored_rows:
+        ws.append(full_row)
 
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+async def record_import_batch(
+    session: AsyncSession,
+    icp_id: UUID,
+    file_names: list[str],
+    total_rows: int,
+    zi_to_company_id: dict[int, UUID],
+    signal_result: dict,
+    matching_ids: set[UUID],
+    score_result: dict,
+) -> IcpImportBatch:
+    """Persists one upload event for the Settings > ICP Data page's history
+    list - a permanent audit record, separate from Company/Signal/LeadScore
+    which store the *result* of uploads, not that an upload happened."""
+    batch = IcpImportBatch(
+        icp_id=icp_id,
+        file_names=file_names,
+        files_processed=len(file_names),
+        total_rows=total_rows,
+        companies_ingested=len(zi_to_company_id),
+        signals_extracted=signal_result["inserted"],
+        matched_icp_count=len(matching_ids),
+        active_count=score_result["active"],
+        nurture_count=score_result["nurture"],
+    )
+    session.add(batch)
+    await session.commit()
+    await session.refresh(batch)
+    return batch
+
+
+async def list_import_batches(session: AsyncSession, workspace_id: UUID) -> list[tuple[IcpImportBatch, str | None]]:
+    """Every upload ever made against any ICP in this workspace, newest
+    first, paired with that ICP's name (joined in, not a column on the
+    batch itself - an ICP can be renamed/reused after the fact)."""
+    stmt = (
+        select(IcpImportBatch, IcpProfile.name)
+        .join(IcpProfile, IcpProfile.icp_id == IcpImportBatch.icp_id)
+        .where(IcpProfile.workspace_id == workspace_id)
+        .order_by(IcpImportBatch.created_at.desc())
+    )
+    return (await session.execute(stmt)).all()
 
 
 EXPORT_COMPANY_COLUMNS = [

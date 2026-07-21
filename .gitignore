@@ -1,6 +1,28 @@
 # Environment / secrets
 .env
 .env.*
+*firebase-adminsdk*.json
+serviceAccountKey.json
+backend/secrets/
+
+# Firebase CLI artifacts (emulators/hosting/deploy)
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+pglite-debug.log
+
+# Real prospect/company data exports (ZoomInfo etc.) - upload via the app,
+# don't commit the raw file. backend/Software_PA_Firms_With_ZI_Data.xlsx
+# predates this rule and is already in git history - a gitignore entry can't
+# remove it, that needs a separate deliberate history rewrite.
+backend/*.xlsx
+backend/*.csv
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Python
 __pycache__/
@@ -12,6 +34,9 @@ env/
 
 # Alembic
 backend/alembic/versions/__pycache__/
+
+# Uploaded assets (e.g. onboarding logos) - runtime data, not source
+backend/static/
 
 # Frontend (Node)
 node_modules/

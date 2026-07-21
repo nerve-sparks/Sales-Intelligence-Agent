@@ -1031,6 +1031,7 @@ export function SignalAnalyticsPage() {
         <TopBar
           searchPlaceholder="Search companies, triggers, executives..."
           showDetection={false}
+          showNotificationBell={false}
         />
 
         <main className="flex-1 overflow-x-hidden px-[28px] py-[22px]">

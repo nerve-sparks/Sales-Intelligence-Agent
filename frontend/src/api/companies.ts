@@ -38,15 +38,34 @@ export function listCompanies(
   return apiGet<CompanyListOut>(`/organisations/${organisationId}/companies${qs ? `?${qs}` : ""}`);
 }
 
+export type CountryLeadScoreOut = {
+  country: string;
+  avg_lead_score: number;
+  company_count: number;
+};
+
 export type CompanyStatsOut = {
   total: number;
   high_intent: number;
   medium_intent: number;
   low_intent: number;
+  by_country: CountryLeadScoreOut[];
 };
 
 export function getCompanyStats(organisationId: string): Promise<CompanyStatsOut> {
   return apiGet<CompanyStatsOut>(`/organisations/${organisationId}/companies/stats`);
+}
+
+export type CompanyInsightOut = {
+  summary: string;
+};
+
+/* LLM-generated (BridgeLLM, gemini/gemini-2.5-pro) - see
+ * backend/app/services/llm_client.py. Falls back to a plain real-numbers
+ * sentence server-side if LLM_API_KEY isn't configured, so this never
+ * throws just because the key is missing. */
+export function getCompanyInsight(organisationId: string): Promise<CompanyInsightOut> {
+  return apiGet<CompanyInsightOut>(`/organisations/${organisationId}/companies/insight`);
 }
 
 /* Company Directory + real LeadScore columns as an .xlsx download - icpId

@@ -46,3 +46,14 @@ export function listTriggers(workspaceId: string): Promise<TriggerOut[]> {
 export function getTriggerEvents(workspaceId: string, triggerId: string): Promise<TriggerEventsOut> {
   return apiGet<TriggerEventsOut>(`/workspaces/${workspaceId}/triggers/${triggerId}/events`);
 }
+
+export type TriggerInsightOut = {
+  summary: string;
+};
+
+/* LLM-generated (BridgeLLM, gemini/gemini-2.5-pro) - see
+ * backend/app/controllers/triggers.py::insight. Falls back to a plain
+ * real-numbers sentence server-side if LLM_API_KEY isn't configured. */
+export function getTriggerInsight(workspaceId: string): Promise<TriggerInsightOut> {
+  return apiGet<TriggerInsightOut>(`/workspaces/${workspaceId}/triggers/insight`);
+}

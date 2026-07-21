@@ -15,8 +15,9 @@ type Zone = keyof typeof ZONE;
 
 type LeadPoint = { lat: number; lng: number; zone: Zone; label: string };
 type Feature = { properties: Record<string, string | number> };
+export type CountryLeadScore = { country: string; avg_lead_score: number; company_count: number };
 
-const points: LeadPoint[] = [
+const dummyPoints: LeadPoint[] = [
   { lat: 37.77, lng: -122.42, zone: "hot", label: "San Francisco" },
   { lat: 40.71, lng: -74.0, zone: "hot", label: "New York" },
   { lat: 12.97, lng: 77.59, zone: "hot", label: "Bengaluru" },
@@ -31,20 +32,9 @@ const points: LeadPoint[] = [
   { lat: -33.87, lng: 151.21, zone: "monitor", label: "Sydney" },
 ];
 
-const hub = { lat: 37.77, lng: -122.42 };
-const arcs = points
-  .filter((p) => p.label !== "San Francisco")
-  .slice(0, 7)
-  .map((p) => ({
-    startLat: hub.lat,
-    startLng: hub.lng,
-    endLat: p.lat,
-    endLng: p.lng,
-    color: ZONE[p.zone],
-  }));
-
-/* Countries to shade, keyed by Natural Earth `ADMIN` name. */
-const HIGHLIGHT: Record<string, Zone> = {
+/* Countries to shade, keyed by Natural Earth `ADMIN` name. Fallback shown
+ * until real per-country signal data loads (see toRealPoints below). */
+const dummyHighlight: Record<string, Zone> = {
   "United States of America": "hot",
   India: "hot",
   "United Kingdom": "warm",
@@ -57,6 +47,76 @@ const HIGHLIGHT: Record<string, Zone> = {
   Australia: "monitor",
 };
 
+/* Approximate geographic centroids for the country names that actually
+ * appear in real Company.country data (same lowercase keys as
+ * SignalAnalyticsPage's COUNTRY_ISO, which solved the same "real ZoomInfo
+ * country name" problem for its 2D map) - country-level, not per-company,
+ * since Company has no lat/lng column at all. */
+const COUNTRY_CENTROID: Record<string, { lat: number; lng: number; admin: string }> = {
+  "united states": { lat: 39.8, lng: -98.6, admin: "United States of America" },
+  canada: { lat: 56.13, lng: -106.35, admin: "Canada" },
+  "united kingdom": { lat: 55.38, lng: -3.44, admin: "United Kingdom" },
+  india: { lat: 20.59, lng: 78.96, admin: "India" },
+  australia: { lat: -25.27, lng: 133.78, admin: "Australia" },
+  germany: { lat: 51.17, lng: 10.45, admin: "Germany" },
+  israel: { lat: 31.05, lng: 34.85, admin: "Israel" },
+  russia: { lat: 61.52, lng: 105.32, admin: "Russia" },
+  belgium: { lat: 50.5, lng: 4.47, admin: "Belgium" },
+  ireland: { lat: 53.41, lng: -8.24, admin: "Ireland" },
+  denmark: { lat: 56.26, lng: 9.5, admin: "Denmark" },
+  singapore: { lat: 1.35, lng: 103.82, admin: "Singapore" },
+  sweden: { lat: 60.13, lng: 18.64, admin: "Sweden" },
+  finland: { lat: 61.92, lng: 25.75, admin: "Finland" },
+  france: { lat: 46.23, lng: 2.21, admin: "France" },
+};
+
+/* Real avg LeadScore.lead_score per country -> globe points + polygon
+ * shading. 80/60 are the same real tier boundaries used everywhere else in
+ * the app (company_directory.HIGH_SCORE/MEDIUM_SCORE, the Enterprise List
+ * row badges) - 40 fills out the 4th zone the legend already has. */
+function zoneForScore(score: number): Zone {
+  if (score >= 80) return "hot";
+  if (score >= 60) return "warm";
+  if (score >= 40) return "emerging";
+  return "monitor";
+}
+
+function toRealPoints(byCountry: CountryLeadScore[]): { points: LeadPoint[]; highlight: Record<string, Zone> } {
+  const known = byCountry
+    .map((c) => ({ ...c, centroid: COUNTRY_CENTROID[c.country.toLowerCase()] }))
+    .filter((c): c is CountryLeadScore & { centroid: NonNullable<typeof c.centroid> } => Boolean(c.centroid));
+
+  const points = known.map((c) => ({
+    lat: c.centroid.lat,
+    lng: c.centroid.lng,
+    zone: zoneForScore(c.avg_lead_score),
+    label: `${c.country} - Lead Score ${Math.round(c.avg_lead_score)} (${c.company_count})`,
+  }));
+  const highlight: Record<string, Zone> = {};
+  for (const c of known) {
+    highlight[c.centroid.admin] = zoneForScore(c.avg_lead_score);
+  }
+  return { points, highlight };
+}
+
+function buildArcs(points: LeadPoint[]) {
+  if (points.length < 2) return [];
+  const hub = points.reduce((top, p) => {
+    const rank: Record<Zone, number> = { hot: 3, warm: 2, emerging: 1, monitor: 0 };
+    return rank[p.zone] > rank[top.zone] ? p : top;
+  }, points[0]);
+  return points
+    .filter((p) => p !== hub)
+    .slice(0, 7)
+    .map((p) => ({
+      startLat: hub.lat,
+      startLng: hub.lng,
+      endLat: p.lat,
+      endLng: p.lng,
+      color: ZONE[p.zone],
+    }));
+}
+
 /* Vivid outline palette for the glowing country borders (Paths-Layer look). */
 const OUTLINE = ["#2563eb", "#3b82f6", "#6366f1", "#7c3aed", "#a855f7", "#ec4899", "#f43f5e", "#ef4444", "#8b5cf6"];
 
@@ -65,11 +125,16 @@ function rgba(hex: string, alpha: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
-export default function LeadGlobe() {
+export default function LeadGlobe({ countryData }: { countryData?: CountryLeadScore[] }) {
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 480, height: 480 });
   const [countries, setCountries] = useState<Feature[]>([]);
+
+  const real = countryData && countryData.length > 0 ? toRealPoints(countryData) : null;
+  const points = real ? real.points : dummyPoints;
+  const HIGHLIGHT = real ? real.highlight : dummyHighlight;
+  const arcs = buildArcs(points);
 
   useEffect(() => {
     let active = true;

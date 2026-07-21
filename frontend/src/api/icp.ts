@@ -12,6 +12,7 @@ export type IcpOut = {
   countries: string[] | null;
   technologies: string[] | null;
   buying_committee_personas: string[] | null;
+  departments: string[] | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -26,6 +27,7 @@ export type IcpCreate = {
   countries?: string[] | null;
   technologies?: string[] | null;
   buying_committee_personas?: string[] | null;
+  departments?: string[] | null;
 };
 
 export type DecisionMakerOut = {
@@ -86,6 +88,21 @@ export type IcpCompaniesOut = {
   companies: CompanyOut[];
 };
 
+export type ImportBatchOut = {
+  import_batch_id: string;
+  icp_id: string;
+  icp_name: string | null;
+  file_names: string[] | null;
+  files_processed: number;
+  total_rows: number;
+  companies_ingested: number;
+  signals_extracted: number;
+  matched_icp_count: number;
+  active_count: number;
+  nurture_count: number;
+  created_at: string | null;
+};
+
 export function createIcp(workspaceId: string, payload: IcpCreate): Promise<IcpOut> {
   return apiPost<IcpOut>(`/workspaces/${workspaceId}/icp`, payload);
 }
@@ -96,4 +113,10 @@ export function listIcps(workspaceId: string): Promise<IcpOut[]> {
 
 export function getIcpCompanies(workspaceId: string, icpId: string): Promise<IcpCompaniesOut> {
   return apiGet<IcpCompaniesOut>(`/workspaces/${workspaceId}/icp/${icpId}/companies`);
+}
+
+/* Every upload ever made against any ICP in this workspace, newest first -
+ * the persisted audit trail for the Settings > ICP Data page. */
+export function listImportBatches(workspaceId: string): Promise<ImportBatchOut[]> {
+  return apiGet<ImportBatchOut[]>(`/workspaces/${workspaceId}/icp/imports`);
 }

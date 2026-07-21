@@ -9,23 +9,19 @@ import {
   Maximize2,
   Radio,
   Send,
+  Sparkles,
   Target,
 } from "lucide-react";
 import { lazy, Suspense } from "react";
 import earthImage from "../../assets/earth.png";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import {
-  Delta,
-  Sparkline,
-  UpTriangle,
-  smoothPath,
-  toPoints,
-} from "../../components/ui/dataviz";
+import { Delta, UpTriangle, smoothPath } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { useEffect, useState } from "react";
 import { getRankedScores, type RankedLeadScoreOut } from "../../api/scores";
-import { listSignals, type SignalWithCompanyOut } from "../../api/signals";
+import { getCompanyInsight, getCompanyStats, type CompanyStatsOut } from "../../api/companies";
+import { getSignalStats, listSignals, type SignalStatsOut, type SignalWithCompanyOut } from "../../api/signals";
 import { listWorkspaceMembers } from "../../api/workspaces";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
 
@@ -130,30 +126,43 @@ function ScoreRing({ score, tone }: { score: number; tone: string }) {
 /* Charts (inline SVG)                                                 */
 /* ------------------------------------------------------------------ */
 
-const trendSeries = [
-  { color: "#7c3aed", values: [22, 26, 17, 33, 27, 32, 40] },
-  { color: "#f97316", values: [17, 12, 18, 24, 19, 26, 30] },
-  { color: "#2563eb", values: [12, 14, 8, 20, 15, 13, 19] },
-];
-const trendLabels = ["May 14", "May 15", "May 16", "May 17", "May 18", "May 19", "May 20"];
+const emptyTrend: SignalStatsOut["trend"] = [];
 
-function TrendChart() {
+/* Real SignalStatsOut.trend (see api/signals.ts) - one point per day with
+ * high/medium/low confidence-tier counts, exactly the 3-series shape this
+ * chart already drew with fake data. */
+function TrendChart({ trend }: { trend: SignalStatsOut["trend"] }) {
   const w = 580;
   const h = 250;
   const left = 34;
   const right = w - 14;
   const top = 14;
   const bottom = 205;
-  const yMax = 45;
-  const gridValues = [0, 10, 20, 30, 40];
 
-  const xOf = (i: number) => left + (i * (right - left)) / (trendLabels.length - 1);
+  const series = [
+    { color: "#7c3aed", values: trend.map((t) => t.high) },
+    { color: "#f97316", values: trend.map((t) => t.medium) },
+    { color: "#2563eb", values: trend.map((t) => t.low) },
+  ];
+  const labels = trend.map((t) => new Date(t.date).toLocaleDateString(undefined, { month: "short", day: "numeric" }));
+  const yMax = Math.max(10, ...trend.map((t) => t.high), ...trend.map((t) => t.medium), ...trend.map((t) => t.low)) * 1.15;
+  const gridValues = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(yMax * f));
+
+  const xOf = (i: number) => left + (i * (right - left)) / Math.max(1, labels.length - 1);
   const yOf = (v: number) => bottom - (v / yMax) * (bottom - top);
+
+  if (trend.length === 0) {
+    return (
+      <div className="flex h-[250px] items-center justify-center text-[13px] text-[#94a3b8]">
+        No signal history yet.
+      </div>
+    );
+  }
 
   return (
     <svg className="w-full" viewBox={`0 0 ${w} ${h}`}>
       <defs>
-        {trendSeries.map((s, i) => (
+        {series.map((s, i) => (
           <linearGradient id={`trend-${i}`} key={i} x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor={s.color} stopOpacity="0.14" />
             <stop offset="100%" stopColor={s.color} stopOpacity="0" />
@@ -163,62 +172,35 @@ function TrendChart() {
 
       {gridValues.map((v) => (
         <g key={v}>
-          <line
-            stroke="#eef2f7"
-            strokeWidth="1"
-            x1={left}
-            x2={right}
-            y1={yOf(v)}
-            y2={yOf(v)}
-          />
-          <text
-            fill="#94a3b8"
-            fontSize="11"
-            textAnchor="end"
-            x={left - 8}
-            y={yOf(v) + 4}
-          >
+          <line stroke="#eef2f7" strokeWidth="1" x1={left} x2={right} y1={yOf(v)} y2={yOf(v)} />
+          <text fill="#94a3b8" fontSize="11" textAnchor="end" x={left - 8} y={yOf(v) + 4}>
             {v}
           </text>
         </g>
       ))}
 
-      {trendSeries.map((s, i) => {
+      {series.map((s, i) => {
         const pts = s.values.map((v, idx) => ({ x: xOf(idx), y: yOf(v) }));
         const line = smoothPath(pts);
-        const area = `${line} L ${pts[pts.length - 1].x} ${bottom} L ${pts[0].x} ${bottom} Z`;
+        const area = pts.length ? `${line} L ${pts[pts.length - 1].x} ${bottom} L ${pts[0].x} ${bottom} Z` : "";
 
         return (
           <g key={i}>
             <path d={area} fill={`url(#trend-${i})`} />
-            <path
-              d={line}
-              fill="none"
-              stroke={s.color}
-              strokeLinecap="round"
-              strokeWidth="2.5"
-            />
+            <path d={line} fill="none" stroke={s.color} strokeLinecap="round" strokeWidth="2.5" />
             {pts.map((p, idx) => (
-              <circle
-                cx={p.x}
-                cy={p.y}
-                fill="#ffffff"
-                key={idx}
-                r="3.4"
-                stroke={s.color}
-                strokeWidth="2"
-              />
+              <circle cx={p.x} cy={p.y} fill="#ffffff" key={idx} r="3.4" stroke={s.color} strokeWidth="2" />
             ))}
           </g>
         );
       })}
 
-      {trendLabels.map((label, i) => (
+      {labels.map((label, i) => (
         <text
           fill="#94a3b8"
           fontSize="11"
-          key={label}
-          textAnchor={i === 0 ? "start" : i === trendLabels.length - 1 ? "end" : "middle"}
+          key={`${label}-${i}`}
+          textAnchor={i === 0 ? "start" : i === labels.length - 1 ? "end" : "middle"}
           x={xOf(i)}
           y={bottom + 26}
         >
@@ -229,62 +211,23 @@ function TrendChart() {
   );
 }
 
-function PipelineAreaChart() {
-  const w = 420;
-  const h = 150;
-  const values = [30, 44, 38, 56, 62, 50, 66, 74, 62, 70, 58, 64];
-  const pts = toPoints(values, w, h, 6);
-  const line = smoothPath(pts);
-  const area = `${line} L ${pts[pts.length - 1].x} ${h} L ${pts[0].x} ${h} Z`;
-  const marker = pts[8];
+/* Real signalStats.trend daily totals, normalized to bar heights - replaces
+ * the old fully-fabricated miniBarHeights array. */
+function MiniBars({ trend }: { trend: SignalStatsOut["trend"] }) {
+  const totals = trend.slice(-14).map((t) => t.total);
+  const max = Math.max(1, ...totals);
 
-  return (
-    <svg className="w-full" preserveAspectRatio="none" viewBox={`0 0 ${w} ${h}`}>
-      <defs>
-        <linearGradient id="pipe-fill" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stopColor="#f97316" />
-          <stop offset="50%" stopColor="#a855f7" />
-          <stop offset="100%" stopColor="#2563eb" />
-        </linearGradient>
-        <linearGradient id="pipe-area" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor="#a855f7" stopOpacity="0.28" />
-          <stop offset="100%" stopColor="#2563eb" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={area} fill="url(#pipe-area)" />
-      <path
-        d={line}
-        fill="none"
-        stroke="url(#pipe-fill)"
-        strokeLinecap="round"
-        strokeWidth="2.5"
-        vectorEffect="non-scaling-stroke"
-      />
-      <circle
-        cx={marker.x}
-        cy={marker.y}
-        fill="#2563eb"
-        r="3.4"
-        stroke="#ffffff"
-        strokeWidth="2"
-        vectorEffect="non-scaling-stroke"
-      />
-    </svg>
-  );
-}
+  if (totals.length === 0) {
+    return null;
+  }
 
-const miniBarHeights = [
-  32, 46, 38, 54, 44, 62, 50, 68, 58, 74, 64, 80, 70, 88,
-];
-
-function MiniBars() {
   return (
     <div className="flex h-[38px] items-end gap-[3px]">
-      {miniBarHeights.map((height, i) => (
+      {totals.map((total, i) => (
         <span
           className="w-[5px] rounded-[2px] bg-gradient-to-t from-[#7c3aed] to-[#c084fc]"
           key={i}
-          style={{ height: `${height}%` }}
+          style={{ height: `${Math.max(6, (total / max) * 100)}%` }}
         />
       ))}
     </div>
@@ -295,60 +238,20 @@ function MiniBars() {
 /* Stat cards                                                          */
 /* ------------------------------------------------------------------ */
 
-const stats = [
-  {
-    icon: Flame,
-    iconBg: "bg-[#fff1e8]",
-    iconColor: "text-[#f97316]",
-    label: "Hot Prospects",
-    value: "148",
-    delta: "24.3%",
-    color: "#ef4444",
-    values: [30, 34, 28, 40, 33, 45, 38, 44, 36, 48, 42, 52],
-  },
-  {
-    icon: DollarSign,
-    iconBg: "bg-[#e8f0ff]",
-    iconColor: "text-[#2563eb]",
-    label: "Pipeline Value",
-    value: "$4.8M",
-    delta: "15.7%",
-    color: "#2563eb",
-    values: [20, 26, 22, 30, 25, 34, 29, 38, 33, 42, 44, 50],
-  },
-  {
-    icon: Radio,
-    iconBg: "bg-[#f3e8ff]",
-    iconColor: "text-[#7c3aed]",
-    label: "New Signals",
-    value: "23",
-    delta: "21.0%",
-    color: "#7c3aed",
-    values: [22, 20, 26, 24, 30, 27, 33, 31, 36, 34, 40, 42],
-  },
-  {
-    icon: Calendar,
-    iconBg: "bg-[#fff1e8]",
-    iconColor: "text-[#f97316]",
-    label: "Meetings Booked",
-    value: "17",
-    delta: "13.3%",
-    color: "#f97316",
-    values: [18, 24, 20, 28, 23, 30, 26, 33, 29, 36, 34, 40],
-  },
-  {
-    icon: Target,
-    iconBg: "bg-[#e8f0ff]",
-    iconColor: "text-[#2563eb]",
-    label: "Conversion Rate",
-    value: "22.4%",
-    delta: "3.6%",
-    color: "#2563eb",
-    values: [24, 22, 28, 25, 30, 27, 32, 29, 34, 31, 36, 38],
-  },
-];
+/* Same 5 icon slots as before - "Pipeline Value"/"Meetings Booked"/
+ * "Conversion Rate" had no backend concept at all (no deals/meetings model
+ * exists), so those 3 now show real CompanyStatsOut/SignalStatsOut numbers
+ * instead. Dropped the fake per-card sparkline/delta - there's no stored
+ * history to compute a real "vs last 7 days" change from. */
+function StatCards({ companyStats, signalStats }: { companyStats: CompanyStatsOut; signalStats: SignalStatsOut }) {
+  const stats = [
+    { icon: Flame, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Hot Prospects", value: String(companyStats.high_intent) },
+    { icon: DollarSign, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Total Companies", value: String(companyStats.total) },
+    { icon: Radio, iconBg: "bg-[#f3e8ff]", iconColor: "text-[#7c3aed]", label: "New Signals", value: String(signalStats.total) },
+    { icon: Calendar, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Actionable Signals", value: String(signalStats.actionable_count) },
+    { icon: Target, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Avg Signal Confidence", value: `${Math.round((signalStats.avg_confidence ?? 0) * 100)}%` },
+  ];
 
-function StatCards() {
   return (
     <div className="grid grid-cols-2 gap-[16px] sm:grid-cols-3 xl:grid-cols-5">
       {stats.map((stat) => {
@@ -377,16 +280,6 @@ function StatCards() {
               <span className="text-[30px] font-bold leading-none text-[#0f172a]">
                 {stat.value}
               </span>
-              <Delta value={stat.delta} />
-            </div>
-            <p className="m-0 mt-[6px] text-[12px] text-[#94a3b8]">vs last 7 days</p>
-
-            <div className="mt-[10px]">
-              <Sparkline
-                color={stat.color}
-                gradientId={`spark-${stat.label.replace(/\s+/g, "")}`}
-                values={stat.values}
-              />
             </div>
           </div>
         );
@@ -417,12 +310,20 @@ const globeFallback = (
   />
 );
 
-function LeadOpportunityMap() {
+function LeadOpportunityMap({
+  companyStats,
+  signalStats,
+  topProspect,
+}: {
+  companyStats: CompanyStatsOut;
+  signalStats: SignalStatsOut;
+  topProspect: ReturnType<typeof toProspect> | null;
+}) {
   return (
     <section className="relative flex min-h-[420px] flex-col overflow-hidden rounded-[18px] bg-[#0a1020] p-[24px] text-white">
       <div className="absolute inset-0 z-0">
         <Suspense fallback={globeFallback}>
-          <LeadGlobe />
+          <LeadGlobe countryData={companyStats.by_country} />
         </Suspense>
       </div>
 
@@ -459,36 +360,31 @@ function LeadOpportunityMap() {
         </div>
       </div>
 
-      <div className="absolute right-[26px] top-[150px] z-10 hidden w-[220px] rounded-[12px] border border-white/10 bg-[#111a2e]/85 p-[14px] backdrop-blur-sm sm:block">
-        <p className="m-0 text-[13px] font-bold text-white">ABC Accounting Group</p>
-        <p className="m-0 mt-[6px] text-[11px] text-[#cbd5e1]">
-          Lead Score <span className="font-bold text-white">92</span> •{" "}
-          <span className="text-[#f97316]">Hot Zone</span>
-        </p>
-        <div className="mt-[10px] flex items-center justify-between">
-          <span className="text-[11px] text-[#94a3b8]">New Lead Joined</span>
-          <span className="flex size-[26px] items-center justify-center rounded-full bg-gradient-to-r from-[#f5417f] to-[#c531d6] text-white">
-            <Send className="size-[13px]" />
-          </span>
+      {topProspect && (
+        <div className="absolute right-[26px] top-[150px] z-10 hidden w-[220px] rounded-[12px] border border-white/10 bg-[#111a2e]/85 p-[14px] backdrop-blur-sm sm:block">
+          <p className="m-0 text-[13px] font-bold text-white">{topProspect.company}</p>
+          <p className="m-0 mt-[6px] text-[11px] text-[#cbd5e1]">
+            Lead Score <span className="font-bold text-white">{topProspect.score}</span> •{" "}
+            <span className="text-[#f97316]">Top Match</span>
+          </p>
+          <div className="mt-[10px] flex items-center justify-between">
+            <span className="text-[11px] text-[#94a3b8]">{topProspect.action}</span>
+            <span className="flex size-[26px] items-center justify-center rounded-full bg-gradient-to-r from-[#f5417f] to-[#c531d6] text-white">
+              <Send className="size-[13px]" />
+            </span>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="relative z-10 mt-auto flex flex-col gap-[14px] pt-[22px] lg:flex-row lg:items-end lg:justify-between">
         <div className="w-fit rounded-[12px] border border-white/10 bg-white/5 p-[14px] backdrop-blur-sm">
           <p className="m-0 text-[12px] text-[#94a3b8]">Live Opportunities</p>
           <div className="mt-[4px] flex items-end gap-[10px]">
             <span className="text-[26px] font-bold leading-none text-white">
-              2,450
+              {companyStats.total.toLocaleString()}
             </span>
-            <MiniBars />
+            <MiniBars trend={signalStats.trend} />
           </div>
-          <p className="m-0 mt-[8px] flex items-center gap-[6px] text-[12px] text-[#94a3b8]">
-            <span className="inline-flex items-center gap-[3px] font-semibold text-[#4ade80]">
-              <UpTriangle className="size-[8px]" />
-              18.6%
-            </span>
-            vs last 7 days
-          </p>
         </div>
 
         <div className="flex items-end gap-[8px]">
@@ -529,37 +425,44 @@ function LeadOpportunityMap() {
 /* Lead Trend                                                          */
 /* ------------------------------------------------------------------ */
 
-const trendBuckets = [
-  { label: "High", value: "10", className: "bg-[#f5f3ff] text-[#7c3aed]" },
-  { label: "Medium", value: "8", className: "bg-[#fff7ed] text-[#f97316]" },
-  { label: "Low", value: "5", className: "bg-[#eff6ff] text-[#2563eb]" },
-];
+function LeadTrend({ signalStats }: { signalStats: SignalStatsOut }) {
+  const trend = signalStats.trend;
+  const firstTotal = trend[0]?.total ?? 0;
+  const lastTotal = trend[trend.length - 1]?.total ?? 0;
+  const delta = firstTotal > 0 ? `${Math.round(((lastTotal - firstTotal) / firstTotal) * 100)}%` : null;
 
-function LeadTrend() {
+  const trendBuckets = [
+    { label: "High", value: String(signalStats.high_intent), className: "bg-[#f5f3ff] text-[#7c3aed]" },
+    { label: "Medium", value: String(signalStats.medium_intent), className: "bg-[#fff7ed] text-[#f97316]" },
+    { label: "Low", value: String(signalStats.low_intent), className: "bg-[#eff6ff] text-[#2563eb]" },
+  ];
+
   return (
     <section className="flex flex-col rounded-[18px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex items-center justify-between">
-        <h2 className="m-0 text-[18px] font-bold text-[#0f172a]">Lead Trend</h2>
+        <h2 className="m-0 text-[18px] font-bold text-[#0f172a]">Signal Trends</h2>
         <button
           className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[12px] py-[7px] text-[13px] font-semibold text-[#475569]"
           type="button"
         >
-          This Week
+          Recent
           <ChevronDown className="size-[14px] text-[#94a3b8]" />
         </button>
       </div>
 
       <div className="mt-[14px] flex items-center gap-[10px]">
-        <span className="text-[26px] font-bold leading-none text-[#0f172a]">23</span>
-        <span className="text-[14px] font-semibold text-[#64748b]">Total Leads</span>
+        <span className="text-[26px] font-bold leading-none text-[#0f172a]">{signalStats.total}</span>
+        <span className="text-[14px] font-semibold text-[#64748b]">Total Signals</span>
       </div>
-      <p className="m-0 mt-[8px] flex items-center gap-[8px] text-[12px] text-[#94a3b8]">
-        <Delta value="21.0%" />
-        vs last 7 days
-      </p>
+      {delta && (
+        <p className="m-0 mt-[8px] flex items-center gap-[8px] text-[12px] text-[#94a3b8]">
+          <Delta value={delta} />
+          over this period
+        </p>
+      )}
 
       <div className="mt-[10px] flex-1">
-        <TrendChart />
+        <TrendChart trend={trend} />
       </div>
 
       <div className="mt-[16px] grid grid-cols-3 gap-[14px]">
@@ -791,65 +694,30 @@ function RecentSignals({ signals }: { signals: typeof dummyRecentSignals }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Pipeline Overview                                                   */
+/* Company Overview (was "Pipeline Overview" - no deal/pipeline-stage    */
+/* model exists in the backend at all - then a real intent-tier donut,   */
+/* now an AI-generated (BridgeLLM, gemini/gemini-2.5-pro - see            */
+/* backend/app/controllers/companies.py::insight) plain-English read of   */
+/* the real CompanyStatsOut numbers + top 5 real ranked companies. Falls  */
+/* back to a plain real-numbers sentence server-side if the LLM isn't     */
+/* configured, so this card always shows something real either way.)     */
 /* ------------------------------------------------------------------ */
 
-const pipelineStats = [
-  { label: "Active Opportunities", value: "64", delta: "12%" },
-  { label: "Proposal Sent", value: "18", delta: "8%" },
-  { label: "Negotiation", value: "9", delta: "3%" },
-  { label: "Won Deals", value: "7", delta: "16%" },
-  { label: "Win Rate", value: "21.9%", delta: "4.1%" },
-  { label: "Avg. Deal Size", value: "$42K", delta: "7.2%" },
-];
-
-function PipelineOverview() {
+function CompanyOverview({ summary, loading }: { summary: string | null; loading: boolean }) {
   return (
     <section className="rounded-[18px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="flex items-center justify-between">
-        <h2 className="m-0 text-[17px] font-bold text-[#0f172a]">
-          Pipeline Overview
-        </h2>
-        <button
-          className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[12px] py-[7px] text-[13px] font-semibold text-[#475569]"
-          type="button"
-        >
-          This Month
-          <ChevronDown className="size-[14px] text-[#94a3b8]" />
-        </button>
+      <div className="flex items-center gap-[8px]">
+        <Sparkles className="size-[16px] text-[#7c3aed]" />
+        <h2 className="m-0 text-[17px] font-bold text-[#0f172a]">AI Company Overview</h2>
       </div>
 
-      <p className="m-0 mt-[14px] text-[12px] text-[#94a3b8]">Total Pipeline Value</p>
-      <div className="mt-[4px] flex items-end gap-[10px]">
-        <span className="text-[28px] font-bold leading-none text-[#0f172a]">
-          $4.8M
-        </span>
-        <Delta value="15.7%" />
-        <span className="text-[12px] text-[#94a3b8]">vs last month</span>
-      </div>
-
-      <div className="relative mt-[14px]">
-        <span className="absolute right-0 top-0 z-10 rounded-[8px] border border-[#e2e8f0] bg-white px-[10px] py-[4px] text-[11px] font-semibold text-[#64748b] shadow-[0px_1px_2px_rgba(15,23,42,0.05)]">
-          Target: $6.0M
-        </span>
-        <PipelineAreaChart />
-      </div>
-
-      <div className="mt-[16px] grid grid-cols-3 gap-x-[14px] gap-y-[16px] border-t border-[#f1f5f9] pt-[16px]">
-        {pipelineStats.map((stat) => (
-          <div key={stat.label}>
-            <p className="m-0 text-[12px] font-medium text-[#94a3b8]">
-              {stat.label}
-            </p>
-            <div className="mt-[4px] flex items-center gap-[8px]">
-              <span className="text-[20px] font-bold leading-none text-[#0f172a]">
-                {stat.value}
-              </span>
-              <Delta value={stat.delta} />
-            </div>
-          </div>
-        ))}
-      </div>
+      {loading ? (
+        <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">Generating insight...</p>
+      ) : summary ? (
+        <p className="m-0 mt-[14px] text-[13px] leading-[20px] text-[#334155]">{summary}</p>
+      ) : (
+        <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">No data yet.</p>
+      )}
     </section>
   );
 }
@@ -858,10 +726,32 @@ function PipelineOverview() {
 /* Page                                                                */
 /* ------------------------------------------------------------------ */
 
+const emptyCompanyStats: CompanyStatsOut = { total: 0, high_intent: 0, medium_intent: 0, low_intent: 0, by_country: [] };
+const emptySignalStats: SignalStatsOut = {
+  total: 0,
+  high_intent: 0,
+  medium_intent: 0,
+  low_intent: 0,
+  company_count: 0,
+  avg_confidence: 0,
+  executives_impacted: 0,
+  actionable_count: 0,
+  by_category: [],
+  trend: emptyTrend,
+  top_signals: [],
+  histogram: [],
+  by_country: [],
+  by_source: [],
+};
+
 export function DashboardPage() {
   const [prospects, setProspects] = useState<typeof dummyProspects>(dummyProspects);
   const [recentSignals, setRecentSignals] = useState<typeof dummyRecentSignals>(dummyRecentSignals);
   const [firstName, setFirstName] = useState("Arjun");
+  const [companyStats, setCompanyStats] = useState<CompanyStatsOut>(emptyCompanyStats);
+  const [signalStats, setSignalStats] = useState<SignalStatsOut>(emptySignalStats);
+  const [companyInsight, setCompanyInsight] = useState<string | null>(null);
+  const [companyInsightLoading, setCompanyInsightLoading] = useState(true);
 
   // Same "workspace owner" lookup as TopBar's UserMenu (see OnboardingPage's
   // Workspace Setup step: addWorkspaceMember(..., { role: "owner" })) - just
@@ -886,6 +776,7 @@ export function DashboardPage() {
   useEffect(() => {
     const organisationId = getOrganisationId();
     if (!organisationId) {
+      setCompanyInsightLoading(false);
       return;
     }
     getRankedScores(organisationId)
@@ -906,14 +797,32 @@ export function DashboardPage() {
       .catch(() => {
         // No backend/org yet - keep the dummy rows.
       });
+    getCompanyStats(organisationId)
+      .then(setCompanyStats)
+      .catch(() => {
+        // No backend/org yet - keep the empty stats.
+      });
+    getSignalStats(organisationId)
+      .then(setSignalStats)
+      .catch(() => {
+        // No backend/org yet - keep the empty stats.
+      });
+    getCompanyInsight(organisationId)
+      .then((res) => setCompanyInsight(res.summary))
+      .catch(() => {
+        // No backend/org yet, or LLM call failed - leave summary null.
+      })
+      .finally(() => setCompanyInsightLoading(false));
   }, []);
+
+  const topProspect = prospects !== dummyProspects ? prospects[0] ?? null : null;
 
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Dashboard" />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar showAIAssistant={false} />
+        <TopBar showAIAssistant={false} showDetection={false} showNotificationBell={false} />
 
         <main className="flex-1 overflow-x-hidden px-[24px] py-[24px]">
           <div className="flex items-start justify-between gap-[16px]">
@@ -936,18 +845,18 @@ export function DashboardPage() {
           </div>
 
           <div className="mt-[22px]">
-            <StatCards />
+            <StatCards companyStats={companyStats} signalStats={signalStats} />
           </div>
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
-            <LeadOpportunityMap />
-            <LeadTrend />
+            <LeadOpportunityMap companyStats={companyStats} signalStats={signalStats} topProspect={topProspect} />
+            <LeadTrend signalStats={signalStats} />
           </div>
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[1.35fr_0.9fr_1.05fr]">
             <TopPriorityProspects prospects={prospects} />
             <RecentSignals signals={recentSignals} />
-            <PipelineOverview />
+            <CompanyOverview loading={companyInsightLoading} summary={companyInsight} />
           </div>
         </main>
       </div>

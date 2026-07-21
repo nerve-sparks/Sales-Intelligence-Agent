@@ -32,3 +32,7 @@ class TriggerEventsOut(BaseModel):
     trigger: TriggerOut
     event_count: int
     events: list[TriggerEventOut]
+
+
+class TriggerInsightOut(BaseModel):
+    summary: str

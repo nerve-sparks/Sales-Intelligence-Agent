@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from sqlalchemy import bindparam, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -336,15 +337,21 @@ async def score_company(session: AsyncSession, company_id) -> dict:
     return {"company_id": company_id, "gate_status": gate_status}
 
 
-async def run_scoring(session: AsyncSession, organisation_id) -> dict:
-    company_ids = (
-        await session.execute(
-            select(Company.company_id).where(Company.organisation_id == organisation_id)
-        )
-    ).scalars().all()
+async def run_scoring(
+    session: AsyncSession, organisation_id, company_ids: set[UUID] | None = None
+) -> dict:
+    """Scores every company in the org, unless company_ids is given - then
+    only those companies are scored (used by the Excel upload pipeline to
+    restrict scoring to a specific ICP's matches). The standalone
+    POST /scores/run endpoint has no ICP in scope, so it always calls this
+    with company_ids=None (whole-org, unchanged)."""
+    stmt = select(Company.company_id).where(Company.organisation_id == organisation_id)
+    if company_ids is not None:
+        stmt = stmt.where(Company.company_id.in_(company_ids))
+    company_ids_to_score = (await session.execute(stmt)).scalars().all()
 
     active = nurture = 0
-    for company_id in company_ids:
+    for company_id in company_ids_to_score:
         result = await score_company(session, company_id)
         if result["gate_status"] == "active":
             active += 1

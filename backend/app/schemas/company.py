@@ -124,11 +124,22 @@ class CompanyListOut(BaseModel):
     page_size: int
 
 
+class CountryLeadScoreOut(BaseModel):
+    country: str
+    avg_lead_score: float
+    company_count: int
+
+
 class CompanyStatsOut(BaseModel):
     total: int
     high_intent: int
     medium_intent: int
     low_intent: int
+    by_country: list[CountryLeadScoreOut] = []
+
+
+class CompanyInsightOut(BaseModel):
+    summary: str
 
 
 class ScoopEnrichOut(BaseModel):

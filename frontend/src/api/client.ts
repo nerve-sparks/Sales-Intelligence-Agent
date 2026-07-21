@@ -1,7 +1,7 @@
 /* Shared fetch wrapper for every file in src/api/. One file per backend
  * routes/*.py file - keep that mapping when adding new endpoints. */
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8175";
+export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8175";
 
 export class ApiError extends Error {
   status: number;
@@ -49,6 +49,17 @@ export function apiGet<T>(path: string): Promise<T> {
 
 export function apiPost<T>(path: string, body?: unknown): Promise<T> {
   return apiFetch<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
+}
+
+/* For endpoints that take a multipart file and return JSON (e.g. the logo
+ * upload) - as opposed to apiPostForBlob below, which is FormData in AND a
+ * binary file out. */
+export async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
+  const response = await fetch(`${BASE_URL}${path}`, { method: "POST", body: formData });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorDetail(response));
+  }
+  return (await response.json()) as T;
 }
 
 /* For endpoints that return a binary file (e.g. the scored Excel download)

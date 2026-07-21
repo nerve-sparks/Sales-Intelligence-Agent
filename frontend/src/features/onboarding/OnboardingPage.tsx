@@ -7,43 +7,42 @@ import {
   BarChart3,
   Building2,
   Database,
-  Ellipsis,
-  Eye,
   Factory,
   Filter,
-  Grid2X2,
   GraduationCap,
   HeartPulse,
   Landmark,
-  Lock,
   Mail,
   MoreVertical,
-  Pencil,
   PlayCircle,
   RadioTower,
   RefreshCcw,
   Search,
   ShieldCheck,
   ShoppingCart,
+  Sparkles,
   Target,
   TrendingUp,
   Upload,
   User,
   Users,
+  X,
   Zap,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FigmaLogo } from "../auth/LoginPage";
-import { ApiError } from "../../api/client";
-import { createOrganisation } from "../../api/organisations";
+import { ApiError, BASE_URL } from "../../api/client";
+import { createOrganisation, getIcpRecommendations, type IcpRecommendationOut } from "../../api/organisations";
+import { uploadLogo } from "../../api/uploads";
 import { addWorkspaceMember, createWorkspace } from "../../api/workspaces";
 import { createUser } from "../../api/users";
 import {
   setOrganisationId as setSessionOrganisationId,
   setWorkspaceId as setSessionWorkspaceId,
 } from "../../lib/session";
-import { createIcp } from "../../api/icp";
+import { createIcp, listIcps, type IcpOut } from "../../api/icp";
+import { createTrigger, listTriggers, type TriggerCreate, type TriggerOut } from "../../api/triggers";
 import { uploadExcel, type ExcelImportStats } from "../../api/icpImports";
 import goLiveRocketImage from "../../assets/figma/onboarding/go-live-rocket.png";
 import heroImage from "../../assets/figma/onboarding/raw-image-1.png";
@@ -106,6 +105,7 @@ type OnboardingFormState = {
   user_email: string;
   timezone: string;
   account_url: string;
+  account_logo_url: string;
   currency: string;
   date_format: string;
   company_name: string;
@@ -129,6 +129,7 @@ const initialFormState: OnboardingFormState = {
   user_email: "",
   timezone: "",
   account_url: "",
+  account_logo_url: "",
   currency: "",
   date_format: "MM/DD/YYYY",
   company_name: "",
@@ -136,7 +137,7 @@ const initialFormState: OnboardingFormState = {
   legal_business_name: "",
   industry: "",
   sub_industry: "",
-  business_type: "",
+  business_type: "B2B",
   headquarters_location: "",
   founded_year: "",
   employee_count_range: "",
@@ -154,11 +155,20 @@ const TIMEZONE_OPTIONS = [
   "(GMT+05:30) India Standard Time",
 ];
 const CURRENCY_OPTIONS = ["USD - US Dollar ( $ )", "EUR - Euro ( € )", "GBP - British Pound ( £ )", "INR - Indian Rupee ( ₹ )"];
-const BUSINESS_TYPE_OPTIONS = ["B2B"];
 // Scoped to Organization Setup's "Industry" field only - the Industry
 // Selection step and ICP Generation's "Primary Industry" field still use
-// the full `industries` list further below.
-const ORG_INDUSTRY_OPTIONS = ["Manufacturing"];
+// the full `industries` list further below. Real ZoomInfo "Primary Industry"
+// values pulled from actual uploaded company data (same source list as
+// Settings > ICP Data Management's industry dropdown) - was previously
+// hardcoded to a single "Manufacturing" option, forcing every organisation
+// created through onboarding to be mislabeled regardless of what the
+// company actually does.
+const ORG_INDUSTRY_OPTIONS = [
+  "Business Services", "Construction", "Education", "Energy, Utilities & Waste",
+  "Finance", "Healthcare Services", "Hospitality", "Hospitals & Physicians Clinics",
+  "Insurance", "Manufacturing", "Media & Internet", "Minerals & Mining",
+  "Real Estate", "Retail", "Software", "Telecommunications", "Transportation",
+];
 const COMPANY_SIZE_OPTIONS = ["1 - 10", "11 - 50", "51 - 200", "201 - 500", "501 - 1000", "1000+"];
 const ANNUAL_REVENUE_OPTIONS = ["<$1M", "$1M - $10M", "$10M - $50M", "$50M - $100M", "$100M - $250M", "$250M+"];
 const TIME_IN_BUSINESS_OPTIONS = ["<1 Year", "1 - 5 Years", "6 - 10 Years", "10+ Years"];
@@ -175,47 +185,58 @@ function getDepartmentOptions(industry: string): string[] {
   return DEPARTMENT_OPTIONS_BY_INDUSTRY[industry] ?? DEFAULT_DEPARTMENT_OPTIONS;
 }
 
+function formatMoney(value: number | null): string {
+  if (value === null) return "";
+  return value >= 1_000_000 ? `$${(value / 1_000_000).toFixed(1)}M` : `$${value.toLocaleString()}`;
+}
+
+function formatRange(min: number | null, max: number | null, formatter: (v: number | null) => string): string {
+  if (min === null && max === null) return "Any";
+  if (min !== null && max === null) return `${formatter(min)}+`;
+  if (min === null && max !== null) return `Up to ${formatter(max)}`;
+  return `${formatter(min)} – ${formatter(max)}`;
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
+}
+
 /* ICP Generation step - maps to POST /workspaces/{workspace_id}/icp
  * (IcpProfile: name/industries/employee_min/max/revenue_min/max_usd/
- * countries/technologies/buying_committee_personas). Growth Stage and
- * Business Model have no backend column on IcpProfile - kept as working
- * UI state but never sent, same pattern as time_in_business earlier. */
+ * countries/technologies/departments). Growth Stage, Business Model, Pain
+ * Points, and Business Goals were removed entirely - none of them have a
+ * backend column on IcpProfile, so they were either required-but-discarded
+ * or silently discarded on submit. Buying Committee (buying_committee_
+ * personas) is intentionally not collected here - still editable later from
+ * Settings > ICP Data Management. */
 type IcpFormState = {
   industry: string;
   company_size: string;
   annual_revenue: string;
-  headquarters_country: string;
-  growth_stage: string;
-  business_model: string;
+  headquarters_countries: string[];
   technologies: string;
-  buying_committee_persona: string;
-  pain_points: string;
-  business_goals: string;
+  departments: string[];
 };
 
 const initialIcpFormState: IcpFormState = {
   industry: "",
   company_size: "",
   annual_revenue: "",
-  headquarters_country: "",
-  growth_stage: "",
-  business_model: "",
+  headquarters_countries: [],
   technologies: "",
-  buying_committee_persona: "",
-  pain_points: "",
-  business_goals: "",
+  departments: [],
 };
 
-const ICP_COUNTRY_OPTIONS = ["United States", "India", "United Kingdom", "Canada", "Germany", "Australia", "Singapore", "Israel", "Brazil", "Japan"];
-const ICP_GROWTH_STAGE_OPTIONS = ["Seed", "Early Stage", "Growth Stage", "Mature", "Enterprise"];
-const ICP_BUSINESS_MODEL_OPTIONS = ["B2B", "B2C", "B2B2C"];
-// Matches PERSONA_VALUES in app/models/decision_maker.py - IcpProfile
-// stores these as free text, but only these values ever match a real
-// DecisionMaker.persona in the filter (see icp_filter.py).
-const ICP_PERSONA_OPTIONS = [
-  "ceo", "president", "coo", "cfo", "cto", "cio", "ciso",
-  "chief_revenue_officer", "chief_marketing_officer", "chief_sales_officer",
-  "vp_sales", "vp_operations", "director", "managing_director", "general_manager",
+// Real, distinct Company.country values pulled from actual uploaded data
+// (same sourcing approach as the industries list above) - the previous list
+// included "Brazil"/"Japan" (0 real companies in either) and was missing 7
+// countries that real data actually has (Russia, Belgium, Ireland, Denmark,
+// Singapore, Sweden, Finland, France).
+const ICP_COUNTRY_OPTIONS = [
+  "United States", "Canada", "United Kingdom", "India", "Australia",
+  "Germany", "Israel", "Russia", "Belgium", "Ireland", "Denmark",
+  "Singapore", "Sweden", "Finland", "France",
 ];
 
 function parseEmployeeRange(band: string): { min: number | null; max: number | null } {
@@ -243,7 +264,6 @@ const steps = [
   ["Workspace", "Setup"],
   ["Team", "Invitations"],
   ["Data Source", "Setup"],
-  ["CRM", "Integration"],
   ["Trigger", "Generation"],
   ["ICP", "Generation"],
   ["Business", "Discovery"],
@@ -313,22 +333,27 @@ const invitedMembers = [
   },
 ];
 
+// title is the real, exact ZoomInfo "Primary Industry" string (used as-is
+// for the ICP dropdown below) - the earlier version of this list used
+// marketing labels like "Software & SaaS" that never matched any real
+// company (ZoomInfo's actual value is just "Software"), silently zeroing
+// out every ICP that used them.
 const industries = [
   {
-    title: "Software & SaaS",
+    title: "Software",
     text: "Software, SaaS, Cloud Services, AI/ML, and related platforms.",
     icon: Code2,
     selected: true,
     iconClassName: "bg-[#dbeafe] text-[#005bff]",
   },
   {
-    title: "Financial Services",
+    title: "Finance",
     text: "Banking, Insurance, FinTech, Investment, and Financial Services.",
     icon: Landmark,
     iconClassName: "bg-[#dcfce7] text-[#16a34a]",
   },
   {
-    title: "Healthcare & Life Sciences",
+    title: "Hospitals & Physicians Clinics",
     text: "Healthcare, Medical Devices, Pharma, Biotech, and HealthTech.",
     icon: HeartPulse,
     iconClassName: "bg-[#f3e8ff] text-[#7c3aed]",
@@ -340,13 +365,13 @@ const industries = [
     iconClassName: "bg-[#fee2e2] text-[#f75317]",
   },
   {
-    title: "Retail & E-commerce",
+    title: "Retail",
     text: "Retail, E-commerce, Marketplaces, and Consumer Goods.",
     icon: ShoppingCart,
     iconClassName: "bg-[#fce7f3] text-[#db2777]",
   },
   {
-    title: "Technology Services",
+    title: "Business Services",
     text: "IT Services, Consulting, System Integrators, and Managed Services.",
     icon: Code2,
     iconClassName: "bg-[#cffafe] text-[#0891b2]",
@@ -364,28 +389,22 @@ const industries = [
     iconClassName: "bg-[#dbeafe] text-[#2563eb]",
   },
   {
-    title: "Media & Entertainment",
+    title: "Media & Internet",
     text: "Media, Entertainment, Publishing, Gaming, and Streaming.",
     icon: PlayCircle,
     iconClassName: "bg-[#fee2e2] text-[#f75317]",
   },
   {
-    title: "Telecom",
+    title: "Telecommunications",
     text: "Telecommunications, Networking, and Communication Services.",
     icon: RadioTower,
     iconClassName: "bg-[#cffafe] text-[#0891b2]",
   },
   {
-    title: "Energy & Utilities",
+    title: "Energy, Utilities & Waste",
     text: "Energy, Oil & Gas, Utilities, Renewable Energy, and Cleantech.",
     icon: Zap,
     iconClassName: "bg-[#fef3c7] text-[#f59e0b]",
-  },
-  {
-    title: "Other",
-    text: "Non-profit, Government, Logistics, Travel, and other industries.",
-    icon: Ellipsis,
-    iconClassName: "bg-[#eef2ff] text-[#312e81]",
   },
 ];
 
@@ -451,205 +470,27 @@ const dataSources = [
   },
 ];
 
-const crmOptions = [
-  {
-    name: "Salesforce",
-    logo: "salesforce",
-    logoClassName: "bg-[#18a8e8] text-white",
-    selected: true,
-    helper: "Recommended",
-  },
-  {
-    name: "HubSpot",
-    logo: "hub",
-    logoClassName: "bg-white text-[#ff5a1f]",
-  },
-  {
-    name: "Microsoft Dynamics 365",
-    logo: "D",
-    logoClassName: "bg-[#eef2ff] text-[#312e81]",
-  },
-  {
-    name: "Pipedrive",
-    logo: "p",
-    logoClassName: "bg-white text-[#111827]",
-  },
-  {
-    name: "Zoho CRM",
-    logo: "ZOHO",
-    logoClassName: "bg-[#fef3c7] text-[#dc2626]",
-  },
-  {
-    name: "Freshsales",
-    logo: "f",
-    logoClassName: "bg-[#fbbf24] text-white",
-  },
-  {
-    name: "Insightly",
-    logo: "in",
-    logoClassName: "bg-white text-[#f97316]",
-  },
-  {
-    name: "Nimble",
-    logo: "*",
-    logoClassName: "bg-white text-[#0284c7]",
-  },
-  {
-    name: "Copper",
-    logo: "copper",
-    logoClassName: "bg-white text-[#111827]",
-  },
-  {
-    name: "Custom CRM",
-    logo: "db",
-    logoClassName: "bg-white text-[#0f1f6f]",
-  },
-];
+// Keyed by signal.signal_category (see SIGNAL_CATEGORY_MAP in
+// backend/app/services/signal_extractor.py for the real category values) -
+// purely a visual treatment, the underlying trigger data is real.
+const TRIGGER_CATEGORY_STYLES: Record<string, { icon: typeof Zap; className: string }> = {
+  ai_seriousness: { icon: Zap, className: "bg-[#eef2ff] text-[#4f46e5]" },
+  ai_pain_points: { icon: Filter, className: "bg-[#fff7ed] text-[#f97316]" },
+  budget_and_capital: { icon: Target, className: "bg-[#ede9fe] text-[#7c3aed]" },
+  buying_stage: { icon: TrendingUp, className: "bg-[#eff6ff] text-[#005bff]" },
+  company_identity: { icon: Building2, className: "bg-[#fce7f3] text-[#db2777]" },
+  competitive_context: { icon: RefreshCcw, className: "bg-[#cffafe] text-[#0891b2]" },
+  reachability: { icon: Users, className: "bg-[#dcfce7] text-[#16a34a]" },
+  urgency_and_catalysts: { icon: RadioTower, className: "bg-[#f3e8ff] text-[#9333ea]" },
+};
+const DEFAULT_TRIGGER_STYLE = { icon: Zap, className: "bg-[#eef2ff] text-[#4f46e5]" };
 
-const salesforceBenefits = [
-  {
-    title: "Secure Connection",
-    text: "Connect using OAuth 2.0 in a few clicks.",
-    icon: Lock,
-    className: "bg-[#eef2ff] text-[#005bff]",
-  },
-  {
-    title: "Data We Sync",
-    text: "Accounts, Contacts, Leads, Opportunities, Activities, and Campaigns.",
-    icon: RefreshCcw,
-    className: "bg-[#eef2ff] text-[#005bff]",
-  },
-  {
-    title: "Real-time Sync",
-    text: "Keep your data up-to-date with incremental syncs.",
-    icon: Clock3,
-    className: "bg-[#dcfce7] text-[#16a34a]",
-  },
-  {
-    title: "Smart Mapping",
-    text: "We'll help you map fields and avoid duplicates.",
-    icon: Grid2X2,
-    className: "bg-[#eef2ff] text-[#005bff]",
-  },
-];
-
-const recommendedTriggers = [
-  {
-    name: "New Executive Hire",
-    description: "New C-level or VP hire in Sales, Marketing, or Revenue teams.",
-    priority: "High",
-    score: 92,
-    icon: Users,
-    iconClassName: "bg-[#dcfce7] text-[#16a34a]",
-    source: "in",
-  },
-  {
-    name: "Funding Raised",
-    description: "Company has raised new funding or funding round announced.",
-    priority: "High",
-    score: 89,
-    icon: Target,
-    iconClassName: "bg-[#ede9fe] text-[#7c3aed]",
-    source: "cb",
-  },
-  {
-    name: "Hiring Growth",
-    description: "Significant increase in hiring activity across key departments.",
-    priority: "High",
-    score: 85,
-    icon: TrendingUp,
-    iconClassName: "bg-[#fff7ed] text-[#f97316]",
-    source: "in",
-  },
-  {
-    name: "Technology Adoption",
-    description: "Company is adopting new technologies or tools.",
-    priority: "Medium",
-    score: 72,
-    icon: Code2,
-    iconClassName: "bg-[#eff6ff] text-[#005bff]",
-    source: "api",
-  },
-  {
-    name: "Geographic Expansion",
-    description: "Company is expanding to new regions or countries.",
-    priority: "Medium",
-    score: 68,
-    icon: Building2,
-    iconClassName: "bg-[#fce7f3] text-[#db2777]",
-    source: "in",
-  },
-  {
-    name: "Competitor Switch",
-    description: "Signals indicating a switch from a competitor or existing solution.",
-    priority: "High",
-    score: 88,
-    icon: RefreshCcw,
-    iconClassName: "bg-[#cffafe] text-[#0891b2]",
-    source: "cb",
-  },
-  {
-    name: "Product Launch",
-    description: "New product or feature launch.",
-    priority: "Medium",
-    score: 65,
-    icon: RadioTower,
-    iconClassName: "bg-[#f3e8ff] text-[#9333ea]",
-    source: "rss",
-  },
-  {
-    name: "Company Growth",
-    description: "High growth in revenue, headcount, or market share.",
-    priority: "Medium",
-    score: 70,
-    icon: BarChart3,
-    iconClassName: "bg-[#dcfce7] text-[#16a34a]",
-    source: "cb",
-  },
-];
-
-const icpLibraryRows = [
-  {
-    name: "Enterprise SaaS ICP",
-    industry: "Software & SaaS",
-    size: "201 - 500",
-    revenue: "$10M - $250M",
-    date: "May 20, 2025",
-    status: "Active",
-  },
-  {
-    name: "FinTech Growth ICP",
-    industry: "Financial Services",
-    size: "101 - 300",
-    revenue: "$5M - $100M",
-    date: "May 18, 2025",
-    status: "Active",
-  },
-  {
-    name: "Healthcare Tech ICP",
-    industry: "Healthcare & Life Sciences",
-    size: "51 - 200",
-    revenue: "$5M - $50M",
-    date: "May 15, 2025",
-    status: "Inactive",
-  },
-  {
-    name: "Manufacturing ICP",
-    industry: "Manufacturing",
-    size: "201 - 1000",
-    revenue: "$20M - $500M",
-    date: "May 10, 2025",
-    status: "Active",
-  },
-  {
-    name: "E-commerce ICP",
-    industry: "Retail & E-commerce",
-    size: "51 - 200",
-    revenue: "$5M - $50M",
-    date: "May 08, 2025",
-    status: "Inactive",
-  },
-];
+function humanizeEnumValue(value: string): string {
+  return value
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
 
 /* Real stages of excel_pipeline.run_pipeline (see app/services/
  * excel_pipeline.py) - this replaces a mockup "AI is scanning your website/
@@ -741,7 +582,6 @@ const setupSummaryItems = [
   "Business Discovery",
   "ICP Generation",
   "Trigger Generation",
-  "CRM Integration",
   "Data Source Setup",
   "Go Live",
 ];
@@ -805,57 +645,236 @@ type SelectFieldProps = {
 };
 
 function SelectField({ icon, label, required, value, onChange, options }: SelectFieldProps) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onOutsideClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onOutsideClick);
+    return () => document.removeEventListener("mousedown", onOutsideClick);
+  }, [open]);
+
   return (
     <div className="flex flex-col gap-[8px]">
       <FieldLabel required={required}>{label}</FieldLabel>
-      <div className="relative flex h-[42px] items-center rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc]">
-        <img
-          alt=""
-          className="pointer-events-none absolute left-[12px] z-10 size-[20px]"
-          src={icon}
-        />
-        <select
-          className="h-full w-full appearance-none rounded-[8px] bg-transparent pl-[41px] pr-[36px] font-['Inter'] text-[14px] leading-[20px] text-[#0f172a] outline-none"
-          onChange={(e) => onChange(e.target.value)}
-          value={value}
+      <div className="relative" ref={rootRef}>
+        <button
+          className="relative flex h-[42px] w-full items-center rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc] pl-[41px] pr-[36px] text-left font-['Inter'] text-[14px] leading-[20px] outline-none"
+          onClick={() => setOpen((o) => !o)}
+          type="button"
         >
-          <option disabled value="">
-            Select {label.toLowerCase()}
-          </option>
-          {options.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
-        <ChevronDown
-          aria-hidden="true"
-          className="pointer-events-none absolute right-[12px] size-[17px] text-[#64748b]"
-          strokeWidth={2}
-        />
+          <img alt="" className="pointer-events-none absolute left-[12px] size-[20px]" src={icon} />
+          <span className={value ? "text-[#0f172a]" : "text-[#94a3b8]"}>
+            {value || `Select ${label.toLowerCase()}`}
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            className="pointer-events-none absolute right-[12px] size-[17px] text-[#64748b]"
+            strokeWidth={2}
+          />
+        </button>
+
+        {open && (
+          <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-20 max-h-[220px] overflow-y-auto rounded-[8px] border border-[#e2e8f0] bg-white py-[4px] shadow-[0px_8px_20px_rgba(15,23,42,0.12)]">
+            {options.map((option) => (
+              <button
+                className={`block w-full px-[14px] py-[9px] text-left font-['Inter'] text-[14px] leading-[20px] ${
+                  option === value ? "bg-[#eef1ff] text-[#4f46e5]" : "text-[#0f172a] hover:bg-[#f8fafc]"
+                }`}
+                key={option}
+                onClick={() => {
+                  onChange(option);
+                  setOpen(false);
+                }}
+                type="button"
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function LogoUpload() {
+function MultiSelectField({
+  icon,
+  label,
+  required,
+  values,
+  onChange,
+  options,
+  humanize,
+}: {
+  icon: string;
+  label: string;
+  required?: boolean;
+  values: string[];
+  onChange: (values: string[]) => void;
+  options: string[];
+  humanize?: (value: string) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const display = humanize ?? ((v: string) => v);
+
+  useEffect(() => {
+    if (!open) return;
+    const onOutsideClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onOutsideClick);
+    return () => document.removeEventListener("mousedown", onOutsideClick);
+  }, [open]);
+
+  const toggle = (option: string) => {
+    onChange(values.includes(option) ? values.filter((v) => v !== option) : [...values, option]);
+  };
+
+  return (
+    <div className="flex flex-col gap-[8px]">
+      <FieldLabel required={required}>{label}</FieldLabel>
+      <div className="relative" ref={rootRef}>
+        <button
+          className="relative flex h-[42px] w-full items-center rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc] pl-[41px] pr-[36px] text-left font-['Inter'] text-[14px] leading-[20px] outline-none"
+          onClick={() => setOpen((o) => !o)}
+          type="button"
+        >
+          <img alt="" className="pointer-events-none absolute left-[12px] size-[20px]" src={icon} />
+          <span className={`truncate ${values.length ? "text-[#0f172a]" : "text-[#94a3b8]"}`}>
+            {values.length ? values.map(display).join(", ") : `Select ${label.toLowerCase()}`}
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            className="pointer-events-none absolute right-[12px] size-[17px] text-[#64748b]"
+            strokeWidth={2}
+          />
+        </button>
+
+        {open && (
+          <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-20 max-h-[220px] overflow-y-auto rounded-[8px] border border-[#e2e8f0] bg-white py-[4px] shadow-[0px_8px_20px_rgba(15,23,42,0.12)]">
+            {options.map((option) => {
+              const isSelected = values.includes(option);
+              return (
+                <button
+                  className={`flex w-full items-center gap-[8px] px-[14px] py-[9px] text-left font-['Inter'] text-[14px] leading-[20px] ${
+                    isSelected ? "bg-[#eef1ff] text-[#4f46e5]" : "text-[#0f172a] hover:bg-[#f8fafc]"
+                  }`}
+                  key={option}
+                  onClick={() => toggle(option)}
+                  type="button"
+                >
+                  <span
+                    className={`flex size-[14px] shrink-0 items-center justify-center rounded-[4px] border ${
+                      isSelected ? "border-[#4f46e5] bg-[#4f46e5]" : "border-[#cbd5e1]"
+                    }`}
+                  >
+                    {isSelected && (
+                      <Check aria-hidden="true" className="size-[10px] text-white" strokeWidth={3} />
+                    )}
+                  </span>
+                  {display(option)}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const LOGO_ACCEPT = "image/png,image/jpeg,image/svg+xml";
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+
+function LogoUpload({ value, onChange }: { value: string; onChange: (url: string) => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/svg+xml"].includes(file.type)) {
+      setError("Logo must be a PNG, JPG, or SVG image.");
+      return;
+    }
+    if (file.size > MAX_LOGO_BYTES) {
+      setError("Logo must be 2MB or smaller.");
+      return;
+    }
+    setError(null);
+    setUploading(true);
+    try {
+      const { url } = await uploadLogo(file);
+      onChange(url);
+    } catch (err) {
+      setError(err instanceof ApiError ? String(err.detail) : "Upload failed. Please try again.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-[8px]">
       <FieldLabel>Company Logo</FieldLabel>
-      <button
-        className="flex h-[119px] w-full flex-col items-center justify-center rounded-[12px] border-2 border-dashed border-[#e2e8f0] bg-[#f8fafc] px-[34px] py-[20px]"
-        type="button"
-      >
-        <span className="flex size-[48px] items-center justify-center rounded-full bg-white shadow-[0px_1px_1px_rgba(0,0,0,0.05)]">
-          <img alt="" className="size-[24px]" src={icons.upload} />
-        </span>
-        <span className="mt-[12px] font-['Inter'] text-[14px] font-bold leading-[20px] text-[#4f46e5]">
-          Upload Logo
-        </span>
-        <span className="mt-[1px] font-['Inter'] text-[11px] font-normal leading-[16.5px] text-[#94a3b8]">
-          SVG, PNG or JPG (max. 2MB)
-        </span>
-      </button>
+      <input
+        accept={LOGO_ACCEPT}
+        className="hidden"
+        onChange={(e) => {
+          void handleFile(e.target.files?.[0]);
+          e.target.value = "";
+        }}
+        ref={inputRef}
+        type="file"
+      />
+      <div className="relative flex h-[119px] w-full flex-col items-center justify-center rounded-[12px] border-2 border-dashed border-[#e2e8f0] bg-[#f8fafc] px-[34px] py-[20px]">
+        {value && !uploading && (
+          <button
+            aria-label="Remove logo"
+            className="absolute right-[10px] top-[10px] flex size-[22px] items-center justify-center rounded-full bg-white text-[#64748b] shadow-[0px_1px_2px_rgba(15,23,42,0.15)] hover:text-[#dc2626]"
+            onClick={() => {
+              onChange("");
+              setError(null);
+            }}
+            type="button"
+          >
+            <X className="size-[13px]" strokeWidth={2.5} />
+          </button>
+        )}
+        <button
+          className="flex flex-col items-center justify-center disabled:opacity-60"
+          disabled={uploading}
+          onClick={() => inputRef.current?.click()}
+          type="button"
+        >
+          {value ? (
+            <img
+              alt="Company logo"
+              className="size-[48px] rounded-full object-cover"
+              src={`${BASE_URL}${value}`}
+            />
+          ) : (
+            <span className="flex size-[48px] items-center justify-center rounded-full bg-white shadow-[0px_1px_1px_rgba(0,0,0,0.05)]">
+              <img alt="" className="size-[24px]" src={icons.upload} />
+            </span>
+          )}
+          <span className="mt-[12px] font-['Inter'] text-[14px] font-bold leading-[20px] text-[#4f46e5]">
+            {uploading ? "Uploading..." : value ? "Change Logo" : "Upload Logo"}
+          </span>
+          <span className="mt-[1px] font-['Inter'] text-[11px] font-normal leading-[16.5px] text-[#94a3b8]">
+            SVG, PNG or JPG (max. 2MB)
+          </span>
+        </button>
+      </div>
+      {error && <p className="m-0 font-['Inter'] text-[11px] text-[#dc2626]">{error}</p>}
       <p className="m-0 pt-[4px] font-['Inter'] text-[11px] italic leading-[16.5px] text-[#94a3b8]">
         Recommended: 512x512px
       </p>
@@ -868,7 +887,89 @@ type StepFormProps = {
   onFieldChange: <K extends keyof OnboardingFormState>(field: K, value: OnboardingFormState[K]) => void;
 };
 
-function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
+/* AI-generated (BridgeLLM, gemini/gemini-2.5-pro - see
+ * backend/app/controllers/organisations.py::icp_recommendations) from the
+ * organisation's own profile fields, once the org has been created (needs a
+ * real organisation_id). Empty state (not an error) if the LLM isn't
+ * configured or didn't return parseable JSON - never fabricated. */
+function IcpRecommendationsPanel({ organisationId }: { organisationId: string | null }) {
+  const [recommendations, setRecommendations] = useState<IcpRecommendationOut[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [fetched, setFetched] = useState(false);
+
+  useEffect(() => {
+    if (!organisationId) return;
+    setLoading(true);
+    setFetched(false);
+    getIcpRecommendations(organisationId)
+      .then((res) => setRecommendations(res.recommendations))
+      .catch(() => setRecommendations([]))
+      .finally(() => {
+        setLoading(false);
+        setFetched(true);
+      });
+  }, [organisationId]);
+
+  if (!organisationId) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-[12px] border border-[#eef1ff] bg-[#faf8ff] p-[18px] md:col-span-2">
+      <div className="flex items-center gap-[8px]">
+        <Sparkles className="size-[16px] text-[#7c3aed]" />
+        <h3 className="m-0 text-[14px] font-bold text-[#0f172a]">AI-Recommended ICPs</h3>
+      </div>
+      <p className="m-0 mt-[4px] text-[12px] text-[#64748b]">
+        Based on your company profile - who you should probably be targeting as customers.
+      </p>
+
+      {loading ? (
+        <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">Generating recommendations...</p>
+      ) : recommendations.length === 0 ? (
+        fetched && (
+          <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">
+            No recommendations available right now.
+          </p>
+        )
+      ) : (
+        <div className="mt-[14px] grid grid-cols-1 gap-[12px] lg:grid-cols-3">
+          {recommendations.map((rec) => (
+            <div className="rounded-[10px] border border-[#e9edf5] bg-white p-[14px]" key={rec.name}>
+              <p className="m-0 text-[13px] font-bold text-[#0f172a]">{rec.name}</p>
+              <div className="mt-[8px] flex flex-wrap gap-[4px]">
+                {rec.industries.map((ind) => (
+                  <span
+                    className="rounded-[5px] bg-[#eef1ff] px-[6px] py-[2px] text-[10px] font-semibold text-[#4f46e5]"
+                    key={ind}
+                  >
+                    {ind}
+                  </span>
+                ))}
+              </div>
+              <p className="m-0 mt-[8px] text-[11px] text-[#64748b]">
+                {formatRange(rec.employee_min, rec.employee_max, (v) => String(v))} employees
+              </p>
+              <p className="m-0 mt-[2px] text-[11px] text-[#64748b]">
+                {formatRange(rec.revenue_min_usd, rec.revenue_max_usd, formatMoney)} revenue
+              </p>
+              <p className="m-0 mt-[2px] text-[11px] text-[#64748b]">{rec.countries.join(", ")}</p>
+              <p className="m-0 mt-[8px] text-[11px] italic leading-[16px] text-[#475569]">
+                {rec.rationale}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OrganizationSetupForm({
+  form,
+  onFieldChange,
+  organisationId,
+}: StepFormProps & { organisationId: string | null }) {
   return (
     <div className="grid grid-cols-1 gap-x-[20px] gap-y-[16px] md:grid-cols-2">
       <TextField
@@ -901,13 +1002,6 @@ function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
         options={ORG_INDUSTRY_OPTIONS}
         required
         value={form.industry}
-      />
-      <SelectField
-        icon={icons.workspace}
-        label="Business Type"
-        onChange={(v) => onFieldChange("business_type", v)}
-        options={BUSINESS_TYPE_OPTIONS}
-        value={form.business_type}
       />
       <TextField
         icon={icons.globe}
@@ -957,7 +1051,10 @@ function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
         required
         value={form.currency}
       />
-      <LogoUpload />
+      <LogoUpload
+        onChange={(v) => onFieldChange("account_logo_url", v)}
+        value={form.account_logo_url}
+      />
 
       <div className="flex flex-col gap-[8px] md:col-span-2">
         <FieldLabel>Company Description</FieldLabel>
@@ -969,6 +1066,8 @@ function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
           value={form.company_description}
         />
       </div>
+
+      <IcpRecommendationsPanel organisationId={organisationId} />
     </div>
   );
 }
@@ -981,7 +1080,6 @@ function WorkspaceSetupForm({ form, onFieldChange }: StepFormProps) {
         label="Workspace Name"
         onChange={(v) => onFieldChange("workspace_name", v)}
         placeholder="Enter workspace name"
-        required
         value={form.workspace_name}
       />
       <SelectField
@@ -989,7 +1087,6 @@ function WorkspaceSetupForm({ form, onFieldChange }: StepFormProps) {
         label="Department"
         onChange={(v) => onFieldChange("workspace_purpose", v)}
         options={getDepartmentOptions(form.industry)}
-        required
         value={form.workspace_purpose}
       />
       <TextField
@@ -1281,189 +1378,102 @@ function DataSourceSetupForm() {
   );
 }
 
-function CrmLogo({
-  logo,
-  className,
-}: {
-  logo: string;
-  className: string;
-}) {
-  if (logo === "db") {
-    return (
-      <span className={`flex size-[52px] items-center justify-center rounded-[10px] ${className}`}>
-        <Database aria-hidden="true" className="size-[31px]" strokeWidth={2} />
-      </span>
-    );
-  }
+// Seeded once per workspace, only if it has zero triggers yet. Every
+// signal_type/signal_category here is a real value from SIGNAL_CATEGORY_MAP
+// in backend/app/services/signal_extractor.py, so these are genuinely
+// matchable triggers (created via a real POST), not display-only dummy rows -
+// one per real signal category, covering the ones most people want on day one.
+const STARTER_TRIGGERS: TriggerCreate[] = [
+  {
+    name: "Buying Intent Signals",
+    signal_categories: ["buying_stage"],
+    signal_types: ["rfp_published", "vendor_evaluation_mentioned", "contract_awarded"],
+  },
+  {
+    name: "New Funding & Budget",
+    signal_categories: ["budget_and_capital"],
+    signal_types: ["funding_round_announced", "tech_budget_announced", "acquisition_completed"],
+  },
+  {
+    name: "Leadership Change",
+    signal_categories: ["urgency_and_catalysts"],
+    signal_types: ["ceo_change", "cto_change", "leadership_mandate_announced"],
+  },
+  {
+    name: "AI Adoption Activity",
+    signal_categories: ["ai_seriousness"],
+    signal_types: ["ai_tool_adoption", "ai_pilot_announced", "ai_budget_announcement"],
+  },
+  {
+    name: "Operational Pain Points",
+    signal_categories: ["ai_pain_points"],
+    signal_types: ["operational_inefficiency", "supply_chain_disruption", "cost_pressure_mentioned"],
+  },
+  {
+    name: "Competitive Displacement",
+    signal_categories: ["competitive_context"],
+    signal_types: ["vendor_replacement_signal", "competitive_evaluation", "greenfield_opportunity"],
+  },
+  {
+    name: "Company Growth Signals",
+    signal_categories: ["company_identity"],
+    signal_types: ["employee_count_update", "revenue_update", "headquarters_update"],
+  },
+  {
+    name: "Key Contacts Identified",
+    signal_categories: ["reachability"],
+    signal_types: ["cto_identified", "cfo_identified", "procurement_contact_identified"],
+  },
+];
 
-  return (
-    <span
-      className={`flex size-[52px] items-center justify-center rounded-[10px] font-['Inter'] text-[20px] font-black ${className}`}
-    >
-      {logo}
-    </span>
-  );
-}
+function TriggerGenerationForm({ workspaceId }: { workspaceId: string | null }) {
+  const [triggers, setTriggers] = useState<TriggerOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [enabled, setEnabled] = useState<Record<string, boolean>>({});
+  const seededFor = useRef<string | null>(null);
 
-function CrmIntegrationForm() {
-  return (
-    <div className="flex flex-col gap-[14px]">
-      <div>
-        <h3 className="m-0 font-['Inter'] text-[18px] font-bold leading-[27px] text-[#0f1f6f]">
-          Connect Your CRM
-        </h3>
-        <p className="m-0 mt-[2px] font-['Inter'] text-[13px] font-medium leading-[20px] text-[#0f1f6f]">
-          Choose your CRM platform to get started.
-        </p>
-      </div>
+  useEffect(() => {
+    if (!workspaceId || seededFor.current === workspaceId) return;
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    (async () => {
+      let rows = await listTriggers(workspaceId);
+      if (rows.length === 0) {
+        rows = await Promise.all(
+          STARTER_TRIGGERS.map((starter) => createTrigger(workspaceId, starter)),
+        );
+      }
+      return rows;
+    })()
+      .then((rows) => {
+        if (cancelled) return;
+        seededFor.current = workspaceId;
+        setTriggers(rows);
+        setEnabled(Object.fromEntries(rows.map((t) => [t.trigger_id, true])));
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLoadError(err instanceof ApiError ? String(err.detail) : "Could not load triggers.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
 
-      <div className="grid grid-cols-2 gap-[12px] lg:grid-cols-5">
-        {crmOptions.map((crm) => (
-          <button
-            className={`relative flex min-h-[118px] flex-col items-center justify-center gap-[10px] rounded-[10px] border bg-white p-[12px] text-center transition ${
-              crm.selected
-                ? "border-[#4f46e5] shadow-[0px_0px_0px_1px_rgba(79,70,229,0.08)]"
-                : "border-[#e2e8f0]"
-            }`}
-            key={crm.name}
-            type="button"
-          >
-            <CrmLogo className={crm.logoClassName} logo={crm.logo} />
-            <span className="font-['Inter'] text-[12px] font-bold leading-[17px] text-[#0f1f6f]">
-              {crm.name}
-            </span>
-            {crm.helper && (
-              <span className="font-['Inter'] text-[11px] font-bold leading-[13px] text-[#16a34a]">
-                {crm.helper}
-              </span>
-            )}
-            {crm.selected && (
-              <span className="absolute right-[8px] top-[8px] flex size-[22px] items-center justify-center rounded-full bg-[#005bff] text-white">
-                <Check aria-hidden="true" className="size-[14px]" strokeWidth={3} />
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      <div className="overflow-hidden rounded-[12px] border border-[#e2e8f0] bg-white">
-        <div className="flex flex-col gap-3 border-b border-[#e2e8f0] px-[14px] py-[14px] sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-[12px]">
-            <CrmLogo className="bg-[#18a8e8] text-white" logo="salesforce" />
-            <div>
-              <h3 className="m-0 font-['Inter'] text-[17px] font-bold leading-[23px] text-[#0f1f6f]">
-                Salesforce Integration
-              </h3>
-              <p className="m-0 mt-[2px] font-['Inter'] text-[12px] font-medium leading-[18px] text-[#0f1f6f]">
-                Securely connect your Salesforce account to import and sync your
-                data.
-              </p>
-              <button
-                className="mt-[3px] font-['Inter'] text-[12px] font-medium leading-[18px] text-[#005bff]"
-                type="button"
-              >
-                Learn more about Salesforce integration
-              </button>
-            </div>
-          </div>
-          <button
-            className="h-[34px] whitespace-nowrap rounded-[8px] border border-[#e2e8f0] bg-white px-[16px] font-['Inter'] text-[12px] font-bold text-[#005bff]"
-            type="button"
-          >
-            View Integration Guide
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 gap-[12px] px-[14px] py-[14px] md:grid-cols-2 xl:grid-cols-4">
-          {salesforceBenefits.map((benefit) => {
-            const Icon = benefit.icon;
-
-            return (
-              <div className="flex gap-[10px]" key={benefit.title}>
-                <span
-                  className={`flex size-[34px] shrink-0 items-center justify-center rounded-[8px] ${benefit.className}`}
-                >
-                  <Icon aria-hidden="true" className="size-[20px]" strokeWidth={2.2} />
-                </span>
-                <div>
-                  <p className="m-0 font-['Inter'] text-[11px] font-bold leading-[16px] text-[#0f1f6f]">
-                    {benefit.title}
-                  </p>
-                  <p className="m-0 mt-[3px] font-['Inter'] text-[10px] font-medium leading-[16px] text-[#0f1f6f]">
-                    {benefit.text}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="mx-[14px] mb-[14px] flex min-h-[42px] items-center gap-[10px] rounded-[8px] border border-[#fed7aa] bg-[#fff7ed] px-[12px] font-['Inter'] text-[12px] font-bold leading-[18px] text-[#92400e]">
-          <ShieldCheck aria-hidden="true" className="size-[18px] text-[#92400e]" />
-          Your data is safe with us. We never sell your data and only access
-          what's needed to deliver insights.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SourcePill({ source }: { source: string }) {
-  const sourceClassName =
-    source === "in"
-      ? "bg-[#dbeafe] text-[#005bff]"
-      : source === "cb"
-        ? "bg-[#d1fae5] text-[#059669]"
-        : source === "rss"
-          ? "bg-[#ffedd5] text-[#f75317]"
-          : "bg-[#eef2ff] text-[#4f46e5]";
-
-  return (
-    <span
-      className={`inline-flex size-[24px] items-center justify-center rounded-[6px] font-['Inter'] text-[10px] font-black lowercase ${sourceClassName}`}
-    >
-      {source}
-    </span>
-  );
-}
-
-function PriorityBadge({ priority }: { priority: string }) {
-  const isHigh = priority === "High";
-
-  return (
-    <span
-      className={`inline-flex h-[26px] items-center rounded-[6px] px-[10px] font-['Inter'] text-[11px] font-bold ${
-        isHigh ? "bg-[#fee2e2] text-[#ef4444]" : "bg-[#ffedd5] text-[#f97316]"
-      }`}
-    >
-      {priority}
-    </span>
-  );
-}
-
-function TriggerGenerationForm() {
   return (
     <div className="flex flex-col gap-[14px]">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex flex-wrap gap-[8px]">
-          {[
-            ["All Triggers", "42", "border-[#005bff] text-[#005bff]"],
-            ["High Priority", "12", "border-[#fecaca] bg-[#fff1f2] text-[#ef4444]"],
-            ["Medium Priority", "18", "border-[#fed7aa] bg-[#fff7ed] text-[#f97316]"],
-            ["Low Priority", "12", "border-[#bbf7d0] bg-[#f0fdf4] text-[#16a34a]"],
-          ].map(([label, count, className]) => (
-            <button
-              className={`flex h-[34px] items-center gap-[8px] rounded-[8px] border px-[12px] font-['Inter'] text-[11px] font-bold ${className}`}
-              key={label}
-              type="button"
-            >
-              {label}
-              <span className="rounded-full bg-white/80 px-[7px] py-[2px] text-[10px]">
-                {count}
-              </span>
-            </button>
-          ))}
-        </div>
+        <span className="flex h-[34px] w-fit items-center gap-[8px] rounded-[8px] border border-[#005bff] px-[12px] font-['Inter'] text-[11px] font-bold text-[#005bff]">
+          All Triggers
+          <span className="rounded-full bg-white/80 px-[7px] py-[2px] text-[10px]">
+            {triggers.length}
+          </span>
+        </span>
         <div className="flex gap-[8px]">
           <div className="relative h-[36px] w-[190px] rounded-[8px] border border-[#e2e8f0] bg-white">
             <Search
@@ -1491,105 +1501,94 @@ function TriggerGenerationForm() {
       </div>
 
       <div className="overflow-hidden rounded-[12px] border border-[#e2e8f0] bg-white">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="border-b border-[#e2e8f0] text-left">
-              {["Trigger", "Description", "Priority", "Intent Score", "Data Source", "Status"].map(
-                (heading) => (
+        {loading ? (
+          <p className="m-0 px-[14px] py-[28px] text-center font-['Inter'] text-[12px] font-medium text-[#64748b]">
+            Loading triggers...
+          </p>
+        ) : loadError ? (
+          <p className="m-0 px-[14px] py-[28px] text-center font-['Inter'] text-[12px] font-medium text-[#ef4444]">
+            {loadError}
+          </p>
+        ) : triggers.length === 0 ? (
+          <p className="m-0 px-[14px] py-[28px] text-center font-['Inter'] text-[12px] font-medium text-[#64748b]">
+            No triggers yet - you can create them later from Trigger Intelligence.
+          </p>
+        ) : (
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="border-b border-[#e2e8f0] text-left">
+                {["Trigger", "Signal Match", "Status"].map((heading) => (
                   <th
                     className="px-[12px] py-[11px] font-['Inter'] text-[11px] font-bold leading-[16px] text-[#0f1f6f]"
                     key={heading}
                   >
                     {heading}
                   </th>
-                ),
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {recommendedTriggers.map((trigger) => {
-              const Icon = trigger.icon;
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {triggers.map((trigger) => {
+                const style =
+                  TRIGGER_CATEGORY_STYLES[trigger.signal_categories?.[0] ?? ""] ?? DEFAULT_TRIGGER_STYLE;
+                const Icon = style.icon;
+                const signalMatch =
+                  [...(trigger.signal_types ?? []), ...(trigger.signal_categories ?? [])]
+                    .map(humanizeEnumValue)
+                    .join(", ") || "—";
+                const isEnabled = enabled[trigger.trigger_id] ?? true;
 
-              return (
-                <tr className="border-b border-[#f1f5f9] last:border-b-0" key={trigger.name}>
-                  <td className="px-[12px] py-[9px]">
-                    <div className="flex items-center gap-[10px]">
-                      <span
-                        className={`flex size-[32px] shrink-0 items-center justify-center rounded-[8px] ${trigger.iconClassName}`}
-                      >
-                        <Icon aria-hidden="true" className="size-[18px]" />
-                      </span>
-                      <span className="font-['Inter'] text-[11px] font-bold leading-[16px] text-[#0f1f6f]">
-                        {trigger.name}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="max-w-[210px] px-[12px] py-[9px] font-['Inter'] text-[11px] font-medium leading-[17px] text-[#0f1f6f]">
-                    {trigger.description}
-                  </td>
-                  <td className="px-[12px] py-[9px]">
-                    <PriorityBadge priority={trigger.priority} />
-                  </td>
-                  <td className="px-[12px] py-[9px]">
-                    <div className="flex items-center gap-[10px]">
-                      <span className="h-[5px] w-[80px] overflow-hidden rounded-full bg-[#e2e8f0]">
+                return (
+                  <tr className="border-b border-[#f1f5f9] last:border-b-0" key={trigger.trigger_id}>
+                    <td className="px-[12px] py-[9px]">
+                      <div className="flex items-center gap-[10px]">
                         <span
-                          className="block h-full rounded-full bg-[#16a34a]"
-                          style={{ width: `${trigger.score}%` }}
-                        />
-                      </span>
-                      <span className="font-['Inter'] text-[11px] font-bold text-[#0f1f6f]">
-                        {trigger.score}%
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-[12px] py-[9px]">
-                    <div className="flex gap-[6px]">
-                      <SourcePill source={trigger.source} />
+                          className={`flex size-[32px] shrink-0 items-center justify-center rounded-[8px] ${style.className}`}
+                        >
+                          <Icon aria-hidden="true" className="size-[18px]" />
+                        </span>
+                        <span className="font-['Inter'] text-[11px] font-bold leading-[16px] text-[#0f1f6f]">
+                          {trigger.name || "Untitled Trigger"}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="max-w-[300px] px-[12px] py-[9px] font-['Inter'] text-[11px] font-medium leading-[17px] text-[#0f1f6f]">
+                      {signalMatch}
+                    </td>
+                    <td className="px-[12px] py-[9px]">
                       <button
-                        className="flex size-[24px] items-center justify-center rounded-[6px] border border-[#e2e8f0] bg-white text-[#0f1f6f]"
+                        aria-label={`${trigger.name || "Trigger"} ${isEnabled ? "enabled" : "disabled"}`}
+                        className={`relative h-[20px] w-[36px] rounded-full transition-colors ${
+                          isEnabled ? "bg-gradient-to-r from-[#7c3aed] to-[#4f46e5]" : "bg-[#e2e8f0]"
+                        }`}
+                        onClick={() =>
+                          setEnabled((prev) => ({
+                            ...prev,
+                            [trigger.trigger_id]: !isEnabled,
+                          }))
+                        }
                         type="button"
                       >
-                        <MoreVertical aria-hidden="true" className="size-[14px]" />
+                        <span
+                          className={`absolute top-[2px] size-[16px] rounded-full bg-white shadow-sm transition-all ${
+                            isEnabled ? "right-[2px]" : "left-[2px]"
+                          }`}
+                        />
                       </button>
-                    </div>
-                  </td>
-                  <td className="px-[12px] py-[9px]">
-                    <button
-                      aria-label={`${trigger.name} enabled`}
-                      className="relative h-[20px] w-[36px] rounded-full bg-gradient-to-r from-[#7c3aed] to-[#4f46e5]"
-                      type="button"
-                    >
-                      <span className="absolute right-[2px] top-[2px] size-[16px] rounded-full bg-white shadow-sm" />
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      {!loading && !loadError && triggers.length > 0 && (
         <p className="m-0 font-['Inter'] text-[12px] font-medium leading-[18px] text-[#64748b]">
-          Showing 1 to 8 of 42 triggers
+          Showing {triggers.length} of {triggers.length} triggers
         </p>
-        <div className="flex items-center gap-[6px]">
-          {["1", "2", "3", "4", "5", "..."].map((page) => (
-            <button
-              className={`flex size-[30px] items-center justify-center rounded-[6px] border font-['Inter'] text-[11px] font-medium ${
-                page === "1"
-                  ? "border-[#4f46e5] text-[#4f46e5]"
-                  : "border-[#e2e8f0] text-[#64748b]"
-              }`}
-              key={page}
-              type="button"
-            >
-              {page}
-            </button>
-          ))}
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -1679,6 +1678,19 @@ function ExcelUploadButton({ icpId, workspaceId, onUploadStart, onUploadComplete
 }
 
 function IcpGenerationForm({ form, onFieldChange, icpId, workspaceId, onUploadStart, onUploadComplete }: IcpFormProps) {
+  const [icps, setIcps] = useState<IcpOut[]>([]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    listIcps(workspaceId).then((rows) => {
+      if (!cancelled) setIcps(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, icpId]);
+
   return (
     <div className="flex flex-col gap-[14px]">
       <div className="grid grid-cols-1 gap-[12px] md:grid-cols-2 xl:grid-cols-3">
@@ -1706,29 +1718,13 @@ function IcpGenerationForm({ form, onFieldChange, icpId, workspaceId, onUploadSt
           required
           value={form.annual_revenue}
         />
-        <SelectField
+        <MultiSelectField
           icon={icons.globe}
           label="Headquarters Location"
-          onChange={(v) => onFieldChange("headquarters_country", v)}
+          onChange={(v) => onFieldChange("headquarters_countries", v)}
           options={ICP_COUNTRY_OPTIONS}
           required
-          value={form.headquarters_country}
-        />
-        <SelectField
-          icon={icons.workspace}
-          label="Growth Stage"
-          onChange={(v) => onFieldChange("growth_stage", v)}
-          options={ICP_GROWTH_STAGE_OPTIONS}
-          required
-          value={form.growth_stage}
-        />
-        <SelectField
-          icon={icons.workspace}
-          label="Business Model"
-          onChange={(v) => onFieldChange("business_model", v)}
-          options={ICP_BUSINESS_MODEL_OPTIONS}
-          required
-          value={form.business_model}
+          values={form.headquarters_countries}
         />
         <div className="md:col-span-2">
           <TextField
@@ -1739,32 +1735,13 @@ function IcpGenerationForm({ form, onFieldChange, icpId, workspaceId, onUploadSt
             value={form.technologies}
           />
         </div>
-        <SelectField
+        <MultiSelectField
           icon={icons.workspace}
-          label="Buying Committee (Key Roles)"
-          onChange={(v) => onFieldChange("buying_committee_persona", v)}
-          options={ICP_PERSONA_OPTIONS}
-          value={form.buying_committee_persona}
+          label="Target Departments"
+          onChange={(v) => onFieldChange("departments", v)}
+          options={getDepartmentOptions(form.industry)}
+          values={form.departments}
         />
-      </div>
-
-      <div className="grid grid-cols-1 gap-[12px] md:grid-cols-2">
-        {(
-          [
-            ["Pain Points", "pain_points", "Enter main pain points"],
-            ["Business Goals", "business_goals", "Enter key business goals"],
-          ] as const
-        ).map(([label, field, placeholder]) => (
-          <div className="flex flex-col gap-[8px]" key={label}>
-            <FieldLabel>{label}</FieldLabel>
-            <textarea
-              className="min-h-[58px] resize-none rounded-[8px] border border-[#e2e8f0] bg-white px-[12px] py-[10px] font-['Inter'] text-[12px] font-medium text-[#0f172a] outline-none placeholder:text-[#64748b]"
-              onChange={(e) => onFieldChange(field, e.target.value)}
-              placeholder={placeholder}
-              value={form[field]}
-            />
-          </div>
-        ))}
       </div>
 
       <div className="rounded-[12px] border border-[#e2e8f0] bg-white p-[14px]">
@@ -1786,66 +1763,51 @@ function IcpGenerationForm({ form, onFieldChange, icpId, workspaceId, onUploadSt
               onUploadStart={onUploadStart}
               workspaceId={workspaceId}
             />
-            <button
-              className="h-[36px] rounded-[8px] bg-[#005bff] px-[16px] font-['Inter'] text-[12px] font-bold text-white"
-              type="button"
-            >
-              + Create New ICP
-            </button>
           </div>
         </div>
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="text-left">
-              {["ICP Name", "Primary Industry", "Company Size", "Annual Revenue", "Status", "Actions"].map(
-                (heading) => (
-                  <th
-                    className="px-[4px] py-[8px] font-['Inter'] text-[10px] font-bold text-[#0f1f6f]"
-                    key={heading}
-                  >
-                    {heading}
-                  </th>
-                ),
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {icpLibraryRows.map((row) => (
-              <tr className="border-t border-[#f1f5f9]" key={row.name}>
-                <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-bold text-[#0f1f6f]">
-                  {row.name}
-                </td>
-                <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-medium text-[#0f1f6f]">
-                  {row.industry}
-                </td>
-                <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-medium text-[#0f1f6f]">
-                  {row.size}
-                </td>
-                <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-medium text-[#0f1f6f]">
-                  {row.revenue}
-                </td>
-                <td className="px-[4px] py-[8px]">
-                  <span
-                    className={`rounded-[6px] px-[9px] py-[4px] font-['Inter'] text-[10px] font-bold ${
-                      row.status === "Active"
-                        ? "bg-[#dcfce7] text-[#16a34a]"
-                        : "bg-[#eef2ff] text-[#4f46e5]"
-                    }`}
-                  >
-                    {row.status}
-                  </span>
-                </td>
-                <td className="px-[4px] py-[8px]">
-                  <div className="flex gap-[10px] text-[#0f1f6f]">
-                    <Eye aria-hidden="true" className="size-[14px]" />
-                    <Pencil aria-hidden="true" className="size-[14px]" />
-                    <MoreVertical aria-hidden="true" className="size-[14px]" />
-                  </div>
-                </td>
+        {icps.length === 0 ? (
+          <p className="m-0 px-[4px] py-[16px] font-['Inter'] text-[11px] font-medium text-[#64748b]">
+            No ICPs yet for this workspace.
+          </p>
+        ) : (
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="text-left">
+                {["ICP Name", "Primary Industry", "Company Size", "Annual Revenue", "Created"].map(
+                  (heading) => (
+                    <th
+                      className="px-[4px] py-[8px] font-['Inter'] text-[10px] font-bold text-[#0f1f6f]"
+                      key={heading}
+                    >
+                      {heading}
+                    </th>
+                  ),
+                )}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {icps.map((row) => (
+                <tr className="border-t border-[#f1f5f9]" key={row.icp_id}>
+                  <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-bold text-[#0f1f6f]">
+                    {row.name || "Untitled ICP"}
+                  </td>
+                  <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-medium text-[#0f1f6f]">
+                    {row.industries?.length ? row.industries.join(", ") : "Any"}
+                  </td>
+                  <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-medium text-[#0f1f6f]">
+                    {formatRange(row.employee_min, row.employee_max, (v) => String(v))}
+                  </td>
+                  <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-medium text-[#0f1f6f]">
+                    {formatRange(row.revenue_min_usd, row.revenue_max_usd, formatMoney)}
+                  </td>
+                  <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-medium text-[#0f1f6f]">
+                    {formatDate(row.created_at)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
@@ -2172,11 +2134,10 @@ function OnboardingCard() {
   const isWorkspaceStep = activeStep === 1;
   const isTeamStep = activeStep === 2;
   const isDataSourceStep = activeStep === 3;
-  const isCrmStep = activeStep === 4;
-  const isTriggerStep = activeStep === 5;
-  const isIcpStep = activeStep === 6;
-  const isAiBusinessStep = activeStep === 7;
-  const isGoLiveStep = activeStep === 8;
+  const isTriggerStep = activeStep === 4;
+  const isIcpStep = activeStep === 5;
+  const isAiBusinessStep = activeStep === 6;
+  const isGoLiveStep = activeStep === 7;
   const stepperStep = activeStep;
   // Flexes to fill whatever space is left after the fixed-size stepper/
   // title/footer chrome, instead of a fixed pixel height - that fixed
@@ -2228,6 +2189,7 @@ function OnboardingCard() {
         const org = await createOrganisation({
           account_name: form.company_name || null,
           account_url: form.account_url || null,
+          account_logo_url: form.account_logo_url || null,
           timezone: form.timezone || null,
           currency: form.currency || null,
           company_name: form.company_name,
@@ -2252,6 +2214,10 @@ function OnboardingCard() {
         return;
       }
       setSubmitting(false);
+      // Stay on this step - the AI ICP recommendations panel only enables
+      // once organisationId is set, same "second click to advance" pattern
+      // as the ICP step below (see its comment).
+      return;
     }
 
     if (isWorkspaceStep && workspaceId === null) {
@@ -2259,19 +2225,17 @@ function OnboardingCard() {
         setSubmitError("Organisation setup must complete before creating a workspace.");
         return;
       }
-      if (!form.workspace_name.trim()) {
-        setSubmitError("Workspace Name is required.");
-        return;
-      }
-      if (!form.user_email.trim()) {
-        setSubmitError("Your Email is required.");
-        return;
-      }
+      // Workspace Name and Your Email are optional in the UI (Workspace.workspace_name
+      // and User.email are still NOT NULL/UNIQUE columns on the backend, so a blank
+      // entry falls back to a generated placeholder instead of blocking the step).
+      const workspaceName = form.workspace_name.trim() || `${form.company_name || "My"} Workspace`;
+      const userEmail = form.user_email.trim() || `founder+${Date.now()}@placeholder.local`;
+
       setSubmitting(true);
       setSubmitError(null);
       try {
         const workspace = await createWorkspace(organisationId, {
-          workspace_name: form.workspace_name,
+          workspace_name: workspaceName,
           purpose: form.workspace_purpose || null,
         });
         setSessionWorkspaceId(workspace.workspace_id);
@@ -2282,7 +2246,7 @@ function OnboardingCard() {
         // adds them as a member of the workspace they just set up, since
         // onboarding never created a User at all before this.
         const user = await createUser(organisationId, {
-          email: form.user_email,
+          email: userEmail,
           full_name: form.user_full_name || null,
         });
         await addWorkspaceMember(workspace.workspace_id, {
@@ -2313,11 +2277,11 @@ function OnboardingCard() {
             employee_max: employees.max,
             revenue_min_usd: revenue.min,
             revenue_max_usd: revenue.max,
-            countries: icpForm.headquarters_country ? [icpForm.headquarters_country] : null,
+            countries: icpForm.headquarters_countries.length ? icpForm.headquarters_countries : null,
             technologies: icpForm.technologies
               ? icpForm.technologies.split(",").map((t) => t.trim()).filter(Boolean)
               : null,
-            buying_committee_personas: icpForm.buying_committee_persona ? [icpForm.buying_committee_persona] : null,
+            departments: icpForm.departments.length ? icpForm.departments : null,
           });
           setIcpId(icp.icp_id);
         } catch (err) {
@@ -2336,7 +2300,7 @@ function OnboardingCard() {
       }
     }
 
-    setActiveStep((step) => Math.min(step + 1, 8));
+    setActiveStep((step) => Math.min(step + 1, 7));
   };
 
   const handleSecondaryAction = () => {
@@ -2358,16 +2322,14 @@ function OnboardingCard() {
             : isIcpStep
               ? "Define Your Ideal Customer Profile (Manual Input)"
               : isTriggerStep
-                ? "Recommended Triggers (AI Suggested)"
-                : isCrmStep
-                  ? "Connect Your CRM"
-                  : isDataSourceStep
-                    ? "Connect Your Data Sources"
-                    : isTeamStep
-                      ? "Invite Team Members"
-                      : isOrganizationStep
-                        ? "Organization Information"
-                        : "Workspace Information"}
+                ? "Your Triggers"
+                : isDataSourceStep
+                  ? "Connect Your Data Sources"
+                  : isTeamStep
+                    ? "Invite Team Members"
+                    : isOrganizationStep
+                      ? "Organization Information"
+                      : "Workspace Information"}
         </h2>
         <p className="m-0 mt-[2px] font-['Inter'] text-[14px] font-normal leading-[21px] text-[#64748b]">
           {isGoLiveStep
@@ -2377,16 +2339,14 @@ function OnboardingCard() {
             : isIcpStep
               ? "Provide the key details about your ideal customer. This will help AI generate accurate insights."
               : isTriggerStep
-                ? "AI analyzes your industry, ICP, and market data to find the highest intent signals."
-                : isCrmStep
-                  ? "Connect your CRM to sync data, track activities, and unlock actionable insights."
-                  : isDataSourceStep
-                    ? "Connect external data sources to enrich profiles, detect buying signals, and power AI insights."
-                    : isTeamStep
-                      ? "Add your teammates by email and assign appropriate roles."
-                      : isOrganizationStep
-                        ? "Tell us about your organization so we can personalize your XSparks experience."
-                        : "This will be your organization's dedicated workspace in XSparks."}
+                ? "Triggers matched against your signal data to flag high-intent moments."
+                : isDataSourceStep
+                  ? "Connect external data sources to enrich profiles, detect buying signals, and power AI insights."
+                  : isTeamStep
+                    ? "Add your teammates by email and assign appropriate roles."
+                    : isOrganizationStep
+                      ? "Tell us about your organization so we can personalize your XSparks experience."
+                      : "This will be your organization's dedicated workspace in XSparks."}
         </p>
       </div>
 
@@ -2397,7 +2357,11 @@ function OnboardingCard() {
           style={{ transform: `translateX(-${activeStep * 100}%)` }}
         >
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <OrganizationSetupForm form={form} onFieldChange={handleFieldChange} />
+            <OrganizationSetupForm
+              form={form}
+              onFieldChange={handleFieldChange}
+              organisationId={organisationId}
+            />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <WorkspaceSetupForm form={form} onFieldChange={handleFieldChange} />
@@ -2409,10 +2373,7 @@ function OnboardingCard() {
             <DataSourceSetupForm />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <CrmIntegrationForm />
-          </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <TriggerGenerationForm />
+            <TriggerGenerationForm workspaceId={workspaceId} />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <IcpGenerationForm
@@ -2475,14 +2436,12 @@ function OnboardingCard() {
                     ? "Start Using XSparks"
                     : isAiBusinessStep
                       ? "Continue"
-                      : isCrmStep
-                        ? "Connect Salesforce"
-                        : isIcpStep && icpId === null
-                          ? "Create ICP"
-                          : isIcpStep
-                            ? "Continue"
-                            : activeStep > 0
-                              ? "Save & Continue"
+                      : isIcpStep && icpId === null
+                        ? "Create ICP"
+                        : isIcpStep
+                          ? "Continue"
+                          : activeStep > 0
+                            ? "Save & Continue"
                               : "Continue"}
               </span>
               <img alt="" className="size-[16px]" src={icons.arrowRight} />

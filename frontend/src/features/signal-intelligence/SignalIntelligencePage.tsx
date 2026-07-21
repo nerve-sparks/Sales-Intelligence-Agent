@@ -15,7 +15,6 @@ import {
   Leaf,
   Linkedin,
   Newspaper,
-  RefreshCw,
   Rocket,
   Snowflake,
   Target,
@@ -763,8 +762,9 @@ export function SignalIntelligencePage() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar
-          detectionIcon={RefreshCw}
           searchPlaceholder="Search companies, triggers, executives..."
+          showDetection={false}
+          showNotificationBell={false}
         />
 
         <main className="flex-1 overflow-x-hidden px-[28px] py-[24px]">

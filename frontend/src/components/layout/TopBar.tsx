@@ -28,11 +28,13 @@ export function TopBar({
   detectionIcon = Scan,
   showDetection = true,
   showAIAssistant = true,
+  showNotificationBell = true,
 }: {
   searchPlaceholder?: string;
   detectionIcon?: ComponentType<{ className?: string }>;
   showDetection?: boolean;
   showAIAssistant?: boolean;
+  showNotificationBell?: boolean;
 }) {
   // Workspace owner is the person who created it (see OnboardingPage's
   // Workspace Setup step: addWorkspaceMember(..., { role: "owner" })).
@@ -77,7 +79,7 @@ export function TopBar({
 
       <div className="ml-auto flex items-center gap-[12px]">
         {showAIAssistant && <AIAssistantButton />}
-        <NotificationBell />
+        {showNotificationBell && <NotificationBell />}
         <UserMenu {...(user ?? {})} />
       </div>
     </header>

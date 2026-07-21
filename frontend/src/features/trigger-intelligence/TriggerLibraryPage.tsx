@@ -1,23 +1,19 @@
 import {
   Activity,
-  ArrowRight,
   Building2,
   ChevronRight,
-  Download,
-  Filter,
   LayoutGrid,
   Plus,
   Search,
   Settings,
-  TrendingUp,
+  Sparkles,
 } from "lucide-react";
-import { useEffect, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Donut } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
-import { getTriggers, type SavedTrigger } from "../../lib/triggers";
-import { getTriggerEvents, listTriggers } from "../../api/triggers";
+import { getTriggerEvents, getTriggerInsight, listTriggers, type TriggerOut } from "../../api/triggers";
 import { getSignalStats, type SignalStatsOut } from "../../api/signals";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
 import {
@@ -25,25 +21,28 @@ import {
   categoryLabel,
   categoryStyle,
   SIGNAL_CATEGORY_OPTIONS,
+  typeLabel,
 } from "../../lib/signalCategories";
 
-/* TriggerDefinition (backend) has no category/description/status fields -
- * those are frontend-only concepts (see onboarding audit). Real id/name
- * come from the API; the rest falls back to sensible defaults so the
- * existing TriggerCard rendering needs no changes. */
-function toSavedTrigger(trigger: {
-  trigger_id: string;
-  name: string | null;
-  signal_types: string[] | null;
-  signal_categories: string[] | null;
-}): SavedTrigger {
+/* A trigger is exactly name + signal_types[] + signal_categories[] on the
+ * backend (TriggerDefinition) - no status/description/priority column
+ * exists, so this display type only carries what's real plus derived
+ * labels for the card UI. */
+type DisplayTrigger = {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+};
+
+function toDisplayTrigger(trigger: TriggerOut): DisplayTrigger {
+  const catLabels = (trigger.signal_categories ?? []).map(categoryLabel);
+  const typeLabels = (trigger.signal_types ?? []).map(typeLabel);
   return {
     id: trigger.trigger_id,
     name: trigger.name || "Untitled Trigger",
-    category: trigger.signal_categories?.[0] || trigger.signal_types?.[0] || "General",
-    description:
-      [trigger.signal_types, trigger.signal_categories].flat().filter(Boolean).join(", ") || "Custom trigger",
-    status: "active",
+    category: trigger.signal_categories?.[0] || trigger.signal_types?.[0] || "",
+    description: [...catLabels, ...typeLabels].join(", ") || "No signal criteria set",
   };
 }
 
@@ -73,17 +72,9 @@ type Category = {
 
 type CategoryStat = { count: number; companies: number; score: number };
 
-/* Same 6 real signal_category values as the Trigger Editor's category
- * select (see signalCategories.ts) - these placeholder numbers are only
- * shown before real org data loads or when no backend/org is configured. */
-const dummyCategoryStats: Record<string, CategoryStat> = {
-  buying_stage: { count: 210, companies: 175, score: 68 },
-  ai_seriousness: { count: 145, companies: 120, score: 62 },
-  urgency_and_catalysts: { count: 132, companies: 110, score: 59 },
-  ai_pain_points: { count: 98, companies: 80, score: 55 },
-  budget_and_capital: { count: 64, companies: 58, score: 71 },
-  competitive_context: { count: 47, companies: 40, score: 52 },
-};
+const zeroCategoryStats: Record<string, CategoryStat> = Object.fromEntries(
+  SIGNAL_CATEGORY_OPTIONS.map((key) => [key, { count: 0, companies: 0, score: 0 }]),
+);
 
 function realCategoryStats(data: SignalStatsOut): Record<string, CategoryStat> {
   const stats: Record<string, CategoryStat> = {};
@@ -120,13 +111,13 @@ function buildCategories(stats: Record<string, CategoryStat>): Category[] {
   });
 }
 
-const dummyCategories = buildCategories(dummyCategoryStats);
+const zeroCategories = buildCategories(zeroCategoryStats);
 
 /* ------------------------------------------------------------------ */
 /* Header                                                              */
 /* ------------------------------------------------------------------ */
 
-function LibraryHeader() {
+function LibraryHeader({ search, onSearchChange }: { search: string; onSearchChange: (value: string) => void }) {
   return (
     <div>
       <nav className="flex flex-wrap items-center gap-[8px] text-[13px] text-[#64748b]">
@@ -149,17 +140,12 @@ function LibraryHeader() {
             <Search className="pointer-events-none absolute left-[14px] top-1/2 size-[16px] -translate-y-1/2 text-[#94a3b8]" />
             <input
               className="h-[44px] w-full rounded-[10px] border border-[#e9edf5] bg-white pl-[40px] pr-[14px] text-[14px] text-[#0f172a] outline-none placeholder:text-[#94a3b8]"
-              placeholder="Search signals..."
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Search your triggers..."
               type="search"
+              value={search}
             />
           </div>
-          <button
-            className="flex h-[44px] items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] text-[14px] font-semibold text-[#334155]"
-            type="button"
-          >
-            <Filter className="size-[16px] text-[#64748b]" />
-            Filters
-          </button>
           <button
             className="flex h-[44px] items-center gap-[8px] rounded-[10px] bg-[#fa5a1e] px-[18px] text-[14px] font-semibold text-white shadow-[0px_10px_20px_-6px_rgba(250,90,30,0.5)]"
             onClick={() => {
@@ -182,13 +168,10 @@ function LibraryHeader() {
 
 type SummaryStat = { icon: IconType; bg: string; color: string; value: string; label: string; sub: string };
 
-const dummyCompanyCount = 480;
-const dummyAvgConfidence = 61;
-
 function buildSummary(data: SignalStatsOut | null): SummaryStat[] {
-  const totalSignals = data ? data.total : Object.values(dummyCategoryStats).reduce((sum, s) => sum + s.count, 0);
-  const companies = data ? data.company_count : dummyCompanyCount;
-  const avgAccuracy = `${data && data.avg_confidence !== null ? Math.round(data.avg_confidence * 100) : dummyAvgConfidence}%`;
+  const totalSignals = data ? data.total : 0;
+  const companies = data ? data.company_count : 0;
+  const avgAccuracy = data && data.avg_confidence !== null ? `${Math.round(data.avg_confidence * 100)}%` : "—";
   return [
     { icon: LayoutGrid, bg: "#f3e9ff", color: "#7c3aed", value: String(SIGNAL_CATEGORY_OPTIONS.length), label: "Categories", sub: "Total signal categories" },
     { icon: Activity, bg: "#e7f8ef", color: "#16a34a", value: totalSignals.toLocaleString(), label: "Signals", sub: "Across all categories" },
@@ -236,14 +219,7 @@ function SummaryCards({ summary }: { summary: SummaryStat[] }) {
 function CategoryCard({ category }: { category: Category }) {
   const Icon = category.icon;
   return (
-    <div
-      className="flex cursor-pointer flex-col rounded-[16px] border border-[#eef1f6] bg-white p-[16px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)] transition hover:border-[#d7dcff] hover:shadow-[0px_8px_20px_-8px_rgba(91,61,245,0.25)]"
-      onClick={() => {
-        window.location.href = "/trigger-details";
-      }}
-      role="button"
-      tabIndex={0}
-    >
+    <div className="flex flex-col rounded-[16px] border border-[#eef1f6] bg-white p-[16px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <span
         className="flex size-[48px] items-center justify-center rounded-[12px]"
         style={{ backgroundColor: category.bg, color: category.color }}
@@ -298,19 +274,19 @@ function CategoryGrid({ categories }: { categories: Category[] }) {
 type TriggerStat = { events: number; companies: number } | null;
 
 /* Same icon/color per signal_category as the Trigger Editor's category
- * select and the category cards above (signalCategories.CATEGORY_STYLE) -
+ * picker and the category cards above (signalCategories.CATEGORY_STYLE) -
  * a trigger created for "buying_stage" always renders with the same icon
- * everywhere it appears. */
-function TriggerCard({ trigger, stat }: { trigger: SavedTrigger; stat: TriggerStat }) {
+ * everywhere it appears. No Active/Draft badge - that status doesn't exist
+ * on TriggerDefinition, every saved trigger is just a live matching rule. */
+function TriggerCard({ trigger, stat }: { trigger: DisplayTrigger; stat: TriggerStat }) {
   const style = categoryStyle(trigger.category);
   const Icon = style.icon;
-  const active = trigger.status === "active";
 
   return (
     <div
       className="flex cursor-pointer flex-col rounded-[16px] border border-[#eef1f6] bg-white p-[16px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)] transition hover:border-[#d7dcff] hover:shadow-[0px_8px_20px_-8px_rgba(91,61,245,0.25)]"
       onClick={() => {
-        window.location.href = "/trigger-details";
+        window.location.href = `/trigger-details?id=${trigger.id}`;
       }}
       role="button"
       tabIndex={0}
@@ -325,17 +301,8 @@ function TriggerCard({ trigger, stat }: { trigger: SavedTrigger; stat: TriggerSt
         {trigger.name}
       </h3>
       <p className="m-0 mt-[6px] line-clamp-2 min-h-[36px] text-[12px] leading-[18px] text-[#64748b]">
-        {trigger.description || "Custom trigger"}
+        {trigger.description}
       </p>
-      <span
-        className={cn(
-          "mt-[12px] inline-flex w-fit items-center gap-[6px] rounded-[7px] px-[10px] py-[4px] text-[12px] font-semibold",
-          active ? "bg-[#e7f8ef] text-[#16a34a]" : "bg-[#f1f5f9] text-[#64748b]",
-        )}
-      >
-        <span className={cn("size-[7px] rounded-full", active ? "bg-[#16a34a]" : "bg-[#94a3b8]")} />
-        {active ? "Active" : "Draft"}
-      </span>
 
       <div className="mt-[12px] grid grid-cols-3 gap-[6px] border-t border-[#f1f5f9] pt-[10px]">
         {[
@@ -355,7 +322,7 @@ function TriggerCard({ trigger, stat }: { trigger: SavedTrigger; stat: TriggerSt
   );
 }
 
-function YourTriggers({ triggers, stats }: { triggers: SavedTrigger[]; stats: Record<string, TriggerStat> }) {
+function YourTriggers({ triggers, stats }: { triggers: DisplayTrigger[]; stats: Record<string, TriggerStat> }) {
   if (triggers.length === 0) {
     return null;
   }
@@ -444,9 +411,6 @@ function CategoryPerformanceCard({ categories }: { categories: Category[] }) {
         <h2 className="m-0 text-[15px] font-bold text-[#0f172a]">
           Category Performance
         </h2>
-        <button className="text-[12px] font-semibold text-[#5b3df5]" type="button">
-          View Analytics
-        </button>
       </div>
 
       <div className={cn("mt-[16px] grid gap-[8px] pb-[8px] text-[10px] font-semibold uppercase tracking-[0.02em] text-[#94a3b8]", perfColumns)}>
@@ -471,85 +435,28 @@ function CategoryPerformanceCard({ categories }: { categories: Category[] }) {
           </div>
         ))}
       </div>
-
-      <button className="mt-[18px] flex w-full items-center justify-center gap-[6px] text-[13px] font-semibold text-[#5b3df5]" type="button">
-        View All Categories
-        <ArrowRight className="size-[15px]" />
-      </button>
     </section>
   );
 }
 
-function AIInsightsCard({ categories }: { categories: Category[] }) {
-  const byVolume = [...categories].sort((a, b) => b.vol - a.vol);
-  const byScore = [...categories].sort((a, b) => b.score - a.score);
-  const topVolume = byVolume[0];
-  const topScore = byScore[0];
-
-  const bullets = [
-    `${topVolume.name} triggers have the highest signal volume (${topVolume.signals} signals, ${topVolume.companies} companies).`,
-    `${topScore.name} shows the strongest average confidence score (${topScore.score}).`,
-    "Consider creating custom triggers for your industry-specific use cases.",
-  ];
-
+/* AI-generated (BridgeLLM, gemini/gemini-2.5-pro - see
+ * backend/app/controllers/triggers.py::insight) plain-English read of real
+ * category performance + your saved triggers. Falls back to a plain
+ * real-numbers sentence server-side if the LLM isn't configured. */
+function AIInsightsCard({ summary, loading }: { summary: string | null; loading: boolean }) {
   return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
+    <section className="rounded-[16px] border border-[#eee9ff] bg-[#faf8ff] p-[20px]">
       <h2 className="m-0 flex items-center gap-[8px] text-[15px] font-bold text-[#0f172a]">
+        <Sparkles className="size-[16px] text-[#7c3aed]" />
         AI Category Insights
-        <span className="rounded-[6px] bg-[#f3e9ff] px-[7px] py-[2px] text-[11px] font-semibold text-[#7c3aed]">
-          AI
-        </span>
       </h2>
-
-      <div className="relative mt-[14px] overflow-hidden rounded-[12px] bg-gradient-to-br from-[#f5f3ff] to-[#ede9fe] p-[16px]">
-        <span className="absolute right-[14px] top-[14px] flex size-[38px] items-center justify-center rounded-full bg-gradient-to-br from-[#7c3aed] to-[#5b3df5] text-white">
-          <TrendingUp className="size-[19px]" />
-        </span>
-        <p className="m-0 pr-[46px] text-[14px] font-bold text-[#0f172a]">
-          Top Performing Category
-        </p>
-        <p className="m-0 mt-[6px] text-[13px] leading-[19px] text-[#475569]">
-          {topVolume.name} shows the highest signal volume with {topVolume.signals} signals
-          across {topVolume.companies} companies.
-        </p>
-      </div>
-
-      <div className="mt-[16px] flex flex-col gap-[12px]">
-        {bullets.map((b) => (
-          <div className="flex gap-[10px]" key={b}>
-            <span className="mt-[1px] flex size-[18px] shrink-0 items-center justify-center rounded-[6px] bg-[#eef1ff] text-[#5b3df5]">
-              <Plus className="size-[12px]" />
-            </span>
-            <p className="m-0 text-[13px] leading-[19px] text-[#475569]">{b}</p>
-          </div>
-        ))}
-      </div>
-
-      <button className="mt-[18px] flex w-full items-center justify-center gap-[8px] rounded-[10px] border border-[#e0dcff] bg-white py-[10px] text-[13px] font-semibold text-[#5b3df5]" type="button">
-        View AI Recommendations
-        <ArrowRight className="size-[15px]" />
-      </button>
-    </section>
-  );
-}
-
-function QuickActionsCard() {
-  return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[15px] font-bold text-[#0f172a]">Quick Actions</h2>
-      <button className="mt-[14px] flex w-full items-center gap-[12px] rounded-[12px] border border-[#eef1f6] p-[12px] text-left transition hover:bg-[#f8fafc]" type="button">
-        <span className="flex size-[38px] shrink-0 items-center justify-center rounded-[10px] bg-[#eef1ff] text-[#5b3df5]">
-          <Download className="size-[18px]" />
-        </span>
-        <span>
-          <span className="block text-[14px] font-semibold text-[#0f172a]">
-            Import Triggers
-          </span>
-          <span className="block text-[12px] text-[#94a3b8]">
-            Import triggers from templates
-          </span>
-        </span>
-      </button>
+      {loading ? (
+        <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">Generating insight...</p>
+      ) : summary ? (
+        <p className="m-0 mt-[14px] text-[13px] leading-[19px] text-[#475569]">{summary}</p>
+      ) : (
+        <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">No data yet.</p>
+      )}
     </section>
   );
 }
@@ -559,24 +466,26 @@ function QuickActionsCard() {
 /* ------------------------------------------------------------------ */
 
 export function TriggerLibraryPage() {
-  const [saved, setSaved] = useState<SavedTrigger[]>(() => getTriggers());
+  const [triggers, setTriggers] = useState<DisplayTrigger[]>([]);
   const [triggerStats, setTriggerStats] = useState<Record<string, TriggerStat>>({});
   const [statsData, setStatsData] = useState<SignalStatsOut | null>(null);
+  const [search, setSearch] = useState("");
+  const [insight, setInsight] = useState<string | null>(null);
+  const [insightLoading, setInsightLoading] = useState(true);
 
   useEffect(() => {
     const workspaceId = getWorkspaceId();
     if (!workspaceId) {
+      setInsightLoading(false);
       return;
     }
     listTriggers(workspaceId)
-      .then((triggers) => {
-        const mapped = triggers.map(toSavedTrigger);
-        setSaved(mapped);
+      .then((rows) => {
+        const mapped = rows.map(toDisplayTrigger);
+        setTriggers(mapped);
 
         // Real per-trigger match counts, computed from the signals the
         // uploaded Excel actually produced (see trigger_matcher.detect_trigger_events).
-        // Tolerant of individual failures (e.g. a localStorage-only trigger
-        // with no backend id) - those triggers just keep the "—" placeholder.
         Promise.allSettled(mapped.map((t) => getTriggerEvents(workspaceId, t.id))).then((results) => {
           const next: Record<string, TriggerStat> = {};
           results.forEach((result, i) => {
@@ -589,8 +498,14 @@ export function TriggerLibraryPage() {
         });
       })
       .catch(() => {
-        // No backend/workspace yet - keep the localStorage fallback.
+        // No backend/workspace yet - keep the empty list.
       });
+    getTriggerInsight(workspaceId)
+      .then((res) => setInsight(res.summary))
+      .catch(() => {
+        // No backend/workspace yet, or LLM call failed - leave insight null.
+      })
+      .finally(() => setInsightLoading(false));
   }, []);
 
   useEffect(() => {
@@ -605,36 +520,47 @@ export function TriggerLibraryPage() {
         }
       })
       .catch(() => {
-        // No backend/org yet - keep the dummy category numbers.
+        // No backend/org yet - keep the zeroed category numbers.
       });
   }, []);
 
-  const categories = statsData ? buildCategories(realCategoryStats(statsData)) : dummyCategories;
+  const categories = statsData ? buildCategories(realCategoryStats(statsData)) : zeroCategories;
   const summary = buildSummary(statsData);
-  const totalSignals = statsData ? statsData.total : categories.reduce((sum, c) => sum + c.count, 0);
+  const totalSignals = statsData ? statsData.total : 0;
+
+  const filteredTriggers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return triggers;
+    return triggers.filter(
+      (t) => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q),
+    );
+  }, [triggers, search]);
 
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Trigger Intelligence" />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar searchPlaceholder="Search companies, triggers, executives..." />
+        <TopBar
+          searchPlaceholder="Search companies, triggers, executives..."
+          showDetection={false}
+          showNotificationBell={false}
+        />
 
         <main className="flex-1 overflow-x-hidden px-[28px] py-[22px]">
-          <LibraryHeader />
+          <LibraryHeader onSearchChange={setSearch} search={search} />
 
           <div className="mt-[22px] grid grid-cols-1 gap-[24px] xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="flex flex-col gap-[20px]">
               <SummaryCards summary={summary} />
-              <YourTriggers stats={triggerStats} triggers={saved} />
+              <YourTriggers stats={triggerStats} triggers={filteredTriggers} />
               <CategoryGrid categories={categories} />
               <DistributionOverview categories={categories} totalSignals={totalSignals} />
             </div>
 
             <div className="flex flex-col gap-[20px]">
               <CategoryPerformanceCard categories={categories} />
-              <AIInsightsCard categories={categories} />
-              <QuickActionsCard />
+              <AIInsightsCard loading={insightLoading} summary={insight} />
             </div>
           </div>
         </main>

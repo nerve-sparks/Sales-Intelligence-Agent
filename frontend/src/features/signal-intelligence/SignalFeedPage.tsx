@@ -9,7 +9,6 @@ import {
   Cloud,
   Layers,
   MoreVertical,
-  RefreshCw,
   Snowflake,
   Triangle,
   Users,
@@ -529,8 +528,9 @@ export function SignalFeedPage() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar
-          detectionIcon={RefreshCw}
           searchPlaceholder="Search companies, triggers, executives..."
+          showDetection={false}
+          showNotificationBell={false}
         />
 
         <main className="flex-1 overflow-x-hidden px-[28px] py-[24px]">

@@ -5,8 +5,14 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.services import company_directory, excel_pipeline, icp_filter
-from app.schemas.company import CompanyListItemOut, CompanyListOut, CompanyStatsOut
+from app.services import company_directory, excel_pipeline, icp_filter, llm_client
+from app.schemas.company import (
+    CompanyInsightOut,
+    CompanyListItemOut,
+    CompanyListOut,
+    CompanyStatsOut,
+    CountryLeadScoreOut,
+)
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -44,12 +50,53 @@ async def list_companies(
 
 async def stats(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
     counts = await company_directory.intent_counts(db, organisation_id)
+    country_rows = await company_directory.lead_score_by_country(db, organisation_id)
     return CompanyStatsOut(
         total=counts["high"] + counts["medium"] + counts["low"],
         high_intent=counts["high"],
         medium_intent=counts["medium"],
         low_intent=counts["low"],
+        by_country=[
+            CountryLeadScoreOut(country=country, avg_lead_score=float(avg or 0), company_count=count)
+            for country, avg, count in country_rows
+        ],
     )
+
+
+async def insight(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
+    counts = await company_directory.intent_counts(db, organisation_id)
+    total = counts["high"] + counts["medium"] + counts["low"]
+    if total == 0:
+        return CompanyInsightOut(summary="No companies yet - upload a ZoomInfo export to get started.")
+
+    rows, _ = await company_directory.list_companies(db, organisation_id, page=1, page_size=5)
+    top_companies = [
+        {"name": company.company_name, "lead_score": lead_score}
+        for company, lead_score, _gate_status in rows
+        if lead_score is not None
+    ]
+
+    prompt = (
+        "You are a sales intelligence assistant summarizing a B2B sales pipeline for a sales leader. "
+        f"Data: {total} companies tracked, {counts['high']} high intent, {counts['medium']} medium intent, "
+        f"{counts['low']} low intent. Top companies by lead score: {top_companies}. "
+        "Write a 2-3 sentence, plain-English summary of the pipeline's current state and what the sales "
+        "team should focus on next. Reference the actual numbers. No preamble, no markdown - plain text only."
+    )
+
+    try:
+        summary = await llm_client.complete(
+            [{"role": "user", "content": prompt}],
+            generation_name="dashboard-company-overview",
+            trace_user_id=str(organisation_id),
+        )
+    except llm_client.LLMNotConfiguredError:
+        summary = (
+            f"{total} companies tracked - {counts['high']} high intent, "
+            f"{counts['medium']} medium intent, {counts['low']} low intent."
+        )
+
+    return CompanyInsightOut(summary=summary)
 
 
 async def export(organisation_id: UUID, icp_id: UUID | None = None, db: AsyncSession = Depends(get_db)):

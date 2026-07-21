@@ -17,6 +17,7 @@ import { BuyingCommitteePage } from "./features/crm-intelligence/BuyingCommittee
 import { MemberDetailPage } from "./features/crm-intelligence/MemberDetailPage";
 import { ScoreBreakdownPage } from "./features/crm-intelligence/ScoreBreakdownPage";
 import { ScoreHistoryPage } from "./features/crm-intelligence/ScoreHistoryPage";
+import { SettingsIcpDataPage } from "./features/settings/SettingsIcpDataPage";
 
 // Order mirrors the old pathname.includes() checks (most specific first),
 // though react-router's exact path matching makes that ordering no longer
@@ -37,6 +38,7 @@ const routes: { path: string; element: ReactElement }[] = [
   { path: "/signal-intelligence", element: <SignalIntelligencePage /> },
   { path: "/dashboard", element: <DashboardPage /> },
   { path: "/onboarding", element: <OnboardingPage /> },
+  { path: "/settings", element: <SettingsIcpDataPage /> },
 ];
 
 export default function App() {

@@ -58,6 +58,20 @@ async def intent_counts(session: AsyncSession, organisation_id: UUID) -> dict[st
     return counts
 
 
+async def lead_score_by_country(session: AsyncSession, organisation_id: UUID) -> list[tuple[str, float | None, int]]:
+    """Real average LeadScore.lead_score per Company.country (unscored
+    companies excluded from the average via the outer join, but still
+    counted) - feeds the Dashboard globe's per-country tiering."""
+    stmt = (
+        select(Company.country, func.avg(LeadScore.lead_score), func.count())
+        .select_from(Company)
+        .outerjoin(LeadScore, LeadScore.company_id == Company.company_id)
+        .where(Company.organisation_id == organisation_id, Company.country.isnot(None))
+        .group_by(Company.country)
+    )
+    return (await session.execute(stmt)).all()
+
+
 async def list_companies_for_export(
     session: AsyncSession, organisation_id: UUID, company_ids: set[UUID] | None = None
 ):

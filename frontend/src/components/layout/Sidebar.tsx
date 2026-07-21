@@ -38,6 +38,8 @@ const navItems: NavEntry[] = [
   { icon: Gauge, label: "Score Breakdown", href: "/score-breakdown" },
 ];
 
+const settingsItem: NavEntry = { icon: Settings, label: "Settings", href: "/settings" };
+
 const itemClass = (isActive: boolean) =>
   cn(
     "flex items-center gap-[12px] rounded-[10px] px-[13px] py-[10px] text-[14px] transition",
@@ -144,13 +146,20 @@ export function Sidebar({
 
         <div className="my-[10px] h-px bg-[#e9edf5]" />
 
-        <button
-          className="flex items-center gap-[12px] rounded-[10px] px-[13px] py-[10px] text-[14px] font-medium text-[#64748b] transition hover:bg-[#f6f7fb]"
-          type="button"
+        <NavLink
+          className={itemClass(active === settingsItem.label)}
+          href={settingsItem.href}
+          isActive={active === settingsItem.label}
         >
-          <Settings className="size-[19px] shrink-0 text-[#94a3b8]" strokeWidth={2} />
-          Settings
-        </button>
+          <Settings
+            className={cn(
+              "size-[19px] shrink-0",
+              active === settingsItem.label ? "text-[#f97316]" : "text-[#94a3b8]",
+            )}
+            strokeWidth={2}
+          />
+          {settingsItem.label}
+        </NavLink>
       </nav>
     </aside>
   );

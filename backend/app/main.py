@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.routes import (
     companies,
@@ -9,12 +12,19 @@ from app.routes import (
     scores,
     signals,
     triggers,
+    uploads,
     users,
     workspaces,
     zoominfo_enrich,
 )
 
 app = FastAPI(title="SIGNAL Backend")
+
+# Serves uploaded assets (e.g. onboarding's organisation logo) back out at
+# the /static/... URL controllers/uploads.py returns.
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+STATIC_DIR.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # Vite's dev server picks whatever port is free (5173, 5174, 5175, ...) - allow
 # any localhost/127.0.0.1 origin rather than hardcoding one port.
@@ -42,3 +52,4 @@ app.include_router(icp.router)
 app.include_router(icp_imports.router)
 app.include_router(triggers.router)
 app.include_router(zoominfo_enrich.router)
+app.include_router(uploads.router)

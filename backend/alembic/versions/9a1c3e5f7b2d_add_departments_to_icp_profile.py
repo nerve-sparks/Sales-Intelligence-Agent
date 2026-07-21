@@ -1,0 +1,26 @@
+"""add departments to icp_profile
+
+Revision ID: 9a1c3e5f7b2d
+Revises: 61a068921d3b
+Create Date: 2026-07-20 00:00:00.000000
+
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+# revision identifiers, used by Alembic.
+revision: str = '9a1c3e5f7b2d'
+down_revision: Union[str, None] = '61a068921d3b'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    op.add_column('icp_profile', sa.Column('departments', postgresql.ARRAY(sa.Text()), nullable=True))
+
+
+def downgrade() -> None:
+    op.drop_column('icp_profile', 'departments')

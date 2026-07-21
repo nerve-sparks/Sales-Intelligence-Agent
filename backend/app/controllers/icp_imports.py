@@ -38,11 +38,24 @@ async def upload_excel(
         content = await upload.read()
         raw_rows.extend(read_rows(upload.filename or "", content))
 
-    zi_to_company_id, signal_result, score_result = await excel_pipeline.run_pipeline(
-        db, workspace.organisation_id, raw_rows
+    zi_to_company_id, signal_result, score_result, matching_ids = await excel_pipeline.run_pipeline(
+        db, workspace.organisation_id, raw_rows, icp
     )
-    matching_ids = await excel_pipeline.matching_company_ids(db, icp)
     scores = await excel_pipeline.scores_for_companies(db, list(zi_to_company_id.values()))
+
+    # Persisted audit record for the Settings > ICP Data page's history list -
+    # separate from the workbook response, which the browser downloads once
+    # and forgets.
+    await excel_pipeline.record_import_batch(
+        db,
+        icp_id=icp_id,
+        file_names=[upload.filename or "" for upload in files],
+        total_rows=len(raw_rows),
+        zi_to_company_id=zi_to_company_id,
+        signal_result=signal_result,
+        matching_ids=matching_ids,
+        score_result=score_result,
+    )
 
     workbook_bytes = excel_pipeline.build_scored_workbook(raw_rows, zi_to_company_id, scores, matching_ids)
 

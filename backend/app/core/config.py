@@ -13,6 +13,8 @@ class Settings:
     database_url: str
     zoominfo_client_id: str | None
     zoominfo_client_secret: str | None
+    llm_api_key: str | None
+    firebase_credentials_path: str | None
 
     @property
     def database_url_sync(self) -> str:
@@ -30,4 +32,6 @@ def get_settings() -> Settings:
         database_url=database_url,
         zoominfo_client_id=os.environ.get("ZOOMINFO_CLIENT_ID"),
         zoominfo_client_secret=os.environ.get("ZOOMINFO_CLIENT_SECRET"),
+        llm_api_key=os.environ.get("LLM_API_KEY"),
+        firebase_credentials_path=os.environ.get("FIREBASE_CREDENTIALS_PATH"),
     )

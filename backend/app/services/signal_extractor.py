@@ -57,6 +57,19 @@ SIGNAL_CATEGORY_MAP = {
     "board_member_identified": "reachability",
 }
 
+def _dollar_value_signal_types() -> set[str]:
+    return {t for t, category in SIGNAL_CATEGORY_MAP.items() if category == "budget_and_capital"}
+
+
+# Only these signal_types get a dollar_value_usd from the article text - a
+# $ figure in, say, a ceo_change or ai_tool_adoption headline is usually an
+# incidental mention (valuation, market cap, unrelated number), not an
+# actual deal-size signal. Feeding that into lead_scorer._expected_deal_value's
+# Tier 1 weighted average silently inflated Expected Deal Value (e.g. a
+# funding-round-only case that should fall through to Tier 2/3 instead
+# picking up a stray valuation figure from an unrelated article).
+DOLLAR_VALUE_SIGNAL_TYPES = _dollar_value_signal_types()
+
 NEWS_KEYWORD_RULES = [
     ("funding_round_announced", ["raised", "series a", "series b", "series c", "closed funding", "growth equity", "investment round"]),
     ("government_contract_awarded", ["government contract", "awarded contract", "doe contract", "usaf contract", "army contract", "defense contract", "sole-source"]),
@@ -243,7 +256,11 @@ async def _extract_news_signals(session: AsyncSession, organisation_id) -> tuple
     for news in rows:
         signal_type, extraction_confidence = classify_news(news.title, news.description)
         is_action = classify_is_action_news(news.title)
-        dollar_value = extract_dollar_value(f"{news.title or ''} {news.description or ''}")
+        dollar_value = (
+            extract_dollar_value(f"{news.title or ''} {news.description or ''}")
+            if signal_type in DOLLAR_VALUE_SIGNAL_TYPES
+            else None
+        )
 
         m2 = await _compute_m2(session, news.company_id, signal_type)
         m3 = compute_m3(news.page_date)

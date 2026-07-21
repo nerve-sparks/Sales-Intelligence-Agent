@@ -33,6 +33,7 @@ class IcpProfile(Base):
     countries: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     technologies: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     buying_committee_personas: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    departments: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
 
     created_at: Mapped[object | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")

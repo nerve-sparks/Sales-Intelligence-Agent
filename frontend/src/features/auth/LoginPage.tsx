@@ -1,6 +1,39 @@
 import { useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+} from "firebase/auth";
+import { FirebaseError } from "firebase/app";
+import { auth } from "../../lib/firebase";
+import { getOrganisationId } from "../../lib/session";
 
-type AuthMode = "login" | "forgot" | "mfa";
+type AuthMode = "login" | "forgot" | "mfa" | "signup";
+
+/* Firebase error codes -> plain-English text. Falls back to the raw message
+ * for anything not covered here (unusual, but better than nothing). */
+function authErrorMessage(err: unknown): string {
+  if (err instanceof FirebaseError) {
+    switch (err.code) {
+      case "auth/invalid-credential":
+      case "auth/wrong-password":
+      case "auth/user-not-found":
+        return "Incorrect email or password.";
+      case "auth/email-already-in-use":
+        return "An account with this email already exists.";
+      case "auth/weak-password":
+        return "Password must be at least 6 characters.";
+      case "auth/invalid-email":
+        return "Enter a valid email address.";
+      case "auth/too-many-requests":
+        return "Too many attempts. Please wait a moment and try again.";
+      default:
+        return err.message;
+    }
+  }
+  return "Something went wrong. Please try again.";
+}
 
 const asset = (name: string) =>
   new URL(`../../assets/figma/login/${name}`, import.meta.url).href;
@@ -129,6 +162,12 @@ const screenCopy = {
     description:
       "We've sent a verification code to your device. Enter the code below to continue.",
   },
+  signup: {
+    headline: ["Turn signals into", "pipeline."],
+    accent: "Start free.",
+    description:
+      "Create your account to start detecting high-intent signals and scoring prospects automatically.",
+  },
 };
 
 const featureSets = {
@@ -204,6 +243,32 @@ const featureSets = {
       text: "Manage your security preferences anytime from account settings.",
     },
   ],
+  signup: [
+    {
+      icon: icons[0],
+      bg: "#fff7ed",
+      title: "Detect High-Intent Signals",
+      text: "Monitor 120+ real-time data sources",
+    },
+    {
+      icon: icons[1],
+      bg: "#eff6ff",
+      title: "Score with Confidence",
+      text: "AI-powered Conversion Readiness Score (CRS)",
+    },
+    {
+      icon: icons[2],
+      bg: "#faf5ff",
+      title: "Outreach That Converts",
+      text: "Personalized, trigger-based outreach at scale",
+    },
+    {
+      icon: icons[3],
+      bg: "#fef2f2",
+      title: "Win More Deals",
+      text: "Actionable insights that accelerate your pipeline",
+    },
+  ],
 };
 
 const formCopy = {
@@ -222,6 +287,11 @@ const formCopy = {
     subtitle: "Enter the 6-digit code sent to",
     submit: "Verify Code",
   },
+  signup: {
+    title: "Create your account",
+    subtitle: "Start turning signals into revenue",
+    submit: "Create Account",
+  },
 };
 
 function getInitialMode(): AuthMode {
@@ -235,6 +305,10 @@ function getInitialMode(): AuthMode {
 
   if (window.location.pathname.includes("forgot-password")) {
     return "forgot";
+  }
+
+  if (window.location.pathname.includes("signup")) {
+    return "signup";
   }
 
   return "login";
@@ -449,22 +523,70 @@ function LoginForm({
   mode,
   onBack,
   onForgot,
+  onSignup,
 }: {
   mode: AuthMode;
   onBack: () => void;
   onForgot: () => void;
+  onSignup: () => void;
 }) {
+  const navigate = useNavigate();
   const isForgot = mode === "forgot";
   const isMfa = mode === "mfa";
+  const isSignup = mode === "signup";
   const copy = formCopy[mode];
   const cardClassName =
     "flex min-h-[min(640px,58vh)] w-full max-w-[560px] flex-col gap-[clamp(0.85rem,2vh,23px)] rounded-[24px] border border-[#f1f5f9] bg-white px-[clamp(1.875rem,3.25vw,56px)] py-[clamp(1.35rem,3.2vh,44px)] shadow-[0px_20px_25px_rgba(0,0,0,0.05)]";
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [resetSent, setResetSent] = useState(false);
 
-    if (!isForgot && !isMfa) {
-      onForgot();
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (isMfa) return;
+
+    setAuthError(null);
+
+    if (isForgot) {
+      setSubmitting(true);
+      try {
+        await sendPasswordResetEmail(auth, email);
+        setResetSent(true);
+      } catch (err) {
+        setAuthError(authErrorMessage(err));
+      }
+      setSubmitting(false);
+      return;
+    }
+
+    if (isSignup && password !== confirmPassword) {
+      setAuthError("Passwords don't match.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      if (isSignup) {
+        await createUserWithEmailAndPassword(auth, email, password);
+        // Firebase Auth only handles the credential - the app's own
+        // Organisation/Workspace/User records still need to be created,
+        // which is what onboarding does.
+        navigate("/onboarding");
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+        // No link between a Firebase UID and a backend Organisation/Workspace
+        // yet - fall back to whatever org/workspace this browser already has
+        // in session (set during a prior onboarding), or send a first-time
+        // user on this browser into onboarding to create one.
+        navigate(getOrganisationId() ? "/dashboard" : "/onboarding");
+      }
+    } catch (err) {
+      setAuthError(authErrorMessage(err));
+      setSubmitting(false);
     }
   };
 
@@ -494,92 +616,11 @@ function LoginForm({
         </p>
       </div>
 
-      <form
-        className="flex w-full flex-col gap-[clamp(1rem,2vh,24px)] pt-[8px]"
-        onSubmit={handleSubmit}
-      >
-        <div className="flex flex-col gap-[8px]">
-          <label className="font-['IBM_Plex_Sans'] text-[14px] font-medium leading-[20px] text-[#334155]">
-            Email address
-          </label>
-          <div className="relative">
-            <input
-              autoComplete="email"
-              className="h-[clamp(48px,6.2vh,56px)] w-full rounded-[12px] border border-[#e2e8f0] bg-[#f8fafc] pl-[48px] pr-[17px] font-['IBM_Plex_Sans'] text-[17px] font-normal text-[#0f172a] outline-none placeholder:text-[#94a3b8] focus:border-[#cbd5e1]"
-              name="email"
-              placeholder="Enter your work email"
-              type="email"
-            />
-            <img
-              alt=""
-              className="pointer-events-none absolute left-[16px] top-1/2 size-[20px] -translate-y-1/2"
-              src={icons[4]}
-            />
-          </div>
-        </div>
-
-        {!isForgot && (
-          <>
-            <div className="flex flex-col gap-[8px]">
-              <label className="font-['IBM_Plex_Sans'] text-[14px] font-medium leading-[20px] text-[#334155]">
-                Password
-              </label>
-              <div className="relative">
-                <input
-                  autoComplete="current-password"
-                  className="h-[clamp(48px,6.2vh,56px)] w-full rounded-[12px] border border-[#e2e8f0] bg-[#f8fafc] pl-[48px] pr-[52px] font-['IBM_Plex_Sans'] text-[17px] font-normal text-[#0f172a] outline-none placeholder:text-[#94a3b8] focus:border-[#cbd5e1]"
-                  name="password"
-                  placeholder="Enter your password"
-                  type="password"
-                />
-                <img
-                  alt=""
-                  className="pointer-events-none absolute left-[16px] top-1/2 size-[20px] -translate-y-1/2"
-                  src={icons[5]}
-                />
-                <button
-                  aria-label="Show password"
-                  className="absolute inset-y-0 right-0 flex w-[52px] items-center justify-center"
-                  type="button"
-                >
-                  <img alt="" className="size-[20px]" src={icons[6]} />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex w-full items-center justify-between gap-4">
-              <label className="flex items-center font-['IBM_Plex_Sans'] text-[14px] font-normal leading-[20px] text-[#475569]">
-                <input
-                  className="mr-[8px] size-[16px] shrink-0 rounded-[4px] border border-[#cbd5e1] bg-white accent-[#4f46e5]"
-                  name="remember"
-                  type="checkbox"
-                />
-                Remember me
-              </label>
-              <button
-                className="whitespace-nowrap bg-transparent p-0 font-['IBM_Plex_Sans'] text-[14px] font-medium leading-[20px] text-[#4f46e5]"
-                onClick={onForgot}
-                type="button"
-              >
-                Forgot password?
-              </button>
-            </div>
-          </>
-        )}
-
-        <button
-          className="flex h-[clamp(48px,6vh,54px)] w-full items-center justify-center gap-[7.99px] rounded-[12px] bg-gradient-to-r from-[#f75317] via-[#7c3aed] via-[58.173%] to-[#0c20ff] to-[97.115%] px-[16px] py-[12px] shadow-[0px_10px_15px_-3px_rgba(249,115,22,0.2),0px_4px_6px_-4px_rgba(249,115,22,0.2)]"
-          type="submit"
-        >
-          <span className="font-['IBM_Plex_Sans'] text-[17px] font-bold leading-[24px] text-white">
-            {copy.submit}
-          </span>
-          <img alt="" className="size-[20px]" src={icons[7]} />
-        </button>
-      </form>
-
-      {isForgot ? (
+      {isForgot && resetSent ? (
         <>
+          <div className="rounded-[12px] border border-[#bbf7d0] bg-[#f0fdf4] px-[16px] py-[14px] text-center font-['IBM_Plex_Sans'] text-[14px] font-medium leading-[20px] text-[#166534]">
+            Check your inbox — we've sent a password reset link to {email}.
+          </div>
           <button
             className="flex h-[clamp(48px,6.2vh,56px)] w-full items-center justify-center rounded-[12px] border border-[#e2e8f0] bg-white px-[16px] font-['IBM_Plex_Sans'] text-[16px] font-bold leading-[24px] text-[#334155] shadow-[0px_1px_2px_rgba(15,23,42,0.03)]"
             onClick={onBack}
@@ -587,37 +628,162 @@ function LoginForm({
           >
             Back to sign in
           </button>
-          <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 pt-[8px] font-['IBM_Plex_Sans'] text-[16px] leading-[24px]">
-            <span className="text-[#64748b]">Need help?</span>
-            <a className="font-bold text-[#4f46e5] no-underline" href="/support">
-              Contact support
-            </a>
-          </div>
         </>
       ) : (
         <>
-          <div className="relative h-[16px] w-full">
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="h-px w-full border-t border-[#e2e8f0]" />
+          <form
+            className="flex w-full flex-col gap-[clamp(1rem,2vh,24px)] pt-[8px]"
+            onSubmit={handleSubmit}
+          >
+            <div className="flex flex-col gap-[8px]">
+              <label className="font-['IBM_Plex_Sans'] text-[14px] font-medium leading-[20px] text-[#334155]">
+                Email address
+              </label>
+              <div className="relative">
+                <input
+                  autoComplete="email"
+                  className="h-[clamp(48px,6.2vh,56px)] w-full rounded-[12px] border border-[#e2e8f0] bg-[#f8fafc] pl-[48px] pr-[17px] font-['IBM_Plex_Sans'] text-[17px] font-normal text-[#0f172a] outline-none placeholder:text-[#94a3b8] focus:border-[#cbd5e1]"
+                  name="email"
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Enter your work email"
+                  required
+                  type="email"
+                  value={email}
+                />
+                <img
+                  alt=""
+                  className="pointer-events-none absolute left-[16px] top-1/2 size-[20px] -translate-y-1/2"
+                  src={icons[4]}
+                />
+              </div>
             </div>
-            <div className="relative flex h-full justify-center">
-              <span className="bg-white px-[16px] font-['IBM_Plex_Sans'] text-[12px] font-normal uppercase leading-[16px] tracking-[0.6px] text-[#94a3b8]">
-                OR CONTINUE WITH
-              </span>
-            </div>
-          </div>
 
-          <div className="flex w-full flex-wrap items-center justify-center gap-x-[8px] gap-y-1 pt-[8px]">
-            <p className="m-0 text-center font-['IBM_Plex_Sans'] text-[16px] font-normal leading-[24px] text-[#64748b]">
-              New to xsparks.ai?
-            </p>
-            <a
-              className="whitespace-nowrap text-center font-['IBM_Plex_Sans'] text-[16px] font-bold leading-[24px] text-[#4f46e5] no-underline"
-              href="/request-access"
+            {!isForgot && (
+              <>
+                <div className="flex flex-col gap-[8px]">
+                  <label className="font-['IBM_Plex_Sans'] text-[14px] font-medium leading-[20px] text-[#334155]">
+                    Password
+                  </label>
+                  <div className="relative">
+                    <input
+                      autoComplete={isSignup ? "new-password" : "current-password"}
+                      className="h-[clamp(48px,6.2vh,56px)] w-full rounded-[12px] border border-[#e2e8f0] bg-[#f8fafc] pl-[48px] pr-[52px] font-['IBM_Plex_Sans'] text-[17px] font-normal text-[#0f172a] outline-none placeholder:text-[#94a3b8] focus:border-[#cbd5e1]"
+                      minLength={isSignup ? 6 : undefined}
+                      name="password"
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Enter your password"
+                      required
+                      type="password"
+                      value={password}
+                    />
+                    <img
+                      alt=""
+                      className="pointer-events-none absolute left-[16px] top-1/2 size-[20px] -translate-y-1/2"
+                      src={icons[5]}
+                    />
+                    <button
+                      aria-label="Show password"
+                      className="absolute inset-y-0 right-0 flex w-[52px] items-center justify-center"
+                      type="button"
+                    >
+                      <img alt="" className="size-[20px]" src={icons[6]} />
+                    </button>
+                  </div>
+                </div>
+
+                {isSignup ? (
+                  <div className="flex flex-col gap-[8px]">
+                    <label className="font-['IBM_Plex_Sans'] text-[14px] font-medium leading-[20px] text-[#334155]">
+                      Confirm password
+                    </label>
+                    <div className="relative">
+                      <input
+                        autoComplete="new-password"
+                        className="h-[clamp(48px,6.2vh,56px)] w-full rounded-[12px] border border-[#e2e8f0] bg-[#f8fafc] pl-[48px] pr-[17px] font-['IBM_Plex_Sans'] text-[17px] font-normal text-[#0f172a] outline-none placeholder:text-[#94a3b8] focus:border-[#cbd5e1]"
+                        name="confirmPassword"
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        placeholder="Re-enter your password"
+                        required
+                        type="password"
+                        value={confirmPassword}
+                      />
+                      <img
+                        alt=""
+                        className="pointer-events-none absolute left-[16px] top-1/2 size-[20px] -translate-y-1/2"
+                        src={icons[5]}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex w-full items-center justify-between gap-4">
+                    <label className="flex items-center font-['IBM_Plex_Sans'] text-[14px] font-normal leading-[20px] text-[#475569]">
+                      <input
+                        className="mr-[8px] size-[16px] shrink-0 rounded-[4px] border border-[#cbd5e1] bg-white accent-[#4f46e5]"
+                        name="remember"
+                        type="checkbox"
+                      />
+                      Remember me
+                    </label>
+                    <button
+                      className="whitespace-nowrap bg-transparent p-0 font-['IBM_Plex_Sans'] text-[14px] font-medium leading-[20px] text-[#4f46e5]"
+                      onClick={onForgot}
+                      type="button"
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+
+            {authError && (
+              <p className="m-0 rounded-[10px] bg-[#fef2f2] px-[14px] py-[10px] font-['IBM_Plex_Sans'] text-[13px] font-medium leading-[18px] text-[#dc2626]">
+                {authError}
+              </p>
+            )}
+
+            <button
+              className="flex h-[clamp(48px,6vh,54px)] w-full items-center justify-center gap-[7.99px] rounded-[12px] bg-gradient-to-r from-[#f75317] via-[#7c3aed] via-[58.173%] to-[#0c20ff] to-[97.115%] px-[16px] py-[12px] shadow-[0px_10px_15px_-3px_rgba(249,115,22,0.2),0px_4px_6px_-4px_rgba(249,115,22,0.2)] disabled:opacity-60"
+              disabled={submitting}
+              type="submit"
             >
-              Create an Account
-            </a>
-          </div>
+              <span className="font-['IBM_Plex_Sans'] text-[17px] font-bold leading-[24px] text-white">
+                {submitting ? "Please wait..." : copy.submit}
+              </span>
+              {!submitting && <img alt="" className="size-[20px]" src={icons[7]} />}
+            </button>
+          </form>
+
+          {isForgot ? (
+            <>
+              <button
+                className="flex h-[clamp(48px,6.2vh,56px)] w-full items-center justify-center rounded-[12px] border border-[#e2e8f0] bg-white px-[16px] font-['IBM_Plex_Sans'] text-[16px] font-bold leading-[24px] text-[#334155] shadow-[0px_1px_2px_rgba(15,23,42,0.03)]"
+                onClick={onBack}
+                type="button"
+              >
+                Back to sign in
+              </button>
+              <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 pt-[8px] font-['IBM_Plex_Sans'] text-[16px] leading-[24px]">
+                <span className="text-[#64748b]">Need help?</span>
+                <a className="font-bold text-[#4f46e5] no-underline" href="/support">
+                  Contact support
+                </a>
+              </div>
+            </>
+          ) : (
+            <div className="flex w-full flex-wrap items-center justify-center gap-x-[8px] gap-y-1 pt-[8px]">
+              <p className="m-0 text-center font-['IBM_Plex_Sans'] text-[16px] font-normal leading-[24px] text-[#64748b]">
+                {isSignup ? "Already have an account?" : "New to xsparks.ai?"}
+              </p>
+              <button
+                className="whitespace-nowrap bg-transparent p-0 text-center font-['IBM_Plex_Sans'] text-[16px] font-bold leading-[24px] text-[#4f46e5]"
+                onClick={isSignup ? onBack : onSignup}
+                type="button"
+              >
+                {isSignup ? "Sign in" : "Create an Account"}
+              </button>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -674,6 +840,11 @@ export function LoginPage() {
     window.history.replaceState(null, "", "/forgot-password");
   };
 
+  const goToSignup = () => {
+    setMode("signup");
+    window.history.replaceState(null, "", "/signup");
+  };
+
   return (
     <main
       className="h-screen overflow-hidden"
@@ -725,6 +896,7 @@ export function LoginPage() {
               mode={mode}
               onBack={goToLogin}
               onForgot={goToForgot}
+              onSignup={goToSignup}
             />
             {/* Trust badges are secondary — hide them on short viewports
                 (laptops) so the form never forces the page to scroll. */}

@@ -78,6 +78,16 @@ async def filter_companies(session: AsyncSession, icp: IcpProfile) -> list[Compa
             DecisionMaker.persona.in_(icp.buying_committee_personas)
         )
         stmt = stmt.where(Company.company_id.in_(subq))
+    if icp.departments:
+        # Same shape as the personas filter above, but against the raw
+        # DecisionMaker.department column (verbatim text from the uploaded
+        # spreadsheet's "Department" column) rather than the classified
+        # persona enum - personas has no "marketing"/"customer support"
+        # value, so this is the only way to target those.
+        dept_subq = select(DecisionMaker.company_id).where(
+            DecisionMaker.department.in_(icp.departments)
+        )
+        stmt = stmt.where(Company.company_id.in_(dept_subq))
 
     result = await session.execute(stmt)
     return result.scalars().unique().all()
