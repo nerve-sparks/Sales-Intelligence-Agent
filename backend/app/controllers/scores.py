@@ -14,13 +14,15 @@ async def run(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
     return await run_scoring(db, organisation_id)
 
 
-async def ranked(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
+async def ranked(organisation_id: UUID, import_batch_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
     stmt = (
         select(Company.company_name, LeadScore.lead_score, LeadScore.component_score, LeadScore.gate_status)
         .join(LeadScore, LeadScore.company_id == Company.company_id)
         .where(LeadScore.gate_passed.is_(True), Company.organisation_id == organisation_id)
         .order_by(LeadScore.lead_score.desc())
     )
+    if import_batch_id is not None:
+        stmt = stmt.where(Company.import_batch_id == import_batch_id)
     return (await db.execute(stmt)).all()
 
 

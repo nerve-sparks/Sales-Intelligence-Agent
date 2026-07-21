@@ -25,6 +25,10 @@ class User(Base):
     email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     full_name: Mapped[str | None] = mapped_column(Text)
 
+    # Firebase Auth uid this row was created under (see app/core/auth.py) -
+    # nullable because rows created before this column existed have none.
+    firebase_uid: Mapped[str | None] = mapped_column(Text, unique=True)
+
     created_at: Mapped[object | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")
     )

@@ -24,11 +24,13 @@ import { cn } from "../../lib/cn";
 import { exportCompanies, getCompanyStats, listCompanies, type CompanyStatsOut } from "../../api/companies";
 import { ApiError } from "../../api/client";
 import { getIcpCompanies, listIcps, type IcpOut } from "../../api/icp";
-import { getRankedScores } from "../../api/scores";
+import { getRankedScores, runScoring } from "../../api/scores";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
+
+const PAGE_SIZE = 25;
 
 /* ------------------------------------------------------------------ */
 /* Stat cards                                                          */
@@ -417,14 +419,28 @@ function EnterpriseTable({ enterprises }: { enterprises: Enterprise[] }) {
 /* Pagination pieces                                                   */
 /* ------------------------------------------------------------------ */
 
-function PageBtn({ children, active = false, ariaLabel }: { children: ReactNode; active?: boolean; ariaLabel?: string }) {
+function PageBtn({
+  children,
+  active = false,
+  disabled = false,
+  ariaLabel,
+  onClick,
+}: {
+  children: ReactNode;
+  active?: boolean;
+  disabled?: boolean;
+  ariaLabel?: string;
+  onClick?: () => void;
+}) {
   return (
     <button
       aria-label={ariaLabel}
       className={cn(
-        "flex size-[34px] items-center justify-center rounded-[9px] text-[13px] font-semibold transition",
+        "flex size-[34px] items-center justify-center rounded-[9px] text-[13px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-40",
         active ? "bg-[#5b3df5] text-white" : "border border-[#e9edf5] bg-white text-[#475569] hover:bg-[#f6f7fb]",
       )}
+      disabled={disabled}
+      onClick={onClick}
       type="button"
     >
       {children}
@@ -435,15 +451,82 @@ function PageBtn({ children, active = false, ariaLabel }: { children: ReactNode;
 function PerPage() {
   return (
     <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] py-[8px] text-[13px] font-semibold text-[#334155]" type="button">
-      25 per page
+      {PAGE_SIZE} per page
       <ChevronDown className="size-[14px] text-[#94a3b8]" />
     </button>
+  );
+}
+
+/* Compresses a long page range down to first-2/last-2/window-around-current
+ * with "…" gaps, same visual pattern the old fake "1 2 3 4 5 … 154" markup
+ * had - just computed from the real total now instead of hardcoded. */
+function pageNumbers(current: number, totalPages: number): (number | "…")[] {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }
+  const keep = new Set([1, 2, totalPages - 1, totalPages, current - 1, current, current + 1]);
+  const sorted = [...keep].filter((p) => p >= 1 && p <= totalPages).sort((a, b) => a - b);
+  const result: (number | "…")[] = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (prev && p - prev > 1) result.push("…");
+    result.push(p);
+    prev = p;
+  }
+  return result;
+}
+
+function Pagination({
+  page,
+  total,
+  onPageChange,
+}: {
+  page: number;
+  total: number;
+  onPageChange: (page: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const start = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const end = Math.min(page * PAGE_SIZE, total);
+
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-[12px]">
+      <span className="text-[13px] text-[#64748b]">
+        Showing {start} - {end} of {total} enterprises
+      </span>
+      <PerPage />
+      <div className="flex items-center gap-[6px]">
+        <PageBtn ariaLabel="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+          <ChevronLeft className="size-[16px]" />
+        </PageBtn>
+        {pageNumbers(page, totalPages).map((p, i) =>
+          p === "…" ? (
+            <span className="px-[4px] text-[14px] text-[#94a3b8]" key={`ellipsis-${i}`}>
+              …
+            </span>
+          ) : (
+            <PageBtn active={p === page} key={p} onClick={() => onPageChange(p)}>
+              {p}
+            </PageBtn>
+          ),
+        )}
+        <PageBtn ariaLabel="Next page" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>
+          <ChevronRight className="size-[16px]" />
+        </PageBtn>
+      </div>
+    </div>
   );
 }
 
 /* ------------------------------------------------------------------ */
 /* Page                                                                */
 /* ------------------------------------------------------------------ */
+
+// Top lead score first, lowest last - the backend already orders "all
+// companies" this way (LeadScore.lead_score desc nulls last), but the
+// ICP-filtered branch merges scores in JS after two separate fetches, so it
+// needs its own explicit sort.
+const byScoreDesc = (a: Enterprise, b: Enterprise) => b.score - a.score;
 
 export function EnterpriseListPage() {
   const [enterprises, setEnterprises] = useState<Enterprise[]>(dummyEnterprises);
@@ -452,6 +535,18 @@ export function EnterpriseListPage() {
   const [statCards, setStatCards] = useState<StatCard[]>(dummyStats);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  // Full sorted match list for the ICP-filtered view - getIcpCompanies has
+  // no pagination (it returns every match), so paging through it is done
+  // client-side by slicing this. null while "All Companies" is selected,
+  // since that path is paginated server-side instead (see the effect below).
+  const [icpMatches, setIcpMatches] = useState<Enterprise[] | null>(null);
+  const [scoringRunning, setScoringRunning] = useState(false);
+  const [scoringError, setScoringError] = useState<string | null>(null);
+  // Bumped after a scoring run completes so every data-fetching effect below
+  // re-runs and picks up the newly-written LeadScore rows.
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // Populate the ICP filter dropdown once.
   useEffect(() => {
@@ -482,46 +577,48 @@ export function EnterpriseListPage() {
       .catch(() => {
         // No backend/org yet - keep the dummy stat cards.
       });
-  }, []);
+  }, [refreshKey]);
 
-  // Reload the company list whenever the ICP filter changes - "all"
-  // queries every company in the org (listCompanies); a specific ICP
-  // queries only companies matching that ICP's filter criteria in SQL
-  // (getIcpCompanies -> icp_filter.filter_companies), then merges in
-  // lead scores separately since that endpoint doesn't join them.
+  // Land on page 1 whenever the filter changes - staying on a later page
+  // from a previous, larger result set would just show an empty table.
   useEffect(() => {
+    setPage(1);
+  }, [selectedIcpId]);
+
+  // "All Companies" is paginated server-side (listCompanies takes real
+  // page/page_size) - re-fetches on every page change.
+  useEffect(() => {
+    if (selectedIcpId !== "all") {
+      return;
+    }
     const organisationId = getOrganisationId();
-    const workspaceId = getWorkspaceId();
     if (!organisationId) {
       return;
     }
+    listCompanies(organisationId, { page, page_size: PAGE_SIZE })
+      .then((res) => {
+        setTotal(res.total);
+        setEnterprises(res.items.map((c) => toEnterprise(c, c.lead_score, c.gate_status)).sort(byScoreDesc));
+      })
+      .catch(() => {
+        // No backend/org yet - keep the dummy rows.
+      });
+  }, [selectedIcpId, page, refreshKey]);
 
-    // Top lead score first, lowest last - the backend already orders "all
-    // companies" this way (LeadScore.lead_score desc nulls last), but the
-    // ICP-filtered branch below merges scores in JS after two separate
-    // fetches, so it needs its own explicit sort.
-    const byScoreDesc = (a: Enterprise, b: Enterprise) => b.score - a.score;
-
-    if (selectedIcpId === "all") {
-      listCompanies(organisationId, { page: 1, page_size: 25 })
-        .then((res) => {
-          if (res.items.length > 0) {
-            setEnterprises(res.items.map((c) => toEnterprise(c, c.lead_score, c.gate_status)).sort(byScoreDesc));
-          }
-        })
-        .catch(() => {
-          // No backend/org yet - keep the dummy rows.
-        });
-      return;
-    }
-
-    if (!workspaceId) {
+  // ICP-filtered: fetch the full match set once per filter/refresh (not per
+  // page - getIcpCompanies returns everything already, no point re-fetching
+  // it on every page click).
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    const workspaceId = getWorkspaceId();
+    if (selectedIcpId === "all" || !organisationId || !workspaceId) {
+      setIcpMatches(null);
       return;
     }
     Promise.all([getIcpCompanies(workspaceId, selectedIcpId), getRankedScores(organisationId)])
       .then(([icpResult, ranked]) => {
         const scoreByName = new Map(ranked.map((r) => [r.company_name, r]));
-        setEnterprises(
+        setIcpMatches(
           icpResult.companies
             .map((c) => {
               const matched = scoreByName.get(c.company_name);
@@ -533,9 +630,40 @@ export function EnterpriseListPage() {
       .catch(() => {
         // ICP has no matches yet, or the fetch failed - show nothing rather
         // than silently falling back to the unrelated dummy rows.
-        setEnterprises([]);
+        setIcpMatches([]);
       });
-  }, [selectedIcpId]);
+  }, [selectedIcpId, refreshKey]);
+
+  // Slices the full ICP match list into the current page.
+  useEffect(() => {
+    if (icpMatches === null) {
+      return;
+    }
+    setTotal(icpMatches.length);
+    setEnterprises(icpMatches.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
+  }, [icpMatches, page]);
+
+  // Scores every company in the org (POST /scores/run, company_ids=None -
+  // see lead_scorer.run_scoring) - the only way to score companies that
+  // weren't already scored during an Excel upload (uploads only score
+  // matches for the ICP that upload targeted, so companies outside that
+  // ICP - or an upload matched against the wrong ICP entirely - stay
+  // unscored until this runs).
+  const handleRunScoring = async () => {
+    const organisationId = getOrganisationId();
+    if (!organisationId) {
+      return;
+    }
+    setScoringRunning(true);
+    setScoringError(null);
+    try {
+      await runScoring(organisationId);
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      setScoringError(err instanceof ApiError ? String(err.detail) : "Scoring failed. Please try again.");
+    }
+    setScoringRunning(false);
+  };
 
   // Exports the same set of companies currently shown - every company for
   // "All Companies", or just that ICP's matches when one is selected -
@@ -584,6 +712,15 @@ export function EnterpriseListPage() {
               <div className="flex flex-wrap items-center gap-[10px]">
                 <button
                   className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155] disabled:opacity-60"
+                  disabled={scoringRunning}
+                  onClick={handleRunScoring}
+                  type="button"
+                >
+                  <Flame className="size-[16px] text-[#64748b]" />
+                  {scoringRunning ? "Scoring..." : "Run Scoring"}
+                </button>
+                <button
+                  className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155] disabled:opacity-60"
                   disabled={exporting}
                   onClick={handleExport}
                   type="button"
@@ -601,6 +738,7 @@ export function EnterpriseListPage() {
                 </button>
               </div>
               {exportError && <p className="m-0 text-[12px] font-medium text-[#ef4444]">{exportError}</p>}
+              {scoringError && <p className="m-0 text-[12px] font-medium text-[#ef4444]">{scoringError}</p>}
             </div>
           </div>
 
@@ -615,35 +753,16 @@ export function EnterpriseListPage() {
               <Toolbar icps={icps} onIcpChange={setSelectedIcpId} selectedIcpId={selectedIcpId} />
             </div>
 
-            <div className="mt-[16px] flex flex-wrap items-center justify-end gap-[12px]">
-              <span className="text-[13px] text-[#64748b]">Showing 1 - 25 of 3,842 enterprises</span>
-              <PerPage />
-              <div className="flex items-center gap-[6px]">
-                <PageBtn ariaLabel="Previous page"><ChevronLeft className="size-[16px]" /></PageBtn>
-                <PageBtn active>1</PageBtn>
-                <PageBtn ariaLabel="Next page"><ChevronRight className="size-[16px]" /></PageBtn>
-                <span className="ml-[4px] text-[13px] text-[#64748b]">of 154</span>
-              </div>
+            <div className="mt-[16px]">
+              <Pagination onPageChange={setPage} page={page} total={total} />
             </div>
 
             <div className="mt-[16px]">
               <EnterpriseTable enterprises={enterprises} />
             </div>
 
-            <div className="mt-[18px] flex flex-col items-center gap-[16px] border-t border-[#f1f5f9] pt-[18px] lg:flex-row lg:justify-between">
-              <span className="text-[13px] text-[#64748b]">Showing 1 - 25 of 3,842 enterprises</span>
-              <div className="flex items-center gap-[6px]">
-                <PageBtn ariaLabel="Previous page"><ChevronLeft className="size-[16px]" /></PageBtn>
-                <PageBtn active>1</PageBtn>
-                <PageBtn>2</PageBtn>
-                <PageBtn>3</PageBtn>
-                <PageBtn>4</PageBtn>
-                <PageBtn>5</PageBtn>
-                <span className="px-[4px] text-[14px] text-[#94a3b8]">…</span>
-                <PageBtn>154</PageBtn>
-                <PageBtn ariaLabel="Next page"><ChevronRight className="size-[16px]" /></PageBtn>
-              </div>
-              <PerPage />
+            <div className="mt-[18px] border-t border-[#f1f5f9] pt-[18px]">
+              <Pagination onPageChange={setPage} page={page} total={total} />
             </div>
           </div>
         </main>

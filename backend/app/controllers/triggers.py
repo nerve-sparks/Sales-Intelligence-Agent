@@ -32,7 +32,7 @@ async def insight(workspace_id: UUID, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="workspace not found")
 
     triggers = await list_triggers(db, workspace_id)
-    stats = await signals_controller.stats(workspace.organisation_id, db)
+    stats = await signals_controller.stats(workspace.organisation_id, db=db)
 
     if stats.total == 0:
         return TriggerInsightOut(summary="No signals yet - upload a ZoomInfo export to start matching triggers.")

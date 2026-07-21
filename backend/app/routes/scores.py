@@ -1,9 +1,14 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.core.auth import require_organisation_member
 from app.controllers import scores as scores_controller
 from app.schemas.score import LeadScoreOut, NotScoredOut, RankedLeadScoreOut, ScoreRunResult
 
-router = APIRouter(prefix="/organisations/{organisation_id}/scores", tags=["scores"])
+router = APIRouter(
+    prefix="/organisations/{organisation_id}/scores",
+    tags=["scores"],
+    dependencies=[Depends(require_organisation_member)],
+)
 
 # /ranked must be registered before /{company_id}, otherwise the path-param
 # route would match "ranked" as a company_id first.

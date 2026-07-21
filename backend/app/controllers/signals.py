@@ -57,10 +57,13 @@ async def list_all(
     page: int = 1,
     page_size: int = 25,
     category: str | None = None,
+    import_batch_id: UUID | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     page_size = min(page_size, 100)
-    rows, total = await signal_directory.list_signals(db, organisation_id, page, page_size, category)
+    rows, total = await signal_directory.list_signals(
+        db, organisation_id, page, page_size, category, import_batch_id
+    )
     items = [_with_company(signal, company_name) for signal, company_name in rows]
     return SignalListOut(items=items, total=total, page=page, page_size=page_size)
 
@@ -73,17 +76,17 @@ async def get_by_id(organisation_id: UUID, signal_id: UUID, db: AsyncSession = D
     return _with_company(signal, company_name)
 
 
-async def stats(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
-    counts = await signal_directory.intent_counts(db, organisation_id)
-    category_rows = await signal_directory.counts_by_category(db, organisation_id)
-    trend_rows = await signal_directory.trend_by_day(db, organisation_id)
-    top_rows = await signal_directory.top_signals(db, organisation_id)
-    totals = await signal_directory.org_totals(db, organisation_id)
-    histogram_rows = await signal_directory.confidence_histogram(db, organisation_id)
-    country_rows = await signal_directory.counts_by_country(db, organisation_id)
-    source_rows = await signal_directory.top_sources(db, organisation_id)
-    executives_impacted = await signal_directory.executives_impacted(db, organisation_id)
-    actionable_count = await signal_directory.actionable_count(db, organisation_id)
+async def stats(organisation_id: UUID, import_batch_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
+    counts = await signal_directory.intent_counts(db, organisation_id, import_batch_id)
+    category_rows = await signal_directory.counts_by_category(db, organisation_id, import_batch_id)
+    trend_rows = await signal_directory.trend_by_day(db, organisation_id, import_batch_id)
+    top_rows = await signal_directory.top_signals(db, organisation_id, import_batch_id=import_batch_id)
+    totals = await signal_directory.org_totals(db, organisation_id, import_batch_id)
+    histogram_rows = await signal_directory.confidence_histogram(db, organisation_id, import_batch_id)
+    country_rows = await signal_directory.counts_by_country(db, organisation_id, import_batch_id=import_batch_id)
+    source_rows = await signal_directory.top_sources(db, organisation_id, import_batch_id=import_batch_id)
+    executives_impacted = await signal_directory.executives_impacted(db, organisation_id, import_batch_id)
+    actionable_count = await signal_directory.actionable_count(db, organisation_id, import_batch_id)
 
     return SignalStatsOut(
         total=counts["high"] + counts["medium"] + counts["low"],

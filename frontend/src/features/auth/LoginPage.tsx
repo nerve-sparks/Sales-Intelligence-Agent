@@ -1,5 +1,5 @@
-import { useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
+import { Navigate, useNavigate } from "react-router-dom";
 import {
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
@@ -7,7 +7,8 @@ import {
 } from "firebase/auth";
 import { FirebaseError } from "firebase/app";
 import { auth } from "../../lib/firebase";
-import { getOrganisationId } from "../../lib/session";
+import { useAuth } from "../../lib/useAuth";
+import { resolvePostLoginPath } from "../../lib/postLogin";
 
 type AuthMode = "login" | "forgot" | "mfa" | "signup";
 
@@ -578,11 +579,11 @@ function LoginForm({
         navigate("/onboarding");
       } else {
         await signInWithEmailAndPassword(auth, email, password);
-        // No link between a Firebase UID and a backend Organisation/Workspace
-        // yet - fall back to whatever org/workspace this browser already has
-        // in session (set during a prior onboarding), or send a first-time
-        // user on this browser into onboarding to create one.
-        navigate(getOrganisationId() ? "/dashboard" : "/onboarding");
+        // GET /auth/me looks up the real backend record for this Firebase
+        // account (via User.firebase_uid) - a returning user lands on
+        // /dashboard even on a browser that's never completed onboarding
+        // locally; a genuinely new account goes to onboarding.
+        navigate(await resolvePostLoginPath());
       }
     } catch (err) {
       setAuthError(authErrorMessage(err));
@@ -816,8 +817,39 @@ function TrustBadges() {
 }
 
 export function LoginPage() {
+  const { user, loading: authLoading } = useAuth();
   const [mode, setMode] = useState<AuthMode>(getInitialMode);
+  const [resolvedPath, setResolvedPath] = useState<"/dashboard" | "/onboarding" | null>(null);
   const copy = screenCopy[mode];
+
+  // Already signed in (e.g. hit "/" or "/signup" directly with a live
+  // session) - skip straight past the auth screens instead of showing them
+  // again. Same destination logic as a fresh sign-in above (resolvePostLoginPath).
+  useEffect(() => {
+    if (authLoading || !user) {
+      return;
+    }
+    let cancelled = false;
+    resolvePostLoginPath().then((path) => {
+      if (!cancelled) {
+        setResolvedPath(path);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user]);
+
+  if (!authLoading && user) {
+    if (resolvedPath) {
+      return <Navigate replace to={resolvedPath} />;
+    }
+    return (
+      <div className="flex h-screen items-center justify-center bg-white font-['Inter'] text-[14px] text-[#64748b]">
+        Loading...
+      </div>
+    );
+  }
   const isMfa = mode === "mfa";
   // A grid row's default sizing is content-based ("auto"), so items-start on
   // a grid doesn't let a flex-1/min-h-0 wrapper actually squeeze this row

@@ -52,13 +52,33 @@ export type CompanyStatsOut = {
   by_country: CountryLeadScoreOut[];
 };
 
-export function getCompanyStats(organisationId: string): Promise<CompanyStatsOut> {
-  return apiGet<CompanyStatsOut>(`/organisations/${organisationId}/companies/stats`);
+/* importBatchId narrows every count to companies from one specific Excel
+ * upload (Dashboard timeline picker) instead of everything ever ingested. */
+export function getCompanyStats(organisationId: string, importBatchId?: string): Promise<CompanyStatsOut> {
+  const qs = importBatchId ? `?import_batch_id=${importBatchId}` : "";
+  return apiGet<CompanyStatsOut>(`/organisations/${organisationId}/companies/stats${qs}`);
 }
 
 export type CompanyInsightOut = {
   summary: string;
 };
+
+export type IcpThresholdsOut = {
+  employee_min: number | null;
+  employee_max: number | null;
+  revenue_min_usd: number | null;
+  revenue_max_usd: number | null;
+  industries: string[];
+  countries: string[];
+  company_count: number;
+};
+
+/* Data-driven ICP range suggestions from the org's uploaded companies (10th-
+ * 90th percentile employee/revenue + most common industries/countries) - so a
+ * new ICP fits the real data instead of guessed numbers that match nothing. */
+export function getIcpThresholds(organisationId: string): Promise<IcpThresholdsOut> {
+  return apiGet<IcpThresholdsOut>(`/organisations/${organisationId}/companies/icp-thresholds`);
+}
 
 /* LLM-generated (BridgeLLM, gemini/gemini-2.5-pro) - see
  * backend/app/services/llm_client.py. Falls back to a plain real-numbers

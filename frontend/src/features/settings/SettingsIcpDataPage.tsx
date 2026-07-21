@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown } from "lucide-react";
+import { Building2, Check, ChevronDown } from "lucide-react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { cn } from "../../lib/cn";
 import { ApiError } from "../../api/client";
 import { createIcp, listIcps, listImportBatches, type IcpOut, type ImportBatchOut } from "../../api/icp";
+import { getIcpThresholds } from "../../api/companies";
 import { uploadExcel, type ExcelImportStats } from "../../api/icpImports";
-import { getWorkspaceId } from "../../lib/session";
+import { createWorkspace, listWorkspaces, type WorkspaceOut } from "../../api/workspaces";
+import { getOrganisationId, getWorkspaceId, setWorkspaceId } from "../../lib/session";
 import uploadIconAsset from "../../assets/figma/onboarding/icons/upload.svg";
 import workspaceIconAsset from "../../assets/figma/onboarding/icons/workspace.svg";
 import globeIconAsset from "../../assets/figma/onboarding/icons/globe.svg";
@@ -388,13 +390,7 @@ function ExcelUploadButton({
     setError(null);
     onUploadStart();
     try {
-      const { blob, stats } = await uploadExcel(workspaceId, icpId, files);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = files.length === 1 ? `scored_${files[0].name}` : `scored_${files.length}_files.xlsx`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const { stats } = await uploadExcel(workspaceId, icpId, files);
       setUploadedLabel(files.length === 1 ? files[0].name : `${files.length} files`);
       onUploadComplete(stats);
     } catch (err) {
@@ -434,8 +430,162 @@ function ExcelUploadButton({
       {error && <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#ef4444]">{error}</p>}
       {!error && uploadedLabel && (
         <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#16a34a]">
-          Scored {uploadedLabel} - check your downloads
+          Scored {uploadedLabel}
         </p>
+      )}
+    </div>
+  );
+}
+
+/* One Organisation can have many Workspaces (department-level - Sales,
+ * Marketing, etc: see Workspace.organisation_id being one-to-many) - the
+ * backend and the create/list endpoints already supported this, nothing
+ * in the UI ever called them until now. Switching writes the new
+ * workspace_id to session (lib/session.ts) and reloads, since every
+ * workspace-scoped page on the site (this one included) reads that value
+ * fresh on mount rather than through any shared/global state. */
+function WorkspacesPanel({ organisationId }: { organisationId: string | null }) {
+  const [workspaces, setWorkspaces] = useState<WorkspaceOut[]>([]);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [name, setName] = useState("");
+  const [purpose, setPurpose] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const currentWorkspaceId = getWorkspaceId();
+
+  const refresh = (orgId: string) => {
+    listWorkspaces(orgId)
+      .then(setWorkspaces)
+      .catch(() => setWorkspaces([]));
+  };
+
+  useEffect(() => {
+    if (!organisationId) return;
+    refresh(organisationId);
+  }, [organisationId]);
+
+  if (!organisationId) {
+    return null;
+  }
+
+  const create = async () => {
+    if (!name.trim()) {
+      setCreateError("Workspace Name is required.");
+      return;
+    }
+    setCreating(true);
+    setCreateError(null);
+    try {
+      await createWorkspace(organisationId, {
+        workspace_name: name.trim(),
+        purpose: purpose.trim() || null,
+      });
+      setName("");
+      setPurpose("");
+      setShowCreateForm(false);
+      refresh(organisationId);
+    } catch (err) {
+      setCreateError(err instanceof ApiError ? String(err.detail) : "Could not create workspace.");
+    }
+    setCreating(false);
+  };
+
+  const switchTo = (id: string) => {
+    if (id === currentWorkspaceId) return;
+    setWorkspaceId(id);
+    window.location.reload();
+  };
+
+  return (
+    <div className="mb-[20px] rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-[10px]">
+          <span className="flex size-[36px] items-center justify-center rounded-[9px] bg-[#eef1ff] text-[#4f46e5]">
+            <Building2 className="size-[18px]" />
+          </span>
+          <div>
+            <h2 className="m-0 font-['Inter'] text-[16px] font-bold text-[#0f172a]">Workspaces</h2>
+            <p className="m-0 mt-[2px] font-['Inter'] text-[12px] text-[#64748b]">
+              One per department - switch anytime from the Dashboard too.
+            </p>
+          </div>
+        </div>
+        <button
+          className="h-[36px] rounded-[8px] bg-[#005bff] px-[16px] font-['Inter'] text-[12px] font-bold text-white"
+          onClick={() => setShowCreateForm((v) => !v)}
+          type="button"
+        >
+          {showCreateForm ? "Cancel" : "+ New Workspace"}
+        </button>
+      </div>
+
+      {showCreateForm && (
+        <div className="mt-[14px] grid grid-cols-1 gap-[12px] rounded-[10px] border border-[#f1f5f9] bg-[#f8fafc] p-[14px] sm:grid-cols-2">
+          <div className="flex flex-col gap-[6px]">
+            <label className="font-['Inter'] text-[12px] font-semibold text-[#334155]">Workspace Name</label>
+            <input
+              className="h-[38px] rounded-[8px] border border-[#e2e8f0] bg-white px-[12px] font-['Inter'] text-[13px] text-[#0f172a] outline-none"
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Sales"
+              value={name}
+            />
+          </div>
+          <div className="flex flex-col gap-[6px]">
+            <label className="font-['Inter'] text-[12px] font-semibold text-[#334155]">
+              Department / Purpose
+            </label>
+            <input
+              className="h-[38px] rounded-[8px] border border-[#e2e8f0] bg-white px-[12px] font-['Inter'] text-[13px] text-[#0f172a] outline-none"
+              onChange={(e) => setPurpose(e.target.value)}
+              placeholder="e.g. Sales"
+              value={purpose}
+            />
+          </div>
+          {createError && (
+            <p className="m-0 font-['Inter'] text-[12px] font-medium text-[#ef4444] sm:col-span-2">
+              {createError}
+            </p>
+          )}
+          <button
+            className="h-[36px] w-fit rounded-[8px] bg-[#005bff] px-[16px] font-['Inter'] text-[12px] font-bold text-white disabled:opacity-60 sm:col-span-2"
+            disabled={creating}
+            onClick={create}
+            type="button"
+          >
+            {creating ? "Creating..." : "Create Workspace"}
+          </button>
+        </div>
+      )}
+
+      {workspaces.length > 0 && (
+        <div className="mt-[14px] flex flex-col gap-[8px]">
+          {workspaces.map((w) => (
+            <div
+              className="flex items-center justify-between rounded-[10px] border border-[#eef1f6] p-[12px]"
+              key={w.workspace_id}
+            >
+              <div>
+                <p className="m-0 font-['Inter'] text-[13px] font-bold text-[#0f172a]">{w.workspace_name}</p>
+                <p className="m-0 mt-[2px] font-['Inter'] text-[12px] text-[#64748b]">
+                  {w.purpose || "No department set"}
+                </p>
+              </div>
+              {w.workspace_id === currentWorkspaceId ? (
+                <span className="rounded-[6px] bg-[#e7f8ef] px-[10px] py-[4px] font-['Inter'] text-[11px] font-bold text-[#16a34a]">
+                  Active
+                </span>
+              ) : (
+                <button
+                  className="h-[32px] rounded-[8px] border border-[#e2e8f0] bg-white px-[12px] font-['Inter'] text-[12px] font-bold text-[#334155]"
+                  onClick={() => switchTo(w.workspace_id)}
+                  type="button"
+                >
+                  Switch
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -443,12 +593,14 @@ function ExcelUploadButton({
 
 export function SettingsIcpDataPage() {
   const workspaceId = getWorkspaceId();
+  const organisationId = getOrganisationId();
   const [icps, setIcps] = useState<IcpOut[]>([]);
   const [selectedIcpId, setSelectedIcpId] = useState<string>("");
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [form, setForm] = useState<IcpFormState>(initialFormState);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [creatingFromData, setCreatingFromData] = useState(false);
   const [history, setHistory] = useState<ImportBatchOut[]>([]);
   const [uploadStats, setUploadStats] = useState<"idle" | "uploading" | ExcelImportStats>("idle");
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -524,6 +676,42 @@ export function SettingsIcpDataPage() {
     setCreating(false);
   };
 
+  // Builds an ICP straight from the ranges of the companies already uploaded
+  // (10th-90th percentile employee/revenue + most common industries/countries
+  // - see companies/icp-thresholds), so it actually matches the data instead
+  // of the preset dropdowns' guessed ranges. One-click since those derived
+  // numbers don't line up with the dropdown options anyway.
+  const handleCreateFromData = async () => {
+    if (!workspaceId || !organisationId) {
+      return;
+    }
+    setCreatingFromData(true);
+    setCreateError(null);
+    try {
+      const t = await getIcpThresholds(organisationId);
+      if (t.company_count === 0) {
+        setCreateError("No uploaded companies yet to derive thresholds from.");
+        setCreatingFromData(false);
+        return;
+      }
+      const icp = await createIcp(workspaceId, {
+        name: "Data-Matched ICP",
+        industries: t.industries.length ? t.industries : null,
+        employee_min: t.employee_min,
+        employee_max: t.employee_max,
+        revenue_min_usd: t.revenue_min_usd,
+        revenue_max_usd: t.revenue_max_usd,
+        countries: t.countries.length ? t.countries : null,
+      });
+      setIcps((prev) => [icp, ...prev]);
+      setSelectedIcpId(icp.icp_id);
+      setShowCreateForm(false);
+    } catch (err) {
+      setCreateError(err instanceof ApiError ? String(err.detail) : "Could not build an ICP from your data.");
+    }
+    setCreatingFromData(false);
+  };
+
   const handleUploadComplete = (stats: ExcelImportStats) => {
     setUploadStats(stats);
     loadHistory();
@@ -551,6 +739,8 @@ export function SettingsIcpDataPage() {
             </p>
           </div>
 
+          <WorkspacesPanel organisationId={organisationId} />
+
           {!workspaceId ? (
             <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[24px] font-['Inter'] text-[14px] text-[#64748b]">
               No workspace found yet — finish onboarding first.
@@ -560,13 +750,24 @@ export function SettingsIcpDataPage() {
               <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="m-0 font-['Inter'] text-[16px] font-bold text-[#0f172a]">Your ICPs</h2>
-                  <button
-                    className="h-[36px] rounded-[8px] bg-[#005bff] px-[16px] font-['Inter'] text-[12px] font-bold text-white"
-                    onClick={() => setShowCreateForm((v) => !v)}
-                    type="button"
-                  >
-                    {showCreateForm ? "Cancel" : "+ New ICP"}
-                  </button>
+                  <div className="flex items-center gap-[8px]">
+                    <button
+                      className="h-[36px] rounded-[8px] border border-[#005bff] bg-white px-[14px] font-['Inter'] text-[12px] font-bold text-[#005bff] disabled:opacity-60"
+                      disabled={creatingFromData}
+                      onClick={handleCreateFromData}
+                      title="Create an ICP whose ranges are derived from the companies you've uploaded, so it actually matches your data"
+                      type="button"
+                    >
+                      {creatingFromData ? "Building..." : "✨ From uploaded data"}
+                    </button>
+                    <button
+                      className="h-[36px] rounded-[8px] bg-[#005bff] px-[16px] font-['Inter'] text-[12px] font-bold text-white"
+                      onClick={() => setShowCreateForm((v) => !v)}
+                      type="button"
+                    >
+                      {showCreateForm ? "Cancel" : "+ New ICP"}
+                    </button>
+                  </div>
                 </div>
 
                 {icps.length > 0 && !showCreateForm && (

@@ -1,6 +1,8 @@
 import type { ReactElement } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { PageTransition } from "./components/layout/PageTransition";
+import { RequireAuth } from "./components/auth/RequireAuth";
+import { RequireOnboarding } from "./components/auth/RequireOnboarding";
 import { LoginPage } from "./features/auth/LoginPage";
 import { OnboardingPage } from "./features/onboarding/OnboardingPage";
 import { DashboardPage } from "./features/dashboard/DashboardPage";
@@ -46,7 +48,17 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         {routes.map(({ path, element }) => (
-          <Route element={<PageTransition>{element}</PageTransition>} key={path} path={path} />
+          <Route
+            element={
+              <PageTransition>
+                <RequireAuth>
+                  {path === "/onboarding" ? element : <RequireOnboarding>{element}</RequireOnboarding>}
+                </RequireAuth>
+              </PageTransition>
+            }
+            key={path}
+            path={path}
+          />
         ))}
         {/* LoginPage covers "/", "/forgot-password" and "/mfa-verification"
             itself (reads window.location.pathname to pick a mode) - the

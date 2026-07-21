@@ -18,12 +18,108 @@ import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Delta, UpTriangle, smoothPath } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getRankedScores, type RankedLeadScoreOut } from "../../api/scores";
 import { getCompanyInsight, getCompanyStats, type CompanyStatsOut } from "../../api/companies";
 import { getSignalStats, listSignals, type SignalStatsOut, type SignalWithCompanyOut } from "../../api/signals";
+import { listImportBatches, type ImportBatchOut } from "../../api/icp";
 import { listWorkspaceMembers } from "../../api/workspaces";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
+
+/* Exact upload timestamp, not a relative/rounded one - the user explicitly
+ * wants to pick "the exact time" an Excel was uploaded, not a day bucket. */
+function formatExactTimestamp(iso: string | null): string {
+  if (!iso) return "Unknown time";
+  return new Date(iso).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/* Dashboard's timeline picker - lets a user pin every stat/chart/prospect
+ * list on the page to one specific Excel upload instead of the org's whole
+ * history. null selection means "All Time" (every company ever ingested). */
+function TimelinePicker({
+  batches,
+  selectedBatchId,
+  onSelect,
+}: {
+  batches: ImportBatchOut[];
+  selectedBatchId: string | null;
+  onSelect: (batchId: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onOutsideClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onOutsideClick);
+    return () => document.removeEventListener("mousedown", onOutsideClick);
+  }, [open]);
+
+  const selected = batches.find((b) => b.import_batch_id === selectedBatchId);
+  const label = selected ? formatExactTimestamp(selected.created_at) : "All Time";
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        className="flex shrink-0 items-center gap-[10px] rounded-[12px] border border-[#e9edf5] bg-white px-[16px] py-[11px] text-[14px] font-semibold text-[#0f172a]"
+        onClick={() => setOpen((o) => !o)}
+        type="button"
+      >
+        <Calendar className="size-[17px] text-[#64748b]" />
+        {label}
+        <ChevronDown className="size-[15px] text-[#94a3b8]" />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-[calc(100%+6px)] z-20 max-h-[320px] w-[280px] overflow-y-auto rounded-[12px] border border-[#e9edf5] bg-white py-[6px] shadow-[0px_8px_20px_rgba(15,23,42,0.12)]">
+          <button
+            className="flex w-full items-center justify-between gap-[8px] px-[14px] py-[10px] text-left text-[13px] font-semibold text-[#334155] hover:bg-[#f8fafc]"
+            onClick={() => {
+              onSelect(null);
+              setOpen(false);
+            }}
+            type="button"
+          >
+            All Time
+            {selectedBatchId === null && <span className="text-[#005bff]">•</span>}
+          </button>
+          {batches.length === 0 && (
+            <p className="m-0 px-[14px] py-[10px] text-[12px] text-[#94a3b8]">No uploads yet.</p>
+          )}
+          {batches.map((batch) => (
+            <button
+              className="flex w-full flex-col items-start gap-[2px] px-[14px] py-[10px] text-left hover:bg-[#f8fafc]"
+              key={batch.import_batch_id}
+              onClick={() => {
+                onSelect(batch.import_batch_id);
+                setOpen(false);
+              }}
+              type="button"
+            >
+              <span className="flex w-full items-center justify-between gap-[8px] text-[13px] font-semibold text-[#334155]">
+                {formatExactTimestamp(batch.created_at)}
+                {batch.import_batch_id === selectedBatchId && <span className="text-[#005bff]">•</span>}
+              </span>
+              <span className="truncate text-[11px] text-[#94a3b8]">
+                {batch.icp_name ?? "Unknown ICP"} · {batch.companies_ingested} companies
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function relativeTime(iso: string | null): string {
   if (!iso) {
@@ -182,7 +278,10 @@ function TrendChart({ trend }: { trend: SignalStatsOut["trend"] }) {
       {series.map((s, i) => {
         const pts = s.values.map((v, idx) => ({ x: xOf(idx), y: yOf(v) }));
         const line = smoothPath(pts);
-        const area = pts.length ? `${line} L ${pts[pts.length - 1].x} ${bottom} L ${pts[0].x} ${bottom} Z` : "";
+        // smoothPath returns "" for fewer than 2 points (nothing to draw a
+        // line between) - closing that into an area path would start with
+        // "L" instead of "M", which is invalid SVG and throws at render time.
+        const area = pts.length > 1 ? `${line} L ${pts[pts.length - 1].x} ${bottom} L ${pts[0].x} ${bottom} Z` : "";
 
         return (
           <g key={i}>
@@ -752,6 +851,8 @@ export function DashboardPage() {
   const [signalStats, setSignalStats] = useState<SignalStatsOut>(emptySignalStats);
   const [companyInsight, setCompanyInsight] = useState<string | null>(null);
   const [companyInsightLoading, setCompanyInsightLoading] = useState(true);
+  const [importBatches, setImportBatches] = useState<ImportBatchOut[]>([]);
+  const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
 
   // Same "workspace owner" lookup as TopBar's UserMenu (see OnboardingPage's
   // Workspace Setup step: addWorkspaceMember(..., { role: "owner" })) - just
@@ -773,36 +874,49 @@ export function DashboardPage() {
       });
   }, []);
 
+  // Every upload ever made in this workspace, for the timeline picker -
+  // fetched once (independent of which one is currently selected).
+  useEffect(() => {
+    const workspaceId = getWorkspaceId();
+    if (!workspaceId) return;
+    listImportBatches(workspaceId)
+      .then(setImportBatches)
+      .catch(() => {
+        // No backend/workspace yet - keep the empty list ("All Time" only).
+      });
+  }, []);
+
   useEffect(() => {
     const organisationId = getOrganisationId();
     if (!organisationId) {
       setCompanyInsightLoading(false);
       return;
     }
-    getRankedScores(organisationId)
+    const batchId = selectedBatchId ?? undefined;
+    getRankedScores(organisationId, batchId)
       .then((rows) => {
         if (rows.length > 0) {
           setProspects(rows.slice(0, 5).map(toProspect));
+        } else {
+          setProspects([]);
         }
       })
       .catch(() => {
         // No backend/org yet - keep the dummy rows.
       });
-    listSignals(organisationId, { page: 1, page_size: 5 })
+    listSignals(organisationId, { page: 1, page_size: 5, import_batch_id: batchId })
       .then((res) => {
-        if (res.items.length > 0) {
-          setRecentSignals(res.items.map(toRecentSignal));
-        }
+        setRecentSignals(res.items.length > 0 ? res.items.map(toRecentSignal) : []);
       })
       .catch(() => {
         // No backend/org yet - keep the dummy rows.
       });
-    getCompanyStats(organisationId)
+    getCompanyStats(organisationId, batchId)
       .then(setCompanyStats)
       .catch(() => {
         // No backend/org yet - keep the empty stats.
       });
-    getSignalStats(organisationId)
+    getSignalStats(organisationId, batchId)
       .then(setSignalStats)
       .catch(() => {
         // No backend/org yet - keep the empty stats.
@@ -813,7 +927,7 @@ export function DashboardPage() {
         // No backend/org yet, or LLM call failed - leave summary null.
       })
       .finally(() => setCompanyInsightLoading(false));
-  }, []);
+  }, [selectedBatchId]);
 
   const topProspect = prospects !== dummyProspects ? prospects[0] ?? null : null;
 
@@ -822,7 +936,12 @@ export function DashboardPage() {
       <Sidebar active="Dashboard" />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar showAIAssistant={false} showDetection={false} showNotificationBell={false} />
+        <TopBar
+          showAIAssistant={false}
+          showDetection={false}
+          showNotificationBell={false}
+          showWorkspaceSwitcher
+        />
 
         <main className="flex-1 overflow-x-hidden px-[24px] py-[24px]">
           <div className="flex items-start justify-between gap-[16px]">
@@ -834,14 +953,7 @@ export function DashboardPage() {
                 Your AI is working hard to uncover high-conversion opportunities.
               </p>
             </div>
-            <button
-              className="flex shrink-0 items-center gap-[10px] rounded-[12px] border border-[#e9edf5] bg-white px-[16px] py-[11px] text-[14px] font-semibold text-[#0f172a]"
-              type="button"
-            >
-              <Calendar className="size-[17px] text-[#64748b]" />
-              May 20, 2025 (Tue)
-              <ChevronDown className="size-[15px] text-[#94a3b8]" />
-            </button>
+            <TimelinePicker batches={importBatches} onSelect={setSelectedBatchId} selectedBatchId={selectedBatchId} />
           </div>
 
           <div className="mt-[22px]">

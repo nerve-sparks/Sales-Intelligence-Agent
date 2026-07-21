@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.routes import (
+    auth,
     companies,
     icp,
     icp_imports,
@@ -40,6 +41,7 @@ app.add_middleware(
     expose_headers=["Content-Disposition", "X-Files-Processed", "X-Total-Rows", "X-Companies-Ingested", "X-Signals-Extracted", "X-Matched-Icp", "X-Active-Count", "X-Nurture-Count"],
 )
 
+app.include_router(auth.router)
 app.include_router(organisations.router)
 app.include_router(workspaces.router)
 app.include_router(workspaces.members_router)

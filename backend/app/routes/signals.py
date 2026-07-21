@@ -1,5 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.core.auth import require_organisation_member
 from app.controllers import signals as signals_controller
 from app.schemas.signal import (
     SignalExtractResult,
@@ -10,7 +11,11 @@ from app.schemas.signal import (
     SignalWithCompanyOut,
 )
 
-router = APIRouter(prefix="/organisations/{organisation_id}/signals", tags=["signals"])
+router = APIRouter(
+    prefix="/organisations/{organisation_id}/signals",
+    tags=["signals"],
+    dependencies=[Depends(require_organisation_member)],
+)
 
 router.post("/extract", response_model=SignalExtractResult)(signals_controller.extract)
 router.post("/rescore", response_model=SignalRescoreResult)(signals_controller.rescore)

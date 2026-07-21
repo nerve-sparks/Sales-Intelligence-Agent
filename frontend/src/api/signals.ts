@@ -51,12 +51,13 @@ export function rescoreSignals(organisationId: string): Promise<SignalRescoreRes
 
 export function listSignals(
   organisationId: string,
-  params: { page?: number; page_size?: number; category?: string } = {},
+  params: { page?: number; page_size?: number; category?: string; import_batch_id?: string } = {},
 ): Promise<SignalListOut> {
   const query = new URLSearchParams();
   if (params.page) query.set("page", String(params.page));
   if (params.page_size) query.set("page_size", String(params.page_size));
   if (params.category) query.set("category", params.category);
+  if (params.import_batch_id) query.set("import_batch_id", params.import_batch_id);
   const qs = query.toString();
   return apiGet<SignalListOut>(`/organisations/${organisationId}/signals${qs ? `?${qs}` : ""}`);
 }
@@ -116,6 +117,7 @@ export type SignalStatsOut = {
   by_source: SourceCount[];
 };
 
-export function getSignalStats(organisationId: string): Promise<SignalStatsOut> {
-  return apiGet<SignalStatsOut>(`/organisations/${organisationId}/signals/stats`);
+export function getSignalStats(organisationId: string, importBatchId?: string): Promise<SignalStatsOut> {
+  const qs = importBatchId ? `?import_batch_id=${importBatchId}` : "";
+  return apiGet<SignalStatsOut>(`/organisations/${organisationId}/signals/stats${qs}`);
 }

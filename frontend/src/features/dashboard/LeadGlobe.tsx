@@ -81,7 +81,11 @@ function zoneForScore(score: number): Zone {
   return "monitor";
 }
 
-function toRealPoints(byCountry: CountryLeadScore[]): { points: LeadPoint[]; highlight: Record<string, Zone> } {
+type CountryInfo = { country: string; companyCount: number; avgScore: number };
+
+function toRealPoints(
+  byCountry: CountryLeadScore[],
+): { points: LeadPoint[]; highlight: Record<string, Zone>; info: Record<string, CountryInfo> } {
   const known = byCountry
     .map((c) => ({ ...c, centroid: COUNTRY_CENTROID[c.country.toLowerCase()] }))
     .filter((c): c is CountryLeadScore & { centroid: NonNullable<typeof c.centroid> } => Boolean(c.centroid));
@@ -93,28 +97,12 @@ function toRealPoints(byCountry: CountryLeadScore[]): { points: LeadPoint[]; hig
     label: `${c.country} - Lead Score ${Math.round(c.avg_lead_score)} (${c.company_count})`,
   }));
   const highlight: Record<string, Zone> = {};
+  const info: Record<string, CountryInfo> = {};
   for (const c of known) {
     highlight[c.centroid.admin] = zoneForScore(c.avg_lead_score);
+    info[c.centroid.admin] = { country: c.country, companyCount: c.company_count, avgScore: c.avg_lead_score };
   }
-  return { points, highlight };
-}
-
-function buildArcs(points: LeadPoint[]) {
-  if (points.length < 2) return [];
-  const hub = points.reduce((top, p) => {
-    const rank: Record<Zone, number> = { hot: 3, warm: 2, emerging: 1, monitor: 0 };
-    return rank[p.zone] > rank[top.zone] ? p : top;
-  }, points[0]);
-  return points
-    .filter((p) => p !== hub)
-    .slice(0, 7)
-    .map((p) => ({
-      startLat: hub.lat,
-      startLng: hub.lng,
-      endLat: p.lat,
-      endLng: p.lng,
-      color: ZONE[p.zone],
-    }));
+  return { points, highlight, info };
 }
 
 /* Vivid outline palette for the glowing country borders (Paths-Layer look). */
@@ -134,7 +122,7 @@ export default function LeadGlobe({ countryData }: { countryData?: CountryLeadSc
   const real = countryData && countryData.length > 0 ? toRealPoints(countryData) : null;
   const points = real ? real.points : dummyPoints;
   const HIGHLIGHT = real ? real.highlight : dummyHighlight;
-  const arcs = buildArcs(points);
+  const INFO = real ? real.info : {};
 
   useEffect(() => {
     let active = true;
@@ -171,6 +159,7 @@ export default function LeadGlobe({ countryData }: { countryData?: CountryLeadSc
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const controls = g.controls();
     controls.enableZoom = false;
+    controls.enableRotate = true;
     controls.autoRotate = !reduce;
     controls.autoRotateSpeed = 0.55;
     g.pointOfView({ lat: 15, lng: 22, altitude: 2.35 }, 0);
@@ -179,17 +168,10 @@ export default function LeadGlobe({ countryData }: { countryData?: CountryLeadSc
 
   return (
     <div
-      className="pointer-events-none absolute right-[-14%] top-1/2 aspect-square h-[135%] -translate-y-1/2"
+      className="absolute right-[-14%] top-1/2 aspect-square h-[135%] -translate-y-1/2"
       ref={wrapRef}
     >
       <Globe
-        arcAltitudeAutoScale={0.4}
-        arcColor={(d: object) =>(d as { color: string }).color}
-        arcDashAnimateTime={2200}
-        arcDashGap={0.25}
-        arcDashLength={0.4}
-        arcStroke={0.5}
-        arcsData={arcs}
         atmosphereAltitude={0.16}
         atmosphereColor="#3b82f6"
         backgroundColor="rgba(0,0,0,0)"
@@ -204,13 +186,27 @@ export default function LeadGlobe({ countryData }: { countryData?: CountryLeadSc
         pointRadius={0.55}
         pointResolution={6}
         pointsData={points}
-        polygonAltitude={(f: object) =>(HIGHLIGHT[String((f as Feature).properties.ADMIN)] ? 0.02 : 0.006)}
+        polygonAltitude={(f: object) =>(HIGHLIGHT[String((f as Feature).properties.ADMIN)] ? 0.045 : 0.006)}
         polygonCapColor={(f: object) =>{
           const zone = HIGHLIGHT[String((f as Feature).properties.ADMIN)];
-          return zone ? rgba(ZONE[zone], 0.55) : "rgba(255,255,255,0.03)";
+          return zone ? rgba(ZONE[zone], 0.85) : "rgba(255,255,255,0.03)";
+        }}
+        polygonLabel={(f: object) => {
+          const admin = String((f as Feature).properties.ADMIN);
+          const info = INFO[admin];
+          if (info) {
+            const companyWord = info.companyCount === 1 ? "company" : "companies";
+            return `${info.country} - ${info.companyCount} ${companyWord} (avg score ${Math.round(info.avgScore)})`;
+          }
+          return HIGHLIGHT[admin] ? admin : "";
         }}
         polygonSideColor={() => "rgba(0,0,0,0)"}
         polygonStrokeColor={(f: object) => {
+          const admin = String((f as Feature).properties.ADMIN);
+          const zone = HIGHLIGHT[admin];
+          if (zone) {
+            return ZONE[zone];
+          }
           const idx = Number((f as Feature).properties.MAPCOLOR9) || 1;
           return rgba(OUTLINE[(idx - 1) % OUTLINE.length], 0.6);
         }}

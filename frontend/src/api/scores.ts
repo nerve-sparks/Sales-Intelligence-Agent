@@ -45,8 +45,9 @@ export function runScoring(organisationId: string): Promise<ScoreRunResult> {
   return apiPost<ScoreRunResult>(`/organisations/${organisationId}/scores/run`);
 }
 
-export function getRankedScores(organisationId: string): Promise<RankedLeadScoreOut[]> {
-  return apiGet<RankedLeadScoreOut[]>(`/organisations/${organisationId}/scores/ranked`);
+export function getRankedScores(organisationId: string, importBatchId?: string): Promise<RankedLeadScoreOut[]> {
+  const qs = importBatchId ? `?import_batch_id=${importBatchId}` : "";
+  return apiGet<RankedLeadScoreOut[]>(`/organisations/${organisationId}/scores/ranked${qs}`);
 }
 
 export function getScore(organisationId: string, companyId: string): Promise<LeadScoreOut | NotScoredOut> {

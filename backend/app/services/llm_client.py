@@ -17,6 +17,12 @@ class LLMNotConfiguredError(Exception):
     pass
 
 
+def is_configured() -> bool:
+    """Whether LLM_API_KEY is set - lets callers (e.g. signal_llm) fail fast
+    and fall back to non-LLM behaviour instead of firing doomed requests."""
+    return bool(get_settings().llm_api_key)
+
+
 def _get_client() -> AsyncOpenAI:
     global _client
     if _client is not None:

@@ -142,6 +142,22 @@ class CompanyInsightOut(BaseModel):
     summary: str
 
 
+class IcpThresholdsOut(BaseModel):
+    """Data-driven ICP suggestions computed from the org's actually-uploaded
+    companies (see company_directory.icp_thresholds) - so a new ICP's ranges
+    fit the real data instead of guessed numbers that match nothing. Employee
+    / revenue ranges are the 10th-90th percentiles; industries/countries are
+    the most common values in the data."""
+
+    employee_min: int | None = None
+    employee_max: int | None = None
+    revenue_min_usd: int | None = None
+    revenue_max_usd: int | None = None
+    industries: list[str] = []
+    countries: list[str] = []
+    company_count: int
+
+
 class ScoopEnrichOut(BaseModel):
     count: int
     scoops: list[ScoopOut]

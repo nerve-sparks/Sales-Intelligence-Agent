@@ -45,6 +45,16 @@ class Company(Base):
         UUID(as_uuid=True), ForeignKey("organisation.organisation_id", ondelete="CASCADE"), nullable=False
     )
 
+    # Which Excel upload most recently created/updated this company (see
+    # excel_pipeline.record_import_batch) - lets the Dashboard's timeline
+    # picker show only companies/signals from one specific upload, instead
+    # of every company the org has ever ingested. Null for companies from
+    # before this column existed, or ingested some other way (e.g. ZoomInfo
+    # enrichment endpoints).
+    import_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("icp_import_batch.import_batch_id", ondelete="SET NULL")
+    )
+
     # ZoomInfo Identity
     zi_company_id: Mapped[int] = mapped_column(BIGINT, nullable=False)
     company_id: Mapped[uuid.UUID] = mapped_column(

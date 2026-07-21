@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select, text
@@ -6,6 +7,25 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Company, CompanyNews, CompanyScoop, Signal
+from app.services import llm_client, signal_llm
+
+# classify_news' generic catch-all - a news row that only lands here is the
+# vague stuff keyword rules can't place, so it's the LLM's to read (see
+# _extract_news_signals).
+NEWS_FALLBACK_TYPE = "technology_assessment"
+
+
+@dataclass
+class _Resolved:
+    """One row's fully-resolved classification (from either the keyword
+    fast-path or the LLM), ready for scoring + insert in phase 2."""
+
+    signal_type: str
+    extraction_confidence: float
+    is_action: bool
+    core_fact: str | None
+    dollar_value_usd: float | None
+    method: str  # "rule_based" | "llm" - stored on Signal.extraction_method
 
 SIGNAL_CATEGORY_MAP = {
     "ai_engineer_job_posting": "ai_seriousness",
@@ -244,34 +264,104 @@ async def _insert_signal(session: AsyncSession, values: dict) -> bool:
     return result.first() is not None
 
 
+def _news_text(news) -> str:
+    return f"{news.title or ''}. {news.description or ''}".strip()[:600]
+
+
 async def _extract_news_signals(session: AsyncSession, organisation_id) -> tuple[int, int]:
     inserted = skipped = 0
     stmt = (
-        select(CompanyNews)
+        select(CompanyNews, Company.company_name, Company.industries)
         .join(Company, Company.company_id == CompanyNews.company_id)
         .where(Company.organisation_id == organisation_id)
     )
-    rows = (await session.execute(stmt)).scalars().all()
+    rows = (await session.execute(stmt)).all()
 
-    for news in rows:
+    # Phase 1 - classify. A confident keyword hit is trusted as-is (fast,
+    # deterministic, high-precision). Anything that only landed on the generic
+    # NEWS_FALLBACK_TYPE is the vague text keywords can't read, so it goes to
+    # the LLM (signal_llm), which either finds a real signal type or says
+    # "none" (dropped as noise).
+    resolved: dict[str, _Resolved] = {}
+    llm_items: list[signal_llm.LlmItem] = []
+    llm_map: dict[int, CompanyNews] = {}
+
+    for news, company_name, industries in rows:
         signal_type, extraction_confidence = classify_news(news.title, news.description)
-        is_action = classify_is_action_news(news.title)
-        dollar_value = (
-            extract_dollar_value(f"{news.title or ''} {news.description or ''}")
-            if signal_type in DOLLAR_VALUE_SIGNAL_TYPES
-            else None
-        )
+        if signal_type != NEWS_FALLBACK_TYPE:
+            resolved[news.news_id] = _Resolved(
+                signal_type=signal_type,
+                extraction_confidence=extraction_confidence,
+                is_action=classify_is_action_news(news.title),
+                core_fact=extract_core_fact(news.title),
+                dollar_value_usd=(
+                    extract_dollar_value(f"{news.title or ''} {news.description or ''}")
+                    if signal_type in DOLLAR_VALUE_SIGNAL_TYPES
+                    else None
+                ),
+                method="rule_based",
+            )
+        else:
+            idx = len(llm_items)
+            llm_map[idx] = news
+            llm_items.append(
+                signal_llm.LlmItem(
+                    index=idx,
+                    company=company_name,
+                    industry=(industries or [None])[0],
+                    text=_news_text(news),
+                )
+            )
 
-        m2 = await _compute_m2(session, news.company_id, signal_type)
+    if llm_items:
+        try:
+            classes = await signal_llm.classify_batch(llm_items)
+            for idx, news in llm_map.items():
+                cls = classes.get(idx)
+                if cls and cls.signal_type is not None:
+                    resolved[news.news_id] = _Resolved(
+                        signal_type=cls.signal_type,
+                        extraction_confidence=cls.confidence,
+                        is_action=cls.is_action,
+                        core_fact=cls.core_fact or extract_core_fact(news.title),
+                        dollar_value_usd=(
+                            cls.dollar_value_usd if cls.signal_type in DOLLAR_VALUE_SIGNAL_TYPES else None
+                        ),
+                        method="llm",
+                    )
+                # else: LLM found no real signal - leave unresolved (dropped).
+        except llm_client.LLMNotConfiguredError:
+            # No key configured: preserve the previous behaviour (store the
+            # generic technology_assessment signal) so extraction still runs.
+            for news in llm_map.values():
+                signal_type, extraction_confidence = classify_news(news.title, news.description)
+                resolved[news.news_id] = _Resolved(
+                    signal_type=signal_type,
+                    extraction_confidence=extraction_confidence,
+                    is_action=classify_is_action_news(news.title),
+                    core_fact=extract_core_fact(news.title),
+                    dollar_value_usd=None,
+                    method="rule_based",
+                )
+
+    # Phase 2 - score + insert. Scoring math (m2/m3/m4, signal_confidence) is
+    # unchanged and stays deterministic regardless of how the row was classed.
+    for news, _company_name, _industries in rows:
+        r = resolved.get(news.news_id)
+        if r is None:
+            skipped += 1
+            continue
+
+        m2 = await _compute_m2(session, news.company_id, r.signal_type)
         m3 = compute_m3(news.page_date)
-        m4 = compute_m4(is_action)
+        m4 = compute_m4(r.is_action)
 
         values = dict(
             company_id=news.company_id,
             original_source=f"news:{news.news_id}",
-            signal_type=signal_type,
-            signal_category=SIGNAL_CATEGORY_MAP[signal_type],
-            core_fact=extract_core_fact(news.title),
+            signal_type=r.signal_type,
+            signal_category=SIGNAL_CATEGORY_MAP[r.signal_type],
+            core_fact=r.core_fact,
             raw_payload={
                 "news_id": news.news_id,
                 "title": news.title,
@@ -280,9 +370,10 @@ async def _extract_news_signals(session: AsyncSession, organisation_id) -> tuple
                 "category": news.category,
                 "page_date": news.page_date.isoformat() if news.page_date else None,
             },
-            dollar_value_usd=dollar_value,
-            extraction_confidence=extraction_confidence,
-            is_action=is_action,
+            dollar_value_usd=r.dollar_value_usd,
+            extraction_method=r.method,
+            extraction_confidence=r.extraction_confidence,
+            is_action=r.is_action,
             m2_corroboration=m2,
             m3_recency=m3,
             m4_resourcing=m4,
@@ -296,32 +387,88 @@ async def _extract_news_signals(session: AsyncSession, organisation_id) -> tuple
     return inserted, skipped
 
 
+def _scoop_text(scoop) -> str:
+    topic = (scoop.topics[0].get("topic") if scoop.topics else "") or ""
+    return f"{topic}. {scoop.description or ''}".strip()[:600]
+
+
 async def _extract_scoop_signals(session: AsyncSession, organisation_id) -> tuple[int, int]:
     inserted = skipped = 0
     stmt = (
-        select(CompanyScoop)
+        select(CompanyScoop, Company.company_name, Company.industries)
         .join(Company, Company.company_id == CompanyScoop.company_id)
         .where(Company.organisation_id == organisation_id)
     )
-    rows = (await session.execute(stmt)).scalars().all()
+    rows = (await session.execute(stmt)).all()
 
-    for scoop in rows:
+    # Phase 1 - keyword topic-mapping first; scoops whose topic doesn't map to
+    # a rule (previously silently dropped - lost recall) now go to the LLM.
+    resolved: dict[str, _Resolved] = {}
+    llm_items: list[signal_llm.LlmItem] = []
+    llm_map: dict[int, CompanyScoop] = {}
+
+    for scoop, company_name, industries in rows:
         classification = classify_scoop(scoop.topics, scoop.description)
-        if classification is None:
+        if classification is not None:
+            signal_type, is_action = classification
+            resolved[scoop.scoop_id] = _Resolved(
+                signal_type=signal_type,
+                extraction_confidence=0.90,
+                is_action=is_action,
+                core_fact=extract_core_fact(scoop.description),
+                dollar_value_usd=None,
+                method="rule_based",
+            )
+        else:
+            idx = len(llm_items)
+            llm_map[idx] = scoop
+            llm_items.append(
+                signal_llm.LlmItem(
+                    index=idx,
+                    company=company_name,
+                    industry=(industries or [None])[0],
+                    text=_scoop_text(scoop),
+                )
+            )
+
+    if llm_items:
+        try:
+            classes = await signal_llm.classify_batch(llm_items)
+            for idx, scoop in llm_map.items():
+                cls = classes.get(idx)
+                if cls and cls.signal_type is not None:
+                    resolved[scoop.scoop_id] = _Resolved(
+                        signal_type=cls.signal_type,
+                        extraction_confidence=cls.confidence,
+                        is_action=cls.is_action,
+                        core_fact=cls.core_fact or extract_core_fact(scoop.description),
+                        dollar_value_usd=(
+                            cls.dollar_value_usd if cls.signal_type in DOLLAR_VALUE_SIGNAL_TYPES else None
+                        ),
+                        method="llm",
+                    )
+                # else: no real signal - dropped (same as the old None path).
+        except llm_client.LLMNotConfiguredError:
+            # No key: unmapped scoops stay dropped, exactly as before.
+            pass
+
+    # Phase 2 - score + insert (unchanged deterministic scoring math).
+    for scoop, _company_name, _industries in rows:
+        r = resolved.get(scoop.scoop_id)
+        if r is None:
             skipped += 1
             continue
 
-        signal_type, is_action = classification
-        m2 = await _compute_m2(session, scoop.company_id, signal_type)
+        m2 = await _compute_m2(session, scoop.company_id, r.signal_type)
         m3 = compute_m3(scoop.published_date)
-        m4 = compute_m4(is_action)
+        m4 = compute_m4(r.is_action)
 
         values = dict(
             company_id=scoop.company_id,
             original_source=f"scoop:{scoop.scoop_id}",
-            signal_type=signal_type,
-            signal_category=SIGNAL_CATEGORY_MAP[signal_type],
-            core_fact=extract_core_fact(scoop.description),
+            signal_type=r.signal_type,
+            signal_category=SIGNAL_CATEGORY_MAP[r.signal_type],
+            core_fact=r.core_fact,
             raw_payload={
                 "scoop_id": scoop.scoop_id,
                 "description": scoop.description,
@@ -329,9 +476,10 @@ async def _extract_scoop_signals(session: AsyncSession, organisation_id) -> tupl
                 "types": scoop.types,
                 "published_date": scoop.published_date.isoformat() if scoop.published_date else None,
             },
-            dollar_value_usd=None,
-            extraction_confidence=0.90,
-            is_action=is_action,
+            dollar_value_usd=r.dollar_value_usd,
+            extraction_method=r.method,
+            extraction_confidence=r.extraction_confidence,
+            is_action=r.is_action,
             m2_corroboration=m2,
             m3_recency=m3,
             m4_resourcing=m4,

@@ -1,7 +1,20 @@
 /* Shared fetch wrapper for every file in src/api/. One file per backend
  * routes/*.py file - keep that mapping when adding new endpoints. */
+import { auth } from "../lib/firebase";
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8175";
+
+/* Attaches the current Firebase session as a bearer token so the backend
+ * can verify who's actually calling (see backend/app/core/auth.py) -
+ * without this every request looked anonymous no matter who was logged in.
+ * Empty when logged out; those endpoints don't all require auth yet, so an
+ * absent header is a normal, non-error state, not something to throw on. */
+async function authHeaders(): Promise<Record<string, string>> {
+  const user = auth.currentUser;
+  if (!user) return {};
+  const token = await user.getIdToken();
+  return { Authorization: `Bearer ${token}` };
+}
 
 export class ApiError extends Error {
   status: number;
@@ -28,6 +41,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     ...options,
     headers: {
       "Content-Type": "application/json",
+      ...(await authHeaders()),
       ...options.headers,
     },
   });
@@ -55,7 +69,11 @@ export function apiPost<T>(path: string, body?: unknown): Promise<T> {
  * upload) - as opposed to apiPostForBlob below, which is FormData in AND a
  * binary file out. */
 export async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
-  const response = await fetch(`${BASE_URL}${path}`, { method: "POST", body: formData });
+  const response = await fetch(`${BASE_URL}${path}`, {
+    method: "POST",
+    body: formData,
+    headers: await authHeaders(),
+  });
   if (!response.ok) {
     throw new ApiError(response.status, await parseErrorDetail(response));
   }
@@ -70,7 +88,11 @@ export async function apiPostForBlob(
   path: string,
   formData: FormData,
 ): Promise<{ blob: Blob; headers: Headers }> {
-  const response = await fetch(`${BASE_URL}${path}`, { method: "POST", body: formData });
+  const response = await fetch(`${BASE_URL}${path}`, {
+    method: "POST",
+    body: formData,
+    headers: await authHeaders(),
+  });
   if (!response.ok) {
     throw new ApiError(response.status, await parseErrorDetail(response));
   }
@@ -80,7 +102,7 @@ export async function apiPostForBlob(
 /* Same idea as apiPostForBlob but for GET endpoints that stream back a
  * binary file (e.g. the Enterprise List's company export). */
 export async function apiGetForBlob(path: string): Promise<{ blob: Blob; headers: Headers }> {
-  const response = await fetch(`${BASE_URL}${path}`);
+  const response = await fetch(`${BASE_URL}${path}`, { headers: await authHeaders() });
   if (!response.ok) {
     throw new ApiError(response.status, await parseErrorDetail(response));
   }

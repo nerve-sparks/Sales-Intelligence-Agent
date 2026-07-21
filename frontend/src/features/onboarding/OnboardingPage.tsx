@@ -20,7 +20,6 @@ import {
   Search,
   ShieldCheck,
   ShoppingCart,
-  Sparkles,
   Target,
   TrendingUp,
   Upload,
@@ -29,11 +28,11 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { FigmaLogo } from "../auth/LoginPage";
 import { ApiError, BASE_URL } from "../../api/client";
-import { createOrganisation, getIcpRecommendations, type IcpRecommendationOut } from "../../api/organisations";
+import { createOrganisation } from "../../api/organisations";
 import { uploadLogo } from "../../api/uploads";
 import { addWorkspaceMember, createWorkspace } from "../../api/workspaces";
 import { createUser } from "../../api/users";
@@ -44,6 +43,8 @@ import {
 import { createIcp, listIcps, type IcpOut } from "../../api/icp";
 import { createTrigger, listTriggers, type TriggerCreate, type TriggerOut } from "../../api/triggers";
 import { uploadExcel, type ExcelImportStats } from "../../api/icpImports";
+import { useAuth } from "../../lib/useAuth";
+import { resolvePostLoginPath } from "../../lib/postLogin";
 import goLiveRocketImage from "../../assets/figma/onboarding/go-live-rocket.png";
 import heroImage from "../../assets/figma/onboarding/raw-image-1.png";
 import arrowRightIcon from "../../assets/figma/onboarding/icons/arrow-right.svg";
@@ -605,26 +606,34 @@ function FieldLabel({
 }
 
 type TextFieldProps = {
-  icon: string;
+  icon: string | ReactNode;
   label: string;
   required?: boolean;
+  disabled?: boolean;
   placeholder?: string;
   value: string;
   onChange: (value: string) => void;
 };
 
-function TextField({ icon, label, required, placeholder, value, onChange }: TextFieldProps) {
+function TextField({ icon, label, required, disabled, placeholder, value, onChange }: TextFieldProps) {
   return (
     <div className="flex flex-col gap-[8px]">
       <FieldLabel required={required}>{label}</FieldLabel>
       <div className="relative flex h-[42px] items-center rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc]">
-        <img
-          alt=""
-          className="pointer-events-none absolute left-[12px] size-[20px]"
-          src={icon}
-        />
+        {typeof icon === "string" ? (
+          <img
+            alt=""
+            className="pointer-events-none absolute left-[12px] size-[20px]"
+            src={icon}
+          />
+        ) : (
+          <span className="pointer-events-none absolute left-[12px] flex size-[20px] items-center justify-center">
+            {icon}
+          </span>
+        )}
         <input
-          className="h-full w-full rounded-[8px] bg-transparent pl-[41px] pr-[17px] font-['Inter'] text-[14px] leading-[20px] text-[#0f172a] outline-none placeholder:text-[#94a3b8]"
+          className="h-full w-full rounded-[8px] bg-transparent pl-[41px] pr-[17px] font-['Inter'] text-[14px] leading-[20px] text-[#0f172a] outline-none placeholder:text-[#94a3b8] disabled:cursor-not-allowed disabled:text-[#94a3b8]"
+          disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           type="text"
@@ -887,89 +896,7 @@ type StepFormProps = {
   onFieldChange: <K extends keyof OnboardingFormState>(field: K, value: OnboardingFormState[K]) => void;
 };
 
-/* AI-generated (BridgeLLM, gemini/gemini-2.5-pro - see
- * backend/app/controllers/organisations.py::icp_recommendations) from the
- * organisation's own profile fields, once the org has been created (needs a
- * real organisation_id). Empty state (not an error) if the LLM isn't
- * configured or didn't return parseable JSON - never fabricated. */
-function IcpRecommendationsPanel({ organisationId }: { organisationId: string | null }) {
-  const [recommendations, setRecommendations] = useState<IcpRecommendationOut[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [fetched, setFetched] = useState(false);
-
-  useEffect(() => {
-    if (!organisationId) return;
-    setLoading(true);
-    setFetched(false);
-    getIcpRecommendations(organisationId)
-      .then((res) => setRecommendations(res.recommendations))
-      .catch(() => setRecommendations([]))
-      .finally(() => {
-        setLoading(false);
-        setFetched(true);
-      });
-  }, [organisationId]);
-
-  if (!organisationId) {
-    return null;
-  }
-
-  return (
-    <div className="rounded-[12px] border border-[#eef1ff] bg-[#faf8ff] p-[18px] md:col-span-2">
-      <div className="flex items-center gap-[8px]">
-        <Sparkles className="size-[16px] text-[#7c3aed]" />
-        <h3 className="m-0 text-[14px] font-bold text-[#0f172a]">AI-Recommended ICPs</h3>
-      </div>
-      <p className="m-0 mt-[4px] text-[12px] text-[#64748b]">
-        Based on your company profile - who you should probably be targeting as customers.
-      </p>
-
-      {loading ? (
-        <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">Generating recommendations...</p>
-      ) : recommendations.length === 0 ? (
-        fetched && (
-          <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">
-            No recommendations available right now.
-          </p>
-        )
-      ) : (
-        <div className="mt-[14px] grid grid-cols-1 gap-[12px] lg:grid-cols-3">
-          {recommendations.map((rec) => (
-            <div className="rounded-[10px] border border-[#e9edf5] bg-white p-[14px]" key={rec.name}>
-              <p className="m-0 text-[13px] font-bold text-[#0f172a]">{rec.name}</p>
-              <div className="mt-[8px] flex flex-wrap gap-[4px]">
-                {rec.industries.map((ind) => (
-                  <span
-                    className="rounded-[5px] bg-[#eef1ff] px-[6px] py-[2px] text-[10px] font-semibold text-[#4f46e5]"
-                    key={ind}
-                  >
-                    {ind}
-                  </span>
-                ))}
-              </div>
-              <p className="m-0 mt-[8px] text-[11px] text-[#64748b]">
-                {formatRange(rec.employee_min, rec.employee_max, (v) => String(v))} employees
-              </p>
-              <p className="m-0 mt-[2px] text-[11px] text-[#64748b]">
-                {formatRange(rec.revenue_min_usd, rec.revenue_max_usd, formatMoney)} revenue
-              </p>
-              <p className="m-0 mt-[2px] text-[11px] text-[#64748b]">{rec.countries.join(", ")}</p>
-              <p className="m-0 mt-[8px] text-[11px] italic leading-[16px] text-[#475569]">
-                {rec.rationale}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function OrganizationSetupForm({
-  form,
-  onFieldChange,
-  organisationId,
-}: StepFormProps & { organisationId: string | null }) {
+function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
   return (
     <div className="grid grid-cols-1 gap-x-[20px] gap-y-[16px] md:grid-cols-2">
       <TextField
@@ -1066,13 +993,11 @@ function OrganizationSetupForm({
           value={form.company_description}
         />
       </div>
-
-      <IcpRecommendationsPanel organisationId={organisationId} />
     </div>
   );
 }
 
-function WorkspaceSetupForm({ form, onFieldChange }: StepFormProps) {
+function WorkspaceSetupForm({ form, onFieldChange, firebaseEmail }: StepFormProps & { firebaseEmail: string | null }) {
   return (
     <div className="grid grid-cols-1 gap-x-[20px] gap-y-[19px] md:grid-cols-2">
       <TextField
@@ -1096,13 +1021,18 @@ function WorkspaceSetupForm({ form, onFieldChange }: StepFormProps) {
         placeholder="Enter your full name"
         value={form.user_full_name}
       />
+      {/* Locked to the actual logged-in Firebase account, not free-typed -
+       * this is the real identity the workspace membership (and the
+       * backend's app_user row) gets created under, so it can't drift from
+       * whoever is actually signed in. */}
       <TextField
-        icon={icons.globe}
+        disabled
+        icon={<Mail className="size-[16px] text-[#94a3b8]" />}
         label="Your Email"
-        onChange={(v) => onFieldChange("user_email", v)}
+        onChange={() => {}}
         placeholder="you@company.com"
         required
-        value={form.user_email}
+        value={firebaseEmail ?? form.user_email}
       />
     </div>
   );
@@ -1598,6 +1528,10 @@ type IcpFormProps = {
   onFieldChange: <K extends keyof IcpFormState>(field: K, value: IcpFormState[K]) => void;
   icpId: string | null;
   workspaceId: string | null;
+  // The exact IcpOut just returned by createIcp (see handlePrimaryAction's
+  // ICP step block) - appended to the library table immediately below
+  // instead of waiting on a second network round-trip to notice it.
+  createdIcp: IcpOut | null;
   onUploadStart: () => void;
   onUploadComplete: (stats: ExcelImportStats) => void;
 };
@@ -1624,13 +1558,7 @@ function ExcelUploadButton({ icpId, workspaceId, onUploadStart, onUploadComplete
     setError(null);
     onUploadStart();
     try {
-      const { blob, stats } = await uploadExcel(workspaceId, icpId, files);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = files.length === 1 ? `scored_${files[0].name}` : `scored_${files.length}_files.xlsx`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const { stats } = await uploadExcel(workspaceId, icpId, files);
       setUploadedLabel(files.length === 1 ? files[0].name : `${files.length} files`);
       onUploadComplete(stats);
     } catch (err) {
@@ -1670,14 +1598,22 @@ function ExcelUploadButton({ icpId, workspaceId, onUploadStart, onUploadComplete
       {error && <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#ef4444]">{error}</p>}
       {!error && uploadedLabel && (
         <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#16a34a]">
-          Scored {uploadedLabel} - check your downloads
+          Scored {uploadedLabel}
         </p>
       )}
     </div>
   );
 }
 
-function IcpGenerationForm({ form, onFieldChange, icpId, workspaceId, onUploadStart, onUploadComplete }: IcpFormProps) {
+function IcpGenerationForm({
+  form,
+  onFieldChange,
+  icpId,
+  workspaceId,
+  createdIcp,
+  onUploadStart,
+  onUploadComplete,
+}: IcpFormProps) {
   const [icps, setIcps] = useState<IcpOut[]>([]);
 
   useEffect(() => {
@@ -1690,6 +1626,14 @@ function IcpGenerationForm({ form, onFieldChange, icpId, workspaceId, onUploadSt
       cancelled = true;
     };
   }, [workspaceId, icpId]);
+
+  // Belt-and-suspenders: reflects a newly-created ICP in the table the
+  // instant createIcp resolves, rather than depending on the fetch above
+  // (keyed on icpId) to have re-run first.
+  useEffect(() => {
+    if (!createdIcp) return;
+    setIcps((prev) => (prev.some((i) => i.icp_id === createdIcp.icp_id) ? prev : [...prev, createdIcp]));
+  }, [createdIcp]);
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -2117,6 +2061,14 @@ function OnboardingStepper({ activeStep }: { activeStep: number }) {
 
 function OnboardingCard() {
   const navigate = useNavigate();
+  const { user: firebaseUser } = useAuth();
+  // Landing here can mean "genuinely new account" OR "RequireOnboarding
+  // bounced a returning user here because this browser's cached session was
+  // empty" (different browser, cleared storage, etc.) - GET /auth/me (via
+  // resolvePostLoginPath) tells the two apart by the real Firebase identity
+  // instead of this browser's local cache, so a returning user gets sent
+  // straight to /dashboard instead of redoing the wizard.
+  const [checkingAccount, setCheckingAccount] = useState(true);
   const [activeStep, setActiveStep] = useState(0);
   const [form, setForm] = useState<OnboardingFormState>(initialFormState);
   const [organisationId, setOrganisationId] = useState<string | null>(null);
@@ -2125,11 +2077,32 @@ function OnboardingCard() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [icpForm, setIcpForm] = useState<IcpFormState>(initialIcpFormState);
   const [icpId, setIcpId] = useState<string | null>(null);
+  const [createdIcp, setCreatedIcp] = useState<IcpOut | null>(null);
   // Business Discovery (step 8) shows the REAL result of the Excel upload
   // pipeline triggered from the ICP step, not fake "AI is analyzing"
   // content - "idle" (nothing uploaded yet), "uploading" (pipeline running
   // server-side, synchronous), or the real stats once it returns.
   const [uploadStats, setUploadStats] = useState<"idle" | "uploading" | ExcelImportStats>("idle");
+
+  useEffect(() => {
+    if (!firebaseUser) {
+      setCheckingAccount(false);
+      return;
+    }
+    let cancelled = false;
+    resolvePostLoginPath().then((path) => {
+      if (cancelled) return;
+      if (path === "/dashboard") {
+        navigate("/dashboard", { replace: true });
+      } else {
+        setCheckingAccount(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser, navigate]);
+
   const isOrganizationStep = activeStep === 0;
   const isWorkspaceStep = activeStep === 1;
   const isTeamStep = activeStep === 2;
@@ -2214,10 +2187,6 @@ function OnboardingCard() {
         return;
       }
       setSubmitting(false);
-      // Stay on this step - the AI ICP recommendations panel only enables
-      // once organisationId is set, same "second click to advance" pattern
-      // as the ICP step below (see its comment).
-      return;
     }
 
     if (isWorkspaceStep && workspaceId === null) {
@@ -2225,11 +2194,16 @@ function OnboardingCard() {
         setSubmitError("Organisation setup must complete before creating a workspace.");
         return;
       }
-      // Workspace Name and Your Email are optional in the UI (Workspace.workspace_name
-      // and User.email are still NOT NULL/UNIQUE columns on the backend, so a blank
-      // entry falls back to a generated placeholder instead of blocking the step).
+      // Workspace Name is optional in the UI (Workspace.workspace_name is
+      // still a NOT NULL column on the backend, so a blank entry falls back
+      // to a generated placeholder instead of blocking the step). Your
+      // Email is no longer free-typed - it's locked to whichever Firebase
+      // account is actually logged in (RequireAuth guarantees one exists on
+      // every onboarding page), and the backend re-derives/verifies it from
+      // the request's bearer token anyway (see app/controllers/users.py),
+      // so this is really just what gets shown while submitting.
       const workspaceName = form.workspace_name.trim() || `${form.company_name || "My"} Workspace`;
-      const userEmail = form.user_email.trim() || `founder+${Date.now()}@placeholder.local`;
+      const userEmail = firebaseUser?.email ?? `founder+${Date.now()}@placeholder.local`;
 
       setSubmitting(true);
       setSubmitError(null);
@@ -2284,6 +2258,7 @@ function OnboardingCard() {
             departments: icpForm.departments.length ? icpForm.departments : null,
           });
           setIcpId(icp.icp_id);
+          setCreatedIcp(icp);
         } catch (err) {
           setSubmitError(
             err instanceof ApiError ? String(err.detail) : "Something went wrong. Please try again.",
@@ -2308,6 +2283,14 @@ function OnboardingCard() {
       setActiveStep((step) => step - 1);
     }
   };
+
+  if (checkingAccount) {
+    return (
+      <section className="relative z-20 flex h-full w-full items-center justify-center bg-white font-['Inter'] text-[14px] text-[#64748b]">
+        Loading...
+      </section>
+    );
+  }
 
   return (
     <section className="relative z-20 flex h-full w-full flex-col bg-white px-[36px] pb-[18px] pt-[34px]">
@@ -2357,14 +2340,10 @@ function OnboardingCard() {
           style={{ transform: `translateX(-${activeStep * 100}%)` }}
         >
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <OrganizationSetupForm
-              form={form}
-              onFieldChange={handleFieldChange}
-              organisationId={organisationId}
-            />
+            <OrganizationSetupForm form={form} onFieldChange={handleFieldChange} />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <WorkspaceSetupForm form={form} onFieldChange={handleFieldChange} />
+            <WorkspaceSetupForm firebaseEmail={firebaseUser?.email ?? null} form={form} onFieldChange={handleFieldChange} />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <TeamInvitationsForm />
@@ -2377,6 +2356,7 @@ function OnboardingCard() {
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <IcpGenerationForm
+              createdIcp={createdIcp}
               form={icpForm}
               icpId={icpId}
               onFieldChange={handleIcpFieldChange}

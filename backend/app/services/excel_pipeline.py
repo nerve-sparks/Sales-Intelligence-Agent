@@ -2,7 +2,7 @@ import io
 from uuid import UUID
 
 import openpyxl
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -128,24 +128,26 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
 async def run_pipeline(
     session: AsyncSession, organisation_id: UUID, raw_rows: list[dict], icp: IcpProfile
 ) -> tuple[dict[int, UUID], dict, dict, set[UUID]]:
-    """Full pipeline: upsert data, extract signals (org-wide), score only
-    the companies matching the given ICP - the ICP is the actual target
-    list for this upload, not every company that happened to be in the
-    file. Signal extraction stays org-wide since it's just recording facts
-    about companies, not a judgment call the ICP should gate.
+    """Full pipeline: upsert data, extract signals (org-wide), and score
+    every ingested company (org-wide) so the whole Enterprise List / Detail /
+    Score Breakdown is analysed off the upload - not just the ICP's matches.
 
-    Returns (zi_to_company_id, signal_result, score_result, matching_ids)
-    so callers (the Excel import endpoint) can report real ingestion
-    numbers and reuse matching_ids for the "Matches ICP" export column
-    without re-querying it - signal_result is {"inserted", "skipped"} from
-    extract_signals, score_result is {"active", "nurture"} from run_scoring
-    (counts only cover the ICP-matched companies that were actually scored).
+    The ICP is still computed (matching_ids) for the "Matches ICP" export
+    column and the batch's matched_icp_count, but it no longer *gates*
+    scoring: previously only ICP-matched companies were scored, so an upload
+    whose ICP matched few/none left the entire directory unscored and the CRM
+    pages looked un-analysed. Scoring is deterministic and cheap, so scoring
+    everyone is the right default.
+
+    Returns (zi_to_company_id, signal_result, score_result, matching_ids) -
+    signal_result is {"inserted","skipped"} from extract_signals,
+    score_result is {"active","nurture"} across every scored company.
     """
     zi_to_company_id = await upsert_rows(session, organisation_id, raw_rows)
     signal_result = await extract_signals(session, organisation_id)
     matches = await filter_companies(session, icp)
     matching_ids = {c.company_id for c in matches}
-    score_result = await run_scoring(session, organisation_id, company_ids=matching_ids)
+    score_result = await run_scoring(session, organisation_id, company_ids=None)
     return zi_to_company_id, signal_result, score_result, matching_ids
 
 
@@ -267,6 +269,16 @@ async def record_import_batch(
     session.add(batch)
     await session.commit()
     await session.refresh(batch)
+
+    company_ids = list(zi_to_company_id.values())
+    if company_ids:
+        await session.execute(
+            update(Company)
+            .where(Company.company_id.in_(company_ids))
+            .values(import_batch_id=batch.import_batch_id)
+        )
+        await session.commit()
+
     return batch
 
 

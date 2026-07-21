@@ -50,26 +50,3 @@ export function createOrganisation(payload: OrganisationCreate): Promise<Organis
 export function getOrganisation(organisationId: string): Promise<OrganisationOut> {
   return apiGet<OrganisationOut>(`/organisations/${organisationId}`);
 }
-
-export type IcpRecommendationOut = {
-  name: string;
-  industries: string[];
-  employee_min: number | null;
-  employee_max: number | null;
-  revenue_min_usd: number | null;
-  revenue_max_usd: number | null;
-  countries: string[];
-  rationale: string;
-};
-
-export type IcpRecommendationsOut = {
-  recommendations: IcpRecommendationOut[];
-};
-
-/* LLM-generated (BridgeLLM, gemini/gemini-2.5-pro) from the organisation's
- * own profile fields - see backend/app/controllers/organisations.py::
- * icp_recommendations. Empty array (not an error) if the LLM isn't
- * configured or didn't return parseable JSON. */
-export function getIcpRecommendations(organisationId: string): Promise<IcpRecommendationsOut> {
-  return apiGet<IcpRecommendationsOut>(`/organisations/${organisationId}/icp-recommendations`);
-}

@@ -32,3 +32,15 @@ export function setWorkspaceId(id: string): void {
   }
   window.localStorage.setItem(WORKSPACE_KEY, id);
 }
+
+/* Called on logout - without this, the next Firebase sign-in on this same
+ * browser would inherit the previous account's organisation_id/workspace_id
+ * (RequireOnboarding only checks whether *a* org id is cached, not whether
+ * it belongs to whoever just logged in). */
+export function clearSession(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.removeItem(ORG_KEY);
+  window.localStorage.removeItem(WORKSPACE_KEY);
+}

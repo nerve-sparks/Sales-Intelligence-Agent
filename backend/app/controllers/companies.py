@@ -12,6 +12,7 @@ from app.schemas.company import (
     CompanyListOut,
     CompanyStatsOut,
     CountryLeadScoreOut,
+    IcpThresholdsOut,
 )
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -48,9 +49,9 @@ async def list_companies(
     return CompanyListOut(items=items, total=total, page=page, page_size=page_size)
 
 
-async def stats(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
-    counts = await company_directory.intent_counts(db, organisation_id)
-    country_rows = await company_directory.lead_score_by_country(db, organisation_id)
+async def stats(organisation_id: UUID, import_batch_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
+    counts = await company_directory.intent_counts(db, organisation_id, import_batch_id)
+    country_rows = await company_directory.lead_score_by_country(db, organisation_id, import_batch_id)
     return CompanyStatsOut(
         total=counts["high"] + counts["medium"] + counts["low"],
         high_intent=counts["high"],
@@ -61,6 +62,11 @@ async def stats(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
             for country, avg, count in country_rows
         ],
     )
+
+
+async def icp_thresholds(organisation_id: UUID, db: AsyncSession = Depends(get_db)) -> IcpThresholdsOut:
+    data = await company_directory.icp_thresholds(db, organisation_id)
+    return IcpThresholdsOut(**data)
 
 
 async def insight(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
