@@ -14,7 +14,7 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Sparkline } from "../../components/ui/dataviz";
+import { FLAT_LINE, Sparkline } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { exportCompanies, getCompanyStats, listCompanies, type CompanyStatsOut } from "../../api/companies";
 import { ApiError } from "../../api/client";
@@ -49,16 +49,14 @@ type StatCard = {
 };
 
 /* CompanyStatsOut is a single snapshot with no time series, so there's no
- * real vs-last-week delta to show - just the real counts. The sparkline is
- * decorative (a rising zig-zag), the same shape on every card. */
-const RISING_ZIGZAG = [6, 14, 10, 18, 14, 22, 18, 26, 22, 30];
-
+ * real vs-last-week delta and no day-over-day history to plot - the sparkline
+ * renders a flat line rather than a fabricated trend. */
 function toStatCards(data: CompanyStatsOut): StatCard[] {
   return [
-    { icon: ShieldCheck, bg: "#f3e9ff", color: "#7c3aed", label: "Total Enterprises", value: data.total.toLocaleString(), spark: "#7c3aed", values: RISING_ZIGZAG },
-    { icon: Settings, bg: "#e7f8ef", color: "#16a34a", label: "High Intent Enterprises", value: data.high_intent.toLocaleString(), spark: "#16a34a", values: RISING_ZIGZAG },
-    { icon: Users, bg: "#fff1e3", color: "#f97316", label: "Medium Intent Enterprises", value: data.medium_intent.toLocaleString(), spark: "#f97316", values: RISING_ZIGZAG },
-    { icon: Bell, bg: "#fdecec", color: "#ef4444", label: "Low Intent Enterprises", value: data.low_intent.toLocaleString(), spark: "#2563eb", values: RISING_ZIGZAG },
+    { icon: ShieldCheck, bg: "#f3e9ff", color: "#7c3aed", label: "Total Enterprises", value: data.total.toLocaleString(), spark: "#7c3aed", values: FLAT_LINE },
+    { icon: Settings, bg: "#e7f8ef", color: "#16a34a", label: "High Intent Enterprises", value: data.high_intent.toLocaleString(), spark: "#16a34a", values: FLAT_LINE },
+    { icon: Users, bg: "#fff1e3", color: "#f97316", label: "Medium Intent Enterprises", value: data.medium_intent.toLocaleString(), spark: "#f97316", values: FLAT_LINE },
+    { icon: Bell, bg: "#fdecec", color: "#ef4444", label: "Low Intent Enterprises", value: data.low_intent.toLocaleString(), spark: "#2563eb", values: FLAT_LINE },
   ];
 }
 
@@ -219,8 +217,12 @@ type CompanyLike = {
  * that caller looks scores up via getRankedScores() first. */
 function toEnterprise(company: CompanyLike, leadScore: number | null, gateStatus: string | null): Enterprise {
   const scored = leadScore !== null;
-  const score = leadScore ?? 0;
-  const tier: Enterprise["tier"] = score >= 80 ? "high" : score >= 60 ? "medium" : "low";
+  const rawScore = leadScore ?? 0;
+  // lead_score is a 0-100 float; round for display (matches every other CRM
+  // page — EnterpriseDetail/ScoreBreakdown/etc all Math.round it) but keep the
+  // raw value for the tier thresholds.
+  const score = Math.round(rawScore);
+  const tier: Enterprise["tier"] = rawScore >= 80 ? "high" : rawScore >= 60 ? "medium" : "low";
   const intent = !scored ? "—" : tier === "high" ? "High" : tier === "medium" ? "Medium" : "Low";
   const status = gateStatus === "active" ? "Active" : gateStatus === "nurture" ? "Nurture" : "Unscored";
   const statusColor = gateStatus === "active" ? "#16a34a" : gateStatus === "nurture" ? "#f97316" : "#94a3b8";
@@ -315,9 +317,9 @@ function EnterpriseTable({ enterprises }: { enterprises: Enterprise[] }) {
                 <span className="truncate text-[13px] text-[#475569]">{e.location}</span>
 
                 <div className="flex items-center gap-[10px]">
-                  <span className="w-[24px] text-[14px] font-bold text-[#0f172a]">{e.scored ? e.score : "—"}</span>
+                  <span className="w-[30px] text-[14px] font-bold text-[#0f172a]">{e.scored ? e.score : "—"}</span>
                   <span className="h-[6px] flex-1 rounded-full bg-[#e5e7eb]">
-                    <span className="block h-full rounded-full bg-[#22c55e]" style={{ width: `${e.score}%` }} />
+                    <span className="block h-full rounded-full bg-[#22c55e]" style={{ width: `${Math.min(100, Math.max(0, e.score))}%` }} />
                   </span>
                 </div>
 

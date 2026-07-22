@@ -19,6 +19,11 @@ export function Delta({ value }: { value: string }) {
 
 export type Point = { x: number; y: number };
 
+/* A flat two-point series for sparklines with no real time series to plot.
+   Rendered as a centered horizontal line (see toPoints) — reads honestly as
+   "no trend data" instead of a fabricated zig-zag. */
+export const FLAT_LINE = [1, 1];
+
 export function toPoints(
   values: number[],
   w: number,
@@ -27,11 +32,13 @@ export function toPoints(
 ): Point[] {
   const min = Math.min(...values);
   const max = Math.max(...values);
-  const range = max - min || 1;
+  const range = max - min;
   const stepX = values.length > 1 ? (w - pad * 2) / (values.length - 1) : 0;
   return values.map((v, i) => ({
     x: pad + i * stepX,
-    y: h - pad - ((v - min) / range) * (h - pad * 2),
+    // Flat series (all equal) → draw through the vertical centre rather than
+    // pinning to the bottom edge.
+    y: range === 0 ? h / 2 : h - pad - ((v - min) / range) * (h - pad * 2),
   }));
 }
 

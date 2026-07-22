@@ -10,7 +10,7 @@ import {
 import { useEffect, useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Delta, Sparkline } from "../../components/ui/dataviz";
+import { Delta, FLAT_LINE, Sparkline } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { getSignalStats, type SignalStatsOut, type SignalWithCompanyOut } from "../../api/signals";
 import { getOrganisationId } from "../../lib/session";
@@ -55,10 +55,8 @@ type StatCard = {
 /* SignalStatsOut has no vs-last-7-days baseline - deltas would have to be
  * fabricated. Where trend has enough real days to compare first-vs-last,
  * show a real delta; otherwise omit the line rather than invent one. The
- * sparkline itself is decorative (a rising zig-zag), same shape on every
- * card, rather than a flat two-point line when there's only one real day. */
-const RISING_ZIGZAG = [6, 14, 10, 18, 14, 22, 18, 26, 22, 30];
-
+ * sparkline now plots the real daily trend series (total/high/medium/low per
+ * day) and falls back to a flat line when there's only one real day. */
 function toStatCards(data: SignalStatsOut): StatCard[] {
   const trendLongEnough = data.trend.length >= 2;
   const deltaFor = (pickFrom: (p: SignalStatsOut["trend"][number]) => number): string | null => {
@@ -68,12 +66,14 @@ function toStatCards(data: SignalStatsOut): StatCard[] {
     if (first === 0) return null;
     return `${(((last - first) / first) * 100).toFixed(1)}%`;
   };
+  const seriesFor = (pickFrom: (p: SignalStatsOut["trend"][number]) => number): number[] =>
+    trendLongEnough ? data.trend.map(pickFrom) : FLAT_LINE;
 
   return [
-    { icon: Target, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Total Signals", value: data.total.toLocaleString(), delta: deltaFor((p) => p.total), color: "#2563eb", values: RISING_ZIGZAG },
-    { icon: Crosshair, iconBg: "bg-[#f3e8ff]", iconColor: "text-[#7c3aed]", label: "High-Intent Signals", value: data.high_intent.toLocaleString(), delta: deltaFor((p) => p.high), color: "#7c3aed", values: RISING_ZIGZAG },
-    { icon: Activity, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Medium-Intent Signals", value: data.medium_intent.toLocaleString(), delta: deltaFor((p) => p.medium), color: "#f97316", values: RISING_ZIGZAG },
-    { icon: DollarSign, iconBg: "bg-[#e7f8ef]", iconColor: "text-[#16a34a]", label: "Low-Intent Signals", value: data.low_intent.toLocaleString(), delta: deltaFor((p) => p.low), color: "#16a34a", values: RISING_ZIGZAG },
+    { icon: Target, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Total Signals", value: data.total.toLocaleString(), delta: deltaFor((p) => p.total), color: "#2563eb", values: seriesFor((p) => p.total) },
+    { icon: Crosshair, iconBg: "bg-[#f3e8ff]", iconColor: "text-[#7c3aed]", label: "High-Intent Signals", value: data.high_intent.toLocaleString(), delta: deltaFor((p) => p.high), color: "#7c3aed", values: seriesFor((p) => p.high) },
+    { icon: Activity, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Medium-Intent Signals", value: data.medium_intent.toLocaleString(), delta: deltaFor((p) => p.medium), color: "#f97316", values: seriesFor((p) => p.medium) },
+    { icon: DollarSign, iconBg: "bg-[#e7f8ef]", iconColor: "text-[#16a34a]", label: "Low-Intent Signals", value: data.low_intent.toLocaleString(), delta: deltaFor((p) => p.low), color: "#16a34a", values: seriesFor((p) => p.low) },
   ];
 }
 

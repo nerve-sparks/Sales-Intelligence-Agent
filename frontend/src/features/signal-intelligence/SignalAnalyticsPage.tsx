@@ -111,8 +111,11 @@ function niceStep(maxValue: number): number {
   const rough = maxValue / 4;
   const magnitude = 10 ** Math.floor(Math.log10(rough || 1));
   const normalized = rough / magnitude;
-  const step = normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1;
-  return step * magnitude;
+  // Round the step UP so the 4 gridline intervals always cover maxValue with a
+  // little headroom. (Rounding down let the tallest bar overshoot the top of
+  // the chart, clipping its value label — e.g. max 86 gave a yMax of only 80.)
+  const nice = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 ? 2.5 : normalized <= 5 ? 5 : 10;
+  return Math.max(1, Math.ceil(nice * magnitude));
 }
 
 function formatTick(v: number): string {
@@ -313,7 +316,7 @@ function DistributionChart({ bars }: { bars: HistogramBar[] }) {
               x={cx - barW / 2}
               y={y}
             />
-            <text fill="#0f172a" fontSize="12" fontWeight="700" textAnchor="middle" x={cx} y={y - 8}>
+            <text fill="#0f172a" fontSize="12" fontWeight="700" textAnchor="middle" x={cx} y={Math.max(y - 8, 12)}>
               {bar.value.toLocaleString()}
             </text>
             <text fill="#94a3b8" fontSize="11" textAnchor="middle" x={cx} y={bottom + 22}>

@@ -16,7 +16,7 @@ import { lazy, Suspense } from "react";
 import earthImage from "../../assets/earth.png";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Delta, Sparkline, UpTriangle, smoothPath } from "../../components/ui/dataviz";
+import { Delta, FLAT_LINE, Sparkline, UpTriangle, smoothPath } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { useEffect, useRef, useState } from "react";
 import { getRankedScores, type RankedLeadScoreOut } from "../../api/scores";
@@ -337,23 +337,26 @@ function MiniBars({ trend }: { trend: SignalStatsOut["trend"] }) {
 /* Stat cards                                                          */
 /* ------------------------------------------------------------------ */
 
-/* Same rising zig-zag sparkline used on Enterprise List/Signal Intelligence's
- * stat cards - purely decorative (no stored day-over-day history exists to
- * compute a real trend from). */
-const RISING_ZIGZAG = [6, 14, 10, 18, 14, 22, 18, 26, 22, 30];
-
 /* Same 5 icon slots as before - "Pipeline Value"/"Meetings Booked"/
  * "Conversion Rate" had no backend concept at all (no deals/meetings model
  * exists), so those 3 now show real CompanyStatsOut/SignalStatsOut numbers
  * instead. Dropped the fake per-card delta - there's no stored history to
- * compute a real "vs last 7 days" change from. */
+ * compute a real "vs last 7 days" change from.
+ *
+ * Sparklines: "New Signals" plots the real daily signal totals
+ * (signalStats.trend); the other four are point-in-time counts/averages with
+ * no day-over-day history, so they render a flat line rather than a fake
+ * trend. */
 function StatCards({ companyStats, signalStats }: { companyStats: CompanyStatsOut; signalStats: SignalStatsOut }) {
+  const newSignalsSeries =
+    signalStats.trend.length >= 2 ? signalStats.trend.map((t) => t.total) : FLAT_LINE;
+
   const stats = [
-    { icon: Flame, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Hot Prospects", value: String(companyStats.high_intent), spark: "#f97316", values: RISING_ZIGZAG },
-    { icon: DollarSign, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Total Companies", value: String(companyStats.total), spark: "#2563eb", values: RISING_ZIGZAG },
-    { icon: Radio, iconBg: "bg-[#f3e8ff]", iconColor: "text-[#7c3aed]", label: "New Signals", value: String(signalStats.total), spark: "#7c3aed", values: RISING_ZIGZAG },
-    { icon: Calendar, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Actionable Signals", value: String(signalStats.actionable_count), spark: "#f97316", values: RISING_ZIGZAG },
-    { icon: Target, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Avg Signal Confidence", value: `${Math.round((signalStats.avg_confidence ?? 0) * 100)}%`, spark: "#2563eb", values: RISING_ZIGZAG },
+    { icon: Flame, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Hot Prospects", value: String(companyStats.high_intent), spark: "#f97316", values: FLAT_LINE },
+    { icon: DollarSign, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Total Companies", value: String(companyStats.total), spark: "#2563eb", values: FLAT_LINE },
+    { icon: Radio, iconBg: "bg-[#f3e8ff]", iconColor: "text-[#7c3aed]", label: "New Signals", value: String(signalStats.total), spark: "#7c3aed", values: newSignalsSeries },
+    { icon: Calendar, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Actionable Signals", value: String(signalStats.actionable_count), spark: "#f97316", values: FLAT_LINE },
+    { icon: Target, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Avg Signal Confidence", value: `${Math.round((signalStats.avg_confidence ?? 0) * 100)}%`, spark: "#2563eb", values: FLAT_LINE },
   ];
 
   return (
