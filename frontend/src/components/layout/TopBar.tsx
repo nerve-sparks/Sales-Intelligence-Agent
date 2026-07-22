@@ -7,6 +7,8 @@ import {
 } from "./TopActions";
 import { listWorkspaceMembers, listWorkspaces, type WorkspaceOut } from "../../api/workspaces";
 import { getOrganisationId, getWorkspaceId, setWorkspaceId } from "../../lib/session";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "../../lib/firebase";
 
 function initialsOf(name: string): string {
   return name
@@ -114,8 +116,6 @@ export function TopBar({
   showNotificationBell?: boolean;
   showWorkspaceSwitcher?: boolean;
 }) {
-  // Workspace owner is the person who created it (see OnboardingPage's
-  // Workspace Setup step: addWorkspaceMember(..., { role: "owner" })).
   // UserMenu keeps its "Arjun Kumar" / "Founder" defaults until this loads
   // or if there's no backend/workspace yet.
   const [user, setUser] = useState<{ initials: string; name: string; role: string } | null>(null);
@@ -125,16 +125,35 @@ export function TopBar({
     if (!workspaceId) {
       return;
     }
-    listWorkspaceMembers(workspaceId)
-      .then((members) => {
-        const owner = members.find((m) => m.role === "owner") ?? members[0];
-        if (owner?.full_name) {
-          setUser({ initials: initialsOf(owner.full_name), name: owner.full_name, role: roleLabel(owner.role) });
-        }
-      })
-      .catch(() => {
-        // No backend/workspace yet - keep the dummy defaults.
-      });
+    // Firebase restores the signed-in user asynchronously, and the API client
+    // only attaches a bearer token when auth.currentUser exists (see
+    // api/client.ts). Waiting for onAuthStateChanged guarantees both the
+    // request is authenticated AND we can match the caller by email (same as
+    // the Settings profile panel) instead of guessing the owner.
+    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
+      const email = fbUser?.email;
+      listWorkspaceMembers(workspaceId)
+        .then((members) => {
+          const me =
+            members.find((m) => m.email === email) ??
+            members.find((m) => m.role === "owner") ??
+            members[0];
+          if (me?.full_name) {
+            setUser({
+              initials: initialsOf(me.full_name),
+              name: me.full_name,
+              // Show the designation the user entered during onboarding (and
+              // can edit in Settings); fall back to the workspace role only if
+              // unset.
+              role: me.designation?.trim() || roleLabel(me.role),
+            });
+          }
+        })
+        .catch(() => {
+          // No backend/workspace yet - keep the dummy defaults.
+        });
+    });
+    return unsubscribe;
   }, []);
 
   return (
