@@ -410,7 +410,7 @@ function Insights() {
 export function ScoreHistoryPage() {
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
-      <Sidebar active="Score Breakdown" />
+      <Sidebar active="Enterprise List" />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar

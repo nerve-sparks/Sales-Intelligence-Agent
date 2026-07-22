@@ -11,13 +11,10 @@ import {
 import { useEffect, useMemo, useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Donut } from "../../components/ui/dataviz";
-import { cn } from "../../lib/cn";
 import { getTriggerEvents, getTriggerInsight, listTriggers, type TriggerOut } from "../../api/triggers";
 import { getSignalStats, type SignalStatsOut } from "../../api/signals";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
 import {
-  CATEGORY_DESCRIPTIONS,
   categoryLabel,
   categoryStyle,
   SIGNAL_CATEGORY_OPTIONS,
@@ -50,68 +47,6 @@ const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
 
 type IconType = ComponentType<{ className?: string }>;
-
-/* ------------------------------------------------------------------ */
-/* Data                                                                */
-/* ------------------------------------------------------------------ */
-
-type Category = {
-  key: string;
-  name: string;
-  desc: string;
-  icon: IconType;
-  color: string;
-  bg: string;
-  count: number;
-  pct: string;
-  signals: string;
-  vol: number;
-  companies: string;
-  score: number;
-};
-
-type CategoryStat = { count: number; companies: number; score: number };
-
-const zeroCategoryStats: Record<string, CategoryStat> = Object.fromEntries(
-  SIGNAL_CATEGORY_OPTIONS.map((key) => [key, { count: 0, companies: 0, score: 0 }]),
-);
-
-function realCategoryStats(data: SignalStatsOut): Record<string, CategoryStat> {
-  const stats: Record<string, CategoryStat> = {};
-  for (const key of SIGNAL_CATEGORY_OPTIONS) {
-    const row = data.by_category.find((c) => c.signal_category === key);
-    stats[key] = {
-      count: row?.count ?? 0,
-      companies: row?.company_count ?? 0,
-      score: row ? Math.round((row.avg_confidence ?? 0) * 100) : 0,
-    };
-  }
-  return stats;
-}
-
-function buildCategories(stats: Record<string, CategoryStat>): Category[] {
-  const total = Math.max(1, Object.values(stats).reduce((sum, s) => sum + s.count, 0));
-  return SIGNAL_CATEGORY_OPTIONS.map((key) => {
-    const style = categoryStyle(key);
-    const s = stats[key];
-    return {
-      key,
-      name: categoryLabel(key),
-      desc: CATEGORY_DESCRIPTIONS[key] ?? "",
-      icon: style.icon,
-      color: style.color,
-      bg: style.bg,
-      count: s.count,
-      pct: `${Math.round((s.count / total) * 100)}%`,
-      signals: s.count.toLocaleString(),
-      vol: s.count,
-      companies: s.companies.toLocaleString(),
-      score: s.score,
-    };
-  });
-}
-
-const zeroCategories = buildCategories(zeroCategoryStats);
 
 /* ------------------------------------------------------------------ */
 /* Header                                                              */
@@ -213,61 +148,6 @@ function SummaryCards({ summary }: { summary: SummaryStat[] }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Category cards                                                      */
-/* ------------------------------------------------------------------ */
-
-function CategoryCard({ category }: { category: Category }) {
-  const Icon = category.icon;
-  return (
-    <div className="flex flex-col rounded-[16px] border border-[#eef1f6] bg-white p-[16px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <span
-        className="flex size-[48px] items-center justify-center rounded-[12px]"
-        style={{ backgroundColor: category.bg, color: category.color }}
-      >
-        <Icon className="size-[24px]" />
-      </span>
-      <h3 className="m-0 mt-[14px] text-[15px] font-bold text-[#0f172a]">
-        {category.name}
-      </h3>
-      <p className="m-0 mt-[6px] text-[12px] leading-[18px] text-[#64748b]">
-        {category.desc}
-      </p>
-      <span
-        className="mt-[12px] inline-flex w-fit items-center rounded-[7px] px-[10px] py-[4px] text-[12px] font-semibold"
-        style={{ backgroundColor: category.bg, color: category.color }}
-      >
-        {category.count} Signals
-      </span>
-
-      <div className="mt-[12px] grid grid-cols-3 gap-[6px] border-t border-[#f1f5f9] pt-[10px]">
-        {[
-          ["Signals", category.signals],
-          ["Companies", category.companies],
-          ["Avg. Score", String(category.score)],
-        ].map(([label, value]) => (
-          <div key={label}>
-            <p className="m-0 min-h-[20px] text-[8px] font-medium uppercase leading-[10px] tracking-[0.01em] text-[#94a3b8]">
-              {label}
-            </p>
-            <p className="m-0 mt-[2px] text-[13px] font-bold text-[#0f172a]">{value}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function CategoryGrid({ categories }: { categories: Category[] }) {
-  return (
-    <div className="grid grid-cols-2 gap-[16px] md:grid-cols-3 xl:grid-cols-5">
-      {categories.map((c) => (
-        <CategoryCard category={c} key={c.key} />
-      ))}
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /* User-created triggers                                               */
 /* ------------------------------------------------------------------ */
 
@@ -322,120 +202,54 @@ function TriggerCard({ trigger, stat }: { trigger: DisplayTrigger; stat: Trigger
   );
 }
 
-function YourTriggers({ triggers, stats }: { triggers: DisplayTrigger[]; stats: Record<string, TriggerStat> }) {
-  if (triggers.length === 0) {
-    return null;
-  }
+function YourTriggers({
+  triggers,
+  stats,
+  hasAny,
+}: {
+  triggers: DisplayTrigger[];
+  stats: Record<string, TriggerStat>;
+  hasAny: boolean;
+}) {
   return (
     <div>
-      <h2 className="m-0 mb-[14px] text-[18px] font-bold text-[#0f172a]">Your Triggers</h2>
-      <div className="grid grid-cols-2 gap-[16px] md:grid-cols-3 xl:grid-cols-5">
-        {triggers.map((t) => (
-          <TriggerCard key={t.id} stat={stats[t.id] ?? null} trigger={t} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Category Distribution Overview                                      */
-/* ------------------------------------------------------------------ */
-
-function DistributionOverview({ categories, totalSignals }: { categories: Category[]; totalSignals: number }) {
-  const half = Math.ceil(categories.length / 2);
-  const legendLeft = categories.slice(0, half);
-  const legendRight = categories.slice(half);
-
-  const LegendRow = ({ c }: { c: Category }) => (
-    <div className="flex items-center justify-between gap-[10px]">
-      <span className="flex min-w-0 items-center gap-[10px]">
-        <span className="size-[10px] shrink-0 rounded-full" style={{ backgroundColor: c.color }} />
-        <span className="truncate text-[13px] font-medium text-[#334155]">{c.name}</span>
-      </span>
-      <span className="whitespace-nowrap text-[13px] text-[#94a3b8]">
-        <span className="font-semibold text-[#0f172a]">{c.count}</span> ({c.pct})
-      </span>
-    </div>
-  );
-
-  return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[18px] font-bold text-[#0f172a]">
-        Category Distribution Overview
-      </h2>
-
-      <div className="mt-[18px] flex flex-col items-center gap-[28px] lg:flex-row">
-        <div className="relative size-[190px] shrink-0">
-          <Donut
-            segments={categories.map((c) => ({ value: c.count, color: c.color }))}
-            size={190}
-            thickness={26}
-          />
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-[26px] font-bold leading-none text-[#0f172a]">{totalSignals.toLocaleString()}</span>
-            <span className="mt-[4px] text-[12px] text-[#64748b]">Total Signals</span>
-          </div>
-        </div>
-
-        <div className="grid w-full flex-1 grid-cols-1 gap-x-[40px] gap-y-[12px] md:grid-cols-2">
-          <div className="flex flex-col gap-[12px]">
-            {legendLeft.map((c) => (
-              <LegendRow c={c} key={c.key} />
-            ))}
-          </div>
-          <div className="flex flex-col gap-[12px]">
-            {legendRight.map((c) => (
-              <LegendRow c={c} key={c.key} />
-            ))}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Right rail                                                          */
-/* ------------------------------------------------------------------ */
-
-const perfColumns = "grid-cols-[minmax(0,1.5fr)_0.7fr_0.8fr_0.7fr]";
-
-function CategoryPerformanceCard({ categories }: { categories: Category[] }) {
-  const rows = [...categories].sort((a, b) => b.vol - a.vol);
-  const maxVol = Math.max(1, ...rows.map((r) => r.vol));
-
-  return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="flex items-center justify-between">
-        <h2 className="m-0 text-[15px] font-bold text-[#0f172a]">
-          Category Performance
-        </h2>
+      <div className="mb-[14px] flex items-center justify-between gap-[12px]">
+        <h2 className="m-0 text-[18px] font-bold text-[#0f172a]">Your Triggers</h2>
+        {hasAny && <span className="text-[13px] font-medium text-[#64748b]">{triggers.length} shown</span>}
       </div>
 
-      <div className={cn("mt-[16px] grid gap-[8px] pb-[8px] text-[10px] font-semibold uppercase tracking-[0.02em] text-[#94a3b8]", perfColumns)}>
-        <span>Category</span>
-        <span className="text-right">Signals</span>
-        <span className="text-right">Companies</span>
-        <span className="text-right">Avg. Score</span>
-      </div>
-
-      <div className="flex flex-col gap-[14px]">
-        {rows.map((r) => (
-          <div className={cn("grid items-center gap-[8px]", perfColumns)} key={r.key}>
-            <div className="min-w-0">
-              <p className="m-0 truncate text-[12px] font-semibold text-[#0f172a]">
-                {r.name}
+      {triggers.length === 0 ? (
+        <div className="flex flex-col items-center gap-[10px] rounded-[16px] border border-dashed border-[#d7dcff] bg-white p-[36px] text-center">
+          <p className="m-0 text-[14px] font-semibold text-[#334155]">
+            {hasAny ? "No triggers match your search." : "You haven't created any triggers yet."}
+          </p>
+          {!hasAny && (
+            <>
+              <p className="m-0 max-w-[420px] text-[13px] text-[#94a3b8]">
+                A trigger watches for specific signal categories or types and matches them against the signals your
+                uploaded data produces.
               </p>
-              <span className="mt-[5px] block h-[3px] rounded-full" style={{ width: `${(r.vol / maxVol) * 100}%`, backgroundColor: r.color }} />
-            </div>
-            <span className="text-right text-[12px] font-semibold text-[#0f172a]">{r.signals}</span>
-            <span className="text-right text-[12px] text-[#64748b]">{r.companies}</span>
-            <span className="text-right text-[12px] font-semibold text-[#0f172a]">{r.score}</span>
-          </div>
-        ))}
-      </div>
-    </section>
+              <button
+                className="mt-[4px] flex items-center gap-[8px] rounded-[10px] bg-[#fa5a1e] px-[18px] py-[10px] text-[14px] font-semibold text-white shadow-[0px_10px_20px_-6px_rgba(250,90,30,0.5)]"
+                onClick={() => {
+                  window.location.href = "/trigger-editor";
+                }}
+                type="button"
+              >
+                <Plus className="size-[17px]" />
+                Create Your First Trigger
+              </button>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-[16px] md:grid-cols-3 xl:grid-cols-5">
+          {triggers.map((t) => (
+            <TriggerCard key={t.id} stat={stats[t.id] ?? null} trigger={t} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -524,9 +338,7 @@ export function TriggerLibraryPage() {
       });
   }, []);
 
-  const categories = statsData ? buildCategories(realCategoryStats(statsData)) : zeroCategories;
   const summary = buildSummary(statsData);
-  const totalSignals = statsData ? statsData.total : 0;
 
   const filteredTriggers = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -550,18 +362,12 @@ export function TriggerLibraryPage() {
         <main className="flex-1 overflow-x-hidden px-[28px] py-[22px]">
           <LibraryHeader onSearchChange={setSearch} search={search} />
 
-          <div className="mt-[22px] grid grid-cols-1 gap-[24px] xl:grid-cols-[minmax(0,1fr)_340px]">
-            <div className="flex flex-col gap-[20px]">
-              <SummaryCards summary={summary} />
-              <YourTriggers stats={triggerStats} triggers={filteredTriggers} />
-              <CategoryGrid categories={categories} />
-              <DistributionOverview categories={categories} totalSignals={totalSignals} />
-            </div>
+          <div className="mt-[22px] flex flex-col gap-[24px]">
+            <SummaryCards summary={summary} />
 
-            <div className="flex flex-col gap-[20px]">
-              <CategoryPerformanceCard categories={categories} />
-              <AIInsightsCard loading={insightLoading} summary={insight} />
-            </div>
+            <AIInsightsCard loading={insightLoading} summary={insight} />
+
+            <YourTriggers hasAny={triggers.length > 0} stats={triggerStats} triggers={filteredTriggers} />
           </div>
         </main>
       </div>

@@ -69,6 +69,7 @@ def _member_out(member) -> MemberOut:
         user_id=member.user_id,
         email=member.user.email if member.user else None,
         full_name=member.user.full_name if member.user else None,
+        designation=member.user.designation if member.user else None,
         role=member.role,
         created_at=member.created_at,
     )

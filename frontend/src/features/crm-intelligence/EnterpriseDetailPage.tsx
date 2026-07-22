@@ -1,35 +1,31 @@
 import {
-  ArrowUpRight,
+  BadgeCheck,
   Banknote,
-  Bell,
-  Building2,
-  ChevronDown,
   ChevronRight,
-  Cloud,
-  Download,
   Facebook,
-  FileText,
   Linkedin,
   Mail,
-  MousePointerClick,
-  Send,
-  Share2,
-  Slack,
-  Snowflake,
-  Star,
+  Phone,
+  Radio,
   Twitter,
   Users,
-  Video,
-  Youtube,
 } from "lucide-react";
-import { useEffect, useState, type ComponentType, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Donut, Sparkline, smoothPath } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { getCompany } from "../../api/companies";
-import type { CompanyOut } from "../../api/icp";
+import { getScore, type LeadScoreOut, type NotScoredOut } from "../../api/scores";
+import { getSignals, type SignalOut } from "../../api/signals";
+import type { CompanyOut, DecisionMakerOut } from "../../api/icp";
 import { getOrganisationId } from "../../lib/session";
+
+/* Enterprise Detail shows ONLY data that comes from the uploaded ZoomInfo
+ * export + the scoring pipeline: firmographics, funding, the real lead score,
+ * the company's decision-makers, and its extracted signals. The previous
+ * version was mostly fabricated (fake account/engagement scores, invented
+ * charts, tech stack, relationship map, news, timeline) - none of which the
+ * backend has, so they've been removed rather than shown as real. */
 
 function getCompanyIdFromUrl(): string | null {
   if (typeof window === "undefined") {
@@ -41,7 +37,55 @@ function getCompanyIdFromUrl(): string | null {
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
 
-type IconType = ComponentType<{ className?: string; style?: CSSProperties }>;
+function isScored(s: LeadScoreOut | NotScoredOut | null): s is LeadScoreOut {
+  return s !== null && "lead_score" in s;
+}
+
+function formatUsd(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "—";
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${Math.round(n / 1_000)}K`;
+  return `$${n}`;
+}
+
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function relativeTime(iso: string | null): string {
+  if (!iso) return "—";
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+const ACRONYMS = new Set(["ceo", "cto", "cfo", "coo", "cio", "ciso", "chro", "vp", "evp", "svp", "ai", "it", "hr"]);
+
+function titleize(value: string | null | undefined): string {
+  if (!value) return "—";
+  return value
+    .split(/[_\s]+/)
+    .map((w) => (ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
+}
+
+function fullName(dm: DecisionMakerOut): string {
+  return [dm.first_name, dm.last_name].filter(Boolean).join(" ") || "Unknown contact";
+}
+
+function initialsOf(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
 
 const toneClass: Record<string, string> = {
   green: "bg-[#e7f8ef] text-[#16a34a]",
@@ -71,39 +115,24 @@ function Card({ title, action, children, className }: { title: string; action?: 
   );
 }
 
-function ViewLink({ label }: { label: string }) {
-  return (
-    <button className="flex items-center gap-[4px] text-[12px] font-semibold text-[#5b3df5]" type="button">
-      {label}
-      <ChevronRight className="size-[13px]" />
-    </button>
-  );
-}
-
 /* ------------------------------------------------------------------ */
 /* Header                                                              */
 /* ------------------------------------------------------------------ */
 
-const scoreCards = [
-  { label: "Account Score", value: "92", badge: "Very High", tone: "green", spark: "#7c3aed", values: [40, 46, 44, 52, 48, 58, 62] },
-  { label: "Intent Level", value: "Very High", sub: "18% vs last 7 days", tone: "green", spark: "#2563eb", values: [30, 36, 34, 42, 40, 48, 52], arrow: true },
-  { label: "Engagement Score", value: "78", badge: "High", tone: "blue", spark: "#2563eb", values: [34, 38, 36, 44, 42, 50, 54] },
-  { label: "Fit Score", value: "88", badge: "Excellent", tone: "purple", spark: "#7c3aed", values: [42, 46, 50, 48, 56, 54, 60] },
-];
-
-function Header({ company, companyId }: { company: CompanyOut | null; companyId: string | null }) {
-  const name = company?.company_name ?? "TechNova Solutions";
-  const initials = company
-    ? company.company_name
-        .split(/\s+/)
-        .map((w) => w[0])
-        .join("")
-        .slice(0, 2)
-        .toUpperCase()
-    : "TN";
-  const industry = company?.industries?.[0] ?? "Software Development";
-  const location = company ? [company.city, company.country].filter(Boolean).join(", ") || "—" : "Bengaluru, India";
-  const website = company?.company_domain ?? "www.technova.com";
+function Header({
+  company,
+  score,
+  companyId,
+}: {
+  company: CompanyOut | null;
+  score: LeadScoreOut | NotScoredOut | null;
+  companyId: string | null;
+}) {
+  const name = company?.company_name ?? "Company";
+  const industry = company?.industries?.[0] ?? company?.primary_industry?.[0] ?? "—";
+  const location = [company?.city, company?.country].filter(Boolean).join(", ") || "—";
+  const website = company?.company_domain ?? null;
+  const scored = isScored(score);
 
   return (
     <div>
@@ -115,356 +144,217 @@ function Header({ company, companyId }: { company: CompanyOut | null; companyId:
           <ChevronRight className="size-[14px] text-[#cbd5e1]" />
           <span className="font-semibold text-[#0f172a]">{name}</span>
         </nav>
-        <div className="flex flex-wrap items-center gap-[10px]">
-          <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] py-[9px] text-[13px] font-semibold text-[#334155]" type="button">
-            <Bell className="size-[15px]" /> Add to Watchlist
-          </button>
-          <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] py-[9px] text-[13px] font-semibold text-[#334155]" type="button">
-            <Download className="size-[15px]" /> Export
-          </button>
-          <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] py-[9px] text-[13px] font-semibold text-[#334155]" type="button">
-            <Share2 className="size-[15px]" /> Share
-          </button>
-          <button className="flex items-center gap-[8px] rounded-[10px] bg-[#fa5a1e] px-[16px] py-[9px] text-[13px] font-semibold text-white shadow-[0px_10px_20px_-6px_rgba(250,90,30,0.5)]" type="button">
-            <Send className="size-[15px]" /> Create Outreach
-          </button>
-        </div>
       </div>
 
       <div className="mt-[16px] flex flex-col gap-[16px] 2xl:flex-row 2xl:items-start 2xl:justify-between">
         <div className="flex items-start gap-[16px]">
-          <span className="flex size-[64px] shrink-0 items-center justify-center rounded-[14px] bg-[#16a34a] text-[20px] font-bold text-white">
-            {initials}
+          <span className="flex size-[64px] shrink-0 items-center justify-center rounded-[14px] bg-[#0f172a] text-[20px] font-bold text-white">
+            {company ? initialsOf(company.company_name) : "—"}
           </span>
           <div>
             <div className="flex flex-wrap items-center gap-[10px]">
               <h1 className="m-0 text-[24px] font-bold text-[#0f172a]">{name}</h1>
-              <Badge label="Very High Intent" tone="green" />
-              <Star className="size-[16px] text-[#cbd5e1]" />
+              {company?.is_verified && (
+                <span className="inline-flex items-center gap-[4px] text-[12px] font-semibold text-[#16a34a]">
+                  <BadgeCheck className="size-[16px]" /> Verified
+                </span>
+              )}
+              {company?.ownership_type && <Badge label={titleize(company.ownership_type)} tone="gray" />}
             </div>
             <p className="m-0 mt-[6px] flex flex-wrap items-center gap-[8px] text-[13px] text-[#64748b]">
               <span>{industry}</span>
               <span>•</span>
               <span>{location}</span>
-              <span>•</span>
-              <a className="font-medium text-[#2563eb] no-underline" href={`https://${website}`}>
-                {website}
-              </a>
-              <Linkedin className="size-[15px] text-[#0a66c2]" />
+              {website && (
+                <>
+                  <span>•</span>
+                  <a className="font-medium text-[#2563eb] no-underline" href={`https://${website}`} rel="noreferrer" target="_blank">
+                    {website}
+                  </a>
+                </>
+              )}
+              {company?.linkedin_url && (
+                <a href={company.linkedin_url} rel="noreferrer" target="_blank">
+                  <Linkedin className="size-[15px] text-[#0a66c2]" />
+                </a>
+              )}
+              {company?.twitter_url && (
+                <a href={company.twitter_url} rel="noreferrer" target="_blank">
+                  <Twitter className="size-[15px] text-[#1da1f2]" />
+                </a>
+              )}
+              {company?.facebook_url && (
+                <a href={company.facebook_url} rel="noreferrer" target="_blank">
+                  <Facebook className="size-[15px] text-[#1877f2]" />
+                </a>
+              )}
             </p>
-            <button className="mt-[12px] flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] py-[9px] text-[13px] font-semibold text-[#334155]" type="button">
-              <Star className="size-[15px]" /> Add to Watchlist
-            </button>
           </div>
         </div>
 
-        <div className="w-full 2xl:w-auto">
-          <div className="mb-[8px] flex items-center justify-end gap-[16px] text-[12px] text-[#94a3b8]">
-            <span>Last updated: 2h ago</span>
-            <button className="flex items-center gap-[4px] font-semibold text-[#5b3df5]" type="button">
-              View all signals <ChevronRight className="size-[13px]" />
-            </button>
+        {/* Real lead score summary - clicking opens the full breakdown. */}
+        <button
+          className="flex items-center gap-[20px] rounded-[16px] border border-[#eef1f6] bg-white px-[22px] py-[16px] text-left shadow-[0px_1px_2px_rgba(15,23,42,0.04)] hover:bg-[#fafbff]"
+          onClick={() => {
+            window.location.href = companyId ? `/score-breakdown?id=${companyId}` : "/score-breakdown";
+          }}
+          type="button"
+        >
+          <div>
+            <p className="m-0 text-[12px] text-[#94a3b8]">Lead Score</p>
+            <p className="m-0 mt-[4px] text-[28px] font-bold leading-none text-[#0f172a]">
+              {scored && score.lead_score !== null ? Math.round(score.lead_score) : "—"}
+            </p>
           </div>
-          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-[16px] border border-[#eef1f6] bg-[#eef1f6] md:grid-cols-3 xl:grid-cols-5">
-            {scoreCards.map((s) => {
-              const isAccountScore = s.label === "Account Score";
-              return (
-                <div
-                  className={cn("bg-white p-[16px]", isAccountScore && "cursor-pointer hover:bg-[#fafbff]")}
-                  key={s.label}
-                  onClick={
-                    isAccountScore
-                      ? () => {
-                          window.location.href = companyId ? `/score-breakdown?id=${companyId}` : "/score-breakdown";
-                        }
-                      : undefined
-                  }
-                  role={isAccountScore ? "button" : undefined}
-                  tabIndex={isAccountScore ? 0 : undefined}
-                >
-                  <p className="m-0 text-[12px] text-[#94a3b8]">{s.label}</p>
-                  <div className="mt-[6px] flex items-center gap-[8px]">
-                    {s.arrow && <ArrowUpRight className="size-[16px] text-[#16a34a]" />}
-                    <span className="text-[20px] font-bold leading-none text-[#0f172a]">{s.value}</span>
-                    {s.badge && <Badge label={s.badge} tone={s.tone} />}
-                  </div>
-                  {s.sub && <p className="m-0 mt-[5px] text-[11px] font-semibold text-[#16a34a]">↑ {s.sub}</p>}
-                  <div className="mt-[8px]">
-                    <Sparkline className="h-[28px] w-full" color={s.spark} gradientId={`sc-${s.label.replace(/\s+/g, "")}`} values={s.values} />
-                  </div>
-                </div>
-              );
-            })}
-            <div className="bg-white p-[16px]">
-              <p className="m-0 text-[12px] text-[#94a3b8]">Opportunity</p>
-              <div className="mt-[6px] flex items-center justify-between gap-[8px]">
-                <div>
-                  <p className="m-0 text-[20px] font-bold leading-none text-[#0f172a]">High</p>
-                  <p className="m-0 mt-[6px] text-[11px] text-[#94a3b8]">78% Probability</p>
-                </div>
-                <div className="relative size-[52px] shrink-0">
-                  <Donut segments={[{ value: 78, color: "#2563eb" }, { value: 22, color: "#e5e7eb" }]} gap={0} size={52} thickness={8} />
-                </div>
-              </div>
+          <div className="border-l border-[#eef1f6] pl-[20px]">
+            <p className="m-0 text-[12px] text-[#94a3b8]">Status</p>
+            <div className="mt-[6px]">
+              {scored ? (
+                <Badge label={score.gate_status === "active" ? "Active" : "Nurture"} tone={score.gate_status === "active" ? "green" : "orange"} />
+              ) : (
+                <Badge label="Not scored" tone="gray" />
+              )}
             </div>
           </div>
-        </div>
+          <div className="border-l border-[#eef1f6] pl-[20px]">
+            <p className="m-0 text-[12px] text-[#94a3b8]">Est. Deal Value</p>
+            <p className="m-0 mt-[4px] text-[16px] font-bold text-[#0f172a]">
+              {scored ? formatUsd(score.expected_deal_value_usd) : "—"}
+            </p>
+          </div>
+          <ChevronRight className="size-[18px] text-[#cbd5e1]" />
+        </button>
       </div>
     </div>
   );
 }
 
-const tabs = [
-  "Overview",
-  "Score Breakdown",
-  "Signals & Triggers",
-  "Buying Committee",
-  "Technographics",
-  "Firmographics",
-  "Financials",
-  "News & Insights",
-];
-
-const tabLinks: Record<string, string> = {
-  "Score Breakdown": "/score-breakdown",
-  "Buying Committee": "/buying-committee",
-};
-
-function Tabs({ companyId }: { companyId: string | null }) {
-  return (
-    <div className="mt-[18px] flex gap-[24px] overflow-x-auto border-b border-[#e9edf5]">
-      {tabs.map((tab, i) => (
-        <button
-          className={cn(
-            "-mb-px whitespace-nowrap border-b-2 pb-[14px] text-[14px] font-semibold transition",
-            i === 0 ? "border-[#5b3df5] text-[#5b3df5]" : "border-transparent text-[#64748b] hover:text-[#334155]",
-          )}
-          key={tab}
-          onClick={() => {
-            if (tabLinks[tab]) {
-              window.location.href = companyId ? `${tabLinks[tab]}?id=${companyId}` : tabLinks[tab];
-            }
-          }}
-          type="button"
-        >
-          {tab}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 /* ------------------------------------------------------------------ */
-/* Row 1 cards                                                         */
+/* Firmographics                                                       */
 /* ------------------------------------------------------------------ */
 
-const dummySnapshot: { label: string; value: ReactNode }[] = [
-  { label: "Industry", value: "Software Development" },
-  { label: "Company Size", value: "501 - 1,000 employees" },
-  { label: "Founded", value: "2012" },
-  { label: "Revenue", value: "$75M - $100M" },
-  { label: "Headquarters", value: "Bengaluru, India" },
-  { label: "Locations", value: "4 Countries" },
-  { label: "Website", value: <a className="text-[#2563eb] no-underline" href="https://www.technova.com">www.technova.com</a> },
-];
-
-function AccountSnapshot({ company }: { company: CompanyOut | null }) {
-  const snapshot: { label: string; value: ReactNode }[] = company
-    ? [
-        { label: "Industry", value: company.industries?.[0] ?? "—" },
-        { label: "Company Size", value: company.employee_range ? `${company.employee_range} employees` : "—" },
-        { label: "Founded", value: company.founded_year ?? "—" },
-        { label: "Revenue", value: company.revenue_range ?? "—" },
-        { label: "Headquarters", value: [company.city, company.country].filter(Boolean).join(", ") || "—" },
-        { label: "Locations", value: "—" },
-        {
-          label: "Website",
-          value: company.company_domain ? (
-            <a className="text-[#2563eb] no-underline" href={`https://${company.company_domain}`}>
-              {company.company_domain}
-            </a>
-          ) : (
-            "—"
-          ),
-        },
-      ]
-    : dummySnapshot;
+function Firmographics({ company }: { company: CompanyOut | null }) {
+  const rows: { label: string; value: ReactNode }[] = [
+    { label: "Industry", value: company?.industries?.join(", ") || company?.primary_industry?.join(", ") || "—" },
+    {
+      label: "Employees",
+      value: company?.employee_count
+        ? `${company.employee_count.toLocaleString()}${company.employee_range ? ` (${company.employee_range})` : ""}`
+        : company?.employee_range || "—",
+    },
+    { label: "Revenue", value: company?.revenue_usd ? formatUsd(company.revenue_usd) : company?.revenue_range || "—" },
+    { label: "Founded", value: company?.founded_year || "—" },
+    { label: "Ownership", value: company?.ownership_type ? titleize(company.ownership_type) : "—" },
+    { label: "Status", value: company?.company_status ? titleize(company.company_status) : "—" },
+    { label: "Headquarters", value: [company?.city, company?.state, company?.country].filter(Boolean).join(", ") || "—" },
+  ];
 
   return (
-    <Card title="Account Snapshot">
+    <Card title="Firmographics">
       <dl className="m-0 flex flex-col gap-[12px]">
-        {snapshot.map((r) => (
-          <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-[10px]" key={r.label}>
+        {rows.map((r) => (
+          <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-[10px]" key={r.label}>
             <dt className="text-[12px] text-[#94a3b8]">{r.label}</dt>
             <dd className="m-0 text-[13px] font-semibold text-[#334155]">{r.value}</dd>
           </div>
         ))}
-        <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-[10px]">
-          <dt className="text-[12px] text-[#94a3b8]">Social Profiles</dt>
-          <dd className="m-0 flex items-center gap-[10px]">
-            <Linkedin className="size-[17px] text-[#0a66c2]" />
-            <Twitter className="size-[17px] text-[#1da1f2]" />
-            <Facebook className="size-[17px] text-[#1877f2]" />
-            <Youtube className="size-[17px] text-[#ff0000]" />
-          </dd>
-        </div>
       </dl>
     </Card>
   );
 }
 
-const sotLabels = ["May 14", "May 15", "May 16", "May 17", "May 18", "May 19", "May 20"];
-const sotOverall = [62, 68, 72, 70, 74, 88, 84];
-const sotBench = [42, 45, 48, 46, 50, 55, 52];
+/* ------------------------------------------------------------------ */
+/* Funding                                                             */
+/* ------------------------------------------------------------------ */
 
-function SignalsOverTimeChart() {
-  const w = 420;
-  const h = 220;
-  const left = 30;
-  const right = w - 12;
-  const top = 12;
-  const bottom = 180;
-  const grid = [0, 25, 50, 75, 100];
-  const xOf = (i: number) => left + (i * (right - left)) / (sotLabels.length - 1);
-  const yOf = (v: number) => bottom - (v / 100) * (bottom - top);
-  const p1 = sotOverall.map((v, i) => ({ x: xOf(i), y: yOf(v) }));
-  const p2 = sotBench.map((v, i) => ({ x: xOf(i), y: yOf(v) }));
+function Funding({ company }: { company: CompanyOut | null }) {
+  const hasFunding =
+    company &&
+    (company.total_funding_amount != null || company.recent_funding_amount != null || company.recent_funding_date != null);
 
   return (
-    <svg className="w-full" viewBox={`0 0 ${w} ${h}`}>
-      {grid.map((v) => (
-        <g key={v}>
-          <line stroke="#eef2f7" strokeWidth="1" x1={left} x2={right} y1={yOf(v)} y2={yOf(v)} />
-          <text fill="#94a3b8" fontSize="10" textAnchor="end" x={left - 6} y={yOf(v) + 4}>{v}</text>
-        </g>
-      ))}
-      <path d={smoothPath(p2)} fill="none" stroke="#cbd5e1" strokeDasharray="4 4" strokeWidth="2" />
-      {p2.map((p, i) => <circle cx={p.x} cy={p.y} fill="#cbd5e1" key={i} r="3" />)}
-      <path d={smoothPath(p1)} fill="none" stroke="#7c3aed" strokeWidth="2.5" />
-      {p1.map((p, i) => <circle cx={p.x} cy={p.y} fill="#7c3aed" key={i} r="3.4" />)}
-      {sotLabels.map((label, i) => (
-        <text fill="#94a3b8" fontSize="10" key={label} textAnchor={i === 0 ? "start" : i === sotLabels.length - 1 ? "end" : "middle"} x={xOf(i)} y={bottom + 22}>
-          {label}
-        </text>
-      ))}
-    </svg>
-  );
-}
-
-function SignalsOverTime() {
-  return (
-    <Card
-      action={
-        <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[12px] py-[7px] text-[12px] font-semibold text-[#475569]" type="button">
-          Last 7 Days <ChevronDown className="size-[13px] text-[#94a3b8]" />
-        </button>
-      }
-      title="Signals Over Time"
-    >
-      <div className="flex items-center gap-[18px]">
-        <span className="flex items-center gap-[7px] text-[12px] font-medium text-[#475569]">
-          <span className="size-[9px] rounded-full bg-[#7c3aed]" /> Overall Signal Score
-        </span>
-        <span className="flex items-center gap-[7px] text-[12px] font-medium text-[#475569]">
-          <span className="h-[2px] w-[14px] rounded bg-[#cbd5e1]" /> Industry Benchmark
-        </span>
-      </div>
-      <div className="mt-[8px]">
-        <SignalsOverTimeChart />
-      </div>
+    <Card title="Funding">
+      {hasFunding ? (
+        <dl className="m-0 flex flex-col gap-[12px]">
+          <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-[10px]">
+            <dt className="text-[12px] text-[#94a3b8]">Total Funding</dt>
+            <dd className="m-0 text-[13px] font-semibold text-[#334155]">{formatUsd(company!.total_funding_amount)}</dd>
+          </div>
+          <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-[10px]">
+            <dt className="text-[12px] text-[#94a3b8]">Recent Round</dt>
+            <dd className="m-0 text-[13px] font-semibold text-[#334155]">{formatUsd(company!.recent_funding_amount)}</dd>
+          </div>
+          <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-[10px]">
+            <dt className="text-[12px] text-[#94a3b8]">Round Date</dt>
+            <dd className="m-0 text-[13px] font-semibold text-[#334155]">{formatDate(company!.recent_funding_date)}</dd>
+          </div>
+        </dl>
+      ) : (
+        <p className="m-0 text-[13px] text-[#94a3b8]">No funding data for this company.</p>
+      )}
     </Card>
   );
 }
 
-const topTriggers = [
-  { name: "Cloud Migration", value: 92 },
-  { name: "AI/ML Solutions", value: 88 },
-  { name: "DevOps Automation", value: 84 },
-  { name: "Data Analytics", value: 76 },
-  { name: "Cybersecurity", value: 65 },
-];
+/* ------------------------------------------------------------------ */
+/* Lead Score summary                                                  */
+/* ------------------------------------------------------------------ */
 
-function TopTriggers() {
+function LeadScoreSummary({ score, companyId }: { score: LeadScoreOut | NotScoredOut | null; companyId: string | null }) {
+  const action = (
+    <button
+      className="flex items-center gap-[4px] text-[12px] font-semibold text-[#5b3df5]"
+      onClick={() => {
+        window.location.href = companyId ? `/score-breakdown?id=${companyId}` : "/score-breakdown";
+      }}
+      type="button"
+    >
+      Full breakdown <ChevronRight className="size-[13px]" />
+    </button>
+  );
+
+  if (!isScored(score)) {
+    return (
+      <Card title="Lead Score">
+        <p className="m-0 text-[13px] text-[#94a3b8]">
+          Not scored yet. Run scoring from the Enterprise List to analyse this company.
+        </p>
+      </Card>
+    );
+  }
+
+  const gates = [score.gate_check_1, score.gate_check_2, score.gate_check_3, score.gate_check_4, score.gate_check_5];
+  const metrics: { label: string; value: string }[] = [
+    { label: "Lead Score", value: score.lead_score !== null ? String(Math.round(score.lead_score)) : "—" },
+    { label: "Component Score", value: score.component_score !== null ? String(Math.round(score.component_score)) : "—" },
+    { label: "P(Convert)", value: score.p_convert !== null ? `${Math.round(score.p_convert * 100)}%` : "—" },
+    { label: "Est. Deal Value", value: formatUsd(score.expected_deal_value_usd) },
+  ];
+
   return (
-    <Card title="Top Triggers">
-      <div className="flex flex-col gap-[16px]">
-        {topTriggers.map((t) => (
-          <div key={t.name}>
-            <div className="flex items-center justify-between">
-              <span className="text-[13px] font-medium text-[#334155]">{t.name}</span>
-              <span className="text-[13px] font-bold text-[#0f172a]">{t.value}</span>
-            </div>
-            <div className="mt-[6px] h-[6px] w-full rounded-full bg-[#eef1f6]">
-              <span className="block h-full rounded-full bg-[#7c3aed]" style={{ width: `${t.value}%` }} />
-            </div>
+    <Card action={action} title="Lead Score">
+      <div className="grid grid-cols-2 gap-[12px]">
+        {metrics.map((m) => (
+          <div className="rounded-[10px] bg-[#f8fafc] p-[12px]" key={m.label}>
+            <p className="m-0 text-[11px] text-[#94a3b8]">{m.label}</p>
+            <p className="m-0 mt-[4px] text-[18px] font-bold text-[#0f172a]">{m.value}</p>
           </div>
         ))}
       </div>
-    </Card>
-  );
-}
-
-const keySignals = [
-  { icon: Users, bg: "#e6f0ff", color: "#2563eb", text: "Hiring spike in Engineering dept.", level: "High", tone: "green", time: "2h ago" },
-  { icon: Cloud, bg: "#e6f0ff", color: "#2563eb", text: "Technology expansion with AWS", level: "High", tone: "green", time: "5h ago" },
-  { icon: MousePointerClick, bg: "#fff1e3", color: "#f97316", text: "Visited pricing page 5+ times", level: "Medium", tone: "orange", time: "8h ago" },
-  { icon: Video, bg: "#fff1e3", color: "#f97316", text: "Attended webinar on AI automation", level: "Medium", tone: "orange", time: "12h ago" },
-  { icon: Banknote, bg: "#e6f0ff", color: "#2563eb", text: "New funding round announced", level: "Low", tone: "blue", time: "1d ago" },
-];
-
-function KeySignals() {
-  return (
-    <Card title="Key Signals (Last 7 Days)">
-      <div className="flex flex-col gap-[14px]">
-        {keySignals.map((s) => {
-          const Icon = s.icon;
-          return (
-            <div className="flex items-center gap-[12px]" key={s.text}>
-              <span className="flex size-[30px] shrink-0 items-center justify-center rounded-[8px]" style={{ backgroundColor: s.bg, color: s.color }}>
-                <Icon className="size-[15px]" />
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[#334155]">{s.text}</span>
-              <Badge label={s.level} tone={s.tone} />
-              <span className="w-[46px] shrink-0 text-right text-[12px] text-[#94a3b8]">{s.time}</span>
-            </div>
-          );
-        })}
-      </div>
-    </Card>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Row 2 cards                                                         */
-/* ------------------------------------------------------------------ */
-
-const fitRows = [
-  { label: "Industry Fit", level: "High", tone: "green" },
-  { label: "Solution Fit", level: "High", tone: "green" },
-  { label: "Company Size Fit", level: "High", tone: "green" },
-  { label: "Technology Fit", level: "Medium", tone: "orange" },
-  { label: "Budget Fit", level: "High", tone: "green" },
-];
-
-function AccountFit() {
-  return (
-    <Card action={<ViewLink label="View full analysis" />} title="Account Fit Analysis">
-      <div className="flex items-center gap-[20px]">
-        <div className="relative size-[110px] shrink-0">
-          <Donut segments={[{ value: 92, color: "#2563eb" }, { value: 8, color: "#e5e7eb" }]} gap={0} size={110} thickness={12} />
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-[20px] font-bold leading-none text-[#0f172a]">92%</span>
-            <span className="mt-[3px] text-[11px] font-semibold text-[#2563eb]">Strong Fit</span>
-          </div>
-        </div>
-        <div className="flex flex-1 flex-col gap-[10px]">
-          {fitRows.map((r) => (
-            <div className="flex items-center justify-between gap-[10px]" key={r.label}>
-              <span className="flex items-center gap-[8px] text-[13px] font-medium text-[#334155]">
-                <span className="size-[7px] rounded-full bg-[#16a34a]" /> {r.label}
-              </span>
-              <Badge label={r.level} tone={r.tone} />
-            </div>
+      <div className="mt-[14px]">
+        <p className="m-0 mb-[8px] text-[12px] text-[#94a3b8]">Gate Checks</p>
+        <div className="flex gap-[8px]">
+          {gates.map((passed, i) => (
+            <span
+              className={cn(
+                "flex size-[30px] items-center justify-center rounded-[8px] text-[12px] font-bold",
+                passed ? "bg-[#e7f8ef] text-[#16a34a]" : "bg-[#fef2f2] text-[#ef4444]",
+              )}
+              key={i}
+              title={`Gate ${i + 1}`}
+            >
+              {i + 1}
+            </span>
           ))}
         </div>
       </div>
@@ -472,143 +362,115 @@ function AccountFit() {
   );
 }
 
-const dummyTechStack: { cat: string; icon: IconType; label: string; color: string }[] = [
-  { cat: "Cloud", icon: Cloud, label: "aws", color: "#f59e0b" },
-  { cat: "Data & Analytics", icon: Snowflake, label: "Snowflake", color: "#29b5e8" },
-  { cat: "CRM", icon: Cloud, label: "Salesforce", color: "#00a1e0" },
-  { cat: "Marketing", icon: Building2, label: "HubSpot", color: "#ff7a59" },
-  { cat: "Collaboration", icon: Slack, label: "Slack", color: "#611f69" },
-];
+/* ------------------------------------------------------------------ */
+/* Buying Committee (real decision makers)                             */
+/* ------------------------------------------------------------------ */
 
-function TechnologyStack({ company }: { company: CompanyOut | null }) {
-  // Company.technologies is a flat string list - no per-item category/color
-  // metadata exists on the backend, so real entries all share a generic
-  // icon/color instead of the dummy data's per-category styling.
-  const techStack: { cat: string; icon: IconType; label: string; color: string }[] =
-    company && company.technologies && company.technologies.length > 0
-      ? company.technologies.slice(0, 10).map((tech) => ({ cat: "Technology", icon: Cloud, label: tech, color: "#5b3df5" }))
-      : dummyTechStack;
+function BuyingCommittee({ company, companyId }: { company: CompanyOut | null; companyId: string | null }) {
+  const members = company?.decision_makers ?? [];
+  const action =
+    members.length > 0 ? (
+      <button
+        className="flex items-center gap-[4px] text-[12px] font-semibold text-[#5b3df5]"
+        onClick={() => {
+          window.location.href = companyId ? `/buying-committee?id=${companyId}` : "/buying-committee";
+        }}
+        type="button"
+      >
+        View all <ChevronRight className="size-[13px]" />
+      </button>
+    ) : undefined;
 
   return (
-    <Card action={<ViewLink label="View all technologies" />} title="Technology Stack">
-      <div className="grid grid-cols-2 gap-[16px] sm:grid-cols-3 lg:grid-cols-5">
-        {techStack.map((t) => {
-          const Icon = t.icon;
-          return (
-            <div className="flex flex-col items-center gap-[8px] text-center" key={`${t.cat}-${t.label}`}>
-              <p className="m-0 text-[11px] font-medium text-[#94a3b8]">{t.cat}</p>
-              <div className="flex h-[52px] w-full items-center justify-center gap-[6px] rounded-[10px] border border-[#eef1f6] bg-[#fafbfc]">
-                <Icon className="size-[18px]" style={{ color: t.color }} />
-                <span className="text-[12px] font-semibold text-[#334155]">{t.label}</span>
+    <Card action={action} title={`Buying Committee${members.length ? ` (${members.length})` : ""}`}>
+      {members.length === 0 ? (
+        <p className="m-0 flex items-center gap-[8px] text-[13px] text-[#94a3b8]">
+          <Users className="size-[15px]" /> No contacts on this company.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-[14px]">
+          {members.slice(0, 8).map((dm) => (
+            <div className="flex items-center gap-[12px]" key={dm.decision_maker_id}>
+              <span className="flex size-[38px] shrink-0 items-center justify-center rounded-full bg-[#0f172a] text-[12px] font-bold text-white">
+                {initialsOf(fullName(dm))}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="m-0 truncate text-[13px] font-bold text-[#0f172a]">{fullName(dm)}</p>
+                <p className="m-0 truncate text-[12px] text-[#64748b]">
+                  {dm.job_title || "—"}
+                  {dm.persona ? ` · ${titleize(dm.persona)}` : ""}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-[10px]">
+                {dm.email && (
+                  <a href={`mailto:${dm.email}`} title={dm.email}>
+                    <Mail className="size-[15px] text-[#64748b]" />
+                  </a>
+                )}
+                {(dm.phone || dm.mobile_phone) && <Phone className="size-[15px] text-[#64748b]" />}
+                {dm.linkedin_url && (
+                  <a href={dm.linkedin_url} rel="noreferrer" target="_blank">
+                    <Linkedin className="size-[15px] text-[#0a66c2]" />
+                  </a>
+                )}
               </div>
             </div>
-          );
-        })}
-      </div>
-    </Card>
-  );
-}
-
-const people = [
-  { initials: "RM", name: "Rohit Menon", role: "CTO", strength: "Strong", color: "#16a34a", x: "60%", y: "16%" },
-  { initials: "VS", name: "Vikram Shah", role: "VP of Product", strength: "Strong", color: "#16a34a", x: "84%", y: "50%" },
-  { initials: "AI", name: "Ananya Iyer", role: "Head of Engineering", strength: "Moderate", color: "#f97316", x: "16%", y: "50%" },
-  { initials: "NK", name: "Neha Kapoor", role: "Finance Director", strength: "Weak", color: "#ef4444", x: "49%", y: "84%" },
-];
-const nodePts = [
-  [240, 45],
-  [336, 140],
-  [64, 140],
-  [196, 236],
-];
-
-function RelationshipMap() {
-  return (
-    <Card action={<ViewLink label="View Full Graph" />} title="Relationship Map">
-      <div className="relative h-[260px] w-full">
-        <svg className="absolute inset-0 size-full" preserveAspectRatio="none" viewBox="0 0 400 280">
-          {nodePts.map((p, i) => (
-            <line key={i} stroke="#dbe0ea" strokeDasharray="4 4" strokeWidth="1.5" x1="200" x2={p[0]} y1="140" y2={p[1]} />
           ))}
-        </svg>
-        <div className="absolute left-1/2 top-1/2 flex size-[54px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[14px] border border-[#e6e2ff] bg-white shadow-[0px_6px_16px_rgba(91,61,245,0.12)]">
-          <Building2 className="size-[24px] text-[#5b3df5]" />
         </div>
-        {people.map((p) => (
-          <div className="absolute -translate-x-1/2 -translate-y-1/2 text-center" key={p.name} style={{ left: p.x, top: p.y }}>
-            <span className="mx-auto flex size-[44px] items-center justify-center rounded-full border-2 bg-white text-[12px] font-bold text-[#334155]" style={{ borderColor: p.color }}>
-              {p.initials}
-            </span>
-            <p className="m-0 mt-[4px] whitespace-nowrap text-[11px] font-bold text-[#0f172a]">{p.name}</p>
-            <p className="m-0 whitespace-nowrap text-[10px] text-[#94a3b8]">{p.role}</p>
-            <span className="mt-[2px] inline-flex items-center gap-[4px] text-[10px] font-semibold" style={{ color: p.color }}>
-              <span className="size-[5px] rounded-full" style={{ backgroundColor: p.color }} /> {p.strength}
-            </span>
-          </div>
-        ))}
-      </div>
+      )}
     </Card>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Row 3 cards                                                         */
+/* Company Signals (real extracted signals)                            */
 /* ------------------------------------------------------------------ */
 
-const news = [
-  { grad: "from-[#60a5fa] to-[#a78bfa]", title: "TechNova raises $25M Series B funding to accelerate AI product development", date: "May 19, 2025", source: "Business Wire", sentiment: "Positive", tone: "green" },
-  { grad: "from-[#34d399] to-[#22d3ee]", title: "Expanding engineering team in AI and ML to drive next-gen platform capabilities", date: "May 18, 2025", source: "LinkedIn", sentiment: "Positive", tone: "green" },
-  { grad: "from-[#fbbf24] to-[#f97316]", title: "New office announced in San Jose, USA to strengthen global presence", date: "May 16, 2025", source: "TechNova Blog", sentiment: "Neutral", tone: "gray" },
-  { grad: "from-[#a78bfa] to-[#f472b6]", title: "Q1 revenue up 32% YoY driven by strong demand for cloud solutions", date: "May 15, 2025", source: "Press Release", sentiment: "Positive", tone: "green" },
-];
+const categoryTone: Record<string, string> = {
+  ai_seriousness: "purple",
+  ai_pain_points: "orange",
+  buying_stage: "blue",
+  budget_and_capital: "green",
+  urgency_and_catalysts: "orange",
+  competitive_context: "gray",
+  company_identity: "gray",
+  reachability: "blue",
+};
 
-function RecentNews() {
+function CompanySignals({ signals }: { signals: SignalOut[] }) {
+  const sorted = [...signals].sort((a, b) => (b.signal_confidence ?? 0) - (a.signal_confidence ?? 0));
+
   return (
-    <Card action={<ViewLink label="View All" />} title="Recent News & Triggers">
-      <div className="flex flex-col gap-[16px]">
-        {news.map((n) => (
-          <div className="flex items-center gap-[14px]" key={n.title}>
-            <span className={cn("h-[46px] w-[66px] shrink-0 rounded-[8px] bg-gradient-to-br", n.grad)} />
-            <div className="min-w-0 flex-1">
-              <p className="m-0 text-[13px] font-semibold leading-[18px] text-[#0f172a]">{n.title}</p>
-              <p className="m-0 mt-[4px] text-[12px] text-[#94a3b8]">
-                {n.date} • {n.source}
-              </p>
-            </div>
-            <Badge label={n.sentiment} tone={n.tone} />
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-const timeline = [
-  { icon: MousePointerClick, text: "Visited pricing page", time: "2 hours ago" },
-  { icon: Mail, text: "Opened email: Solution Overview", time: "5 hours ago" },
-  { icon: FileText, text: "Downloaded case study", time: "1 day ago" },
-  { icon: Video, text: "Attended webinar: AI for DevOps", time: "2 days ago" },
-  { icon: Users, text: "Visited careers page", time: "3 days ago" },
-  { icon: Linkedin, text: "Connected on LinkedIn", time: "5 days ago" },
-];
-
-function EngagementTimeline() {
-  return (
-    <Card action={<ViewLink label="View All" />} title="Engagement Timeline">
-      <div className="flex flex-col gap-[16px]">
-        {timeline.map((t) => {
-          const Icon = t.icon;
-          return (
-            <div className="flex items-center gap-[12px]" key={t.text}>
-              <span className="flex size-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[#eef1ff] text-[#5b3df5]">
-                <Icon className="size-[15px]" />
+    <Card title={`Signals${signals.length ? ` (${signals.length})` : ""}`}>
+      {signals.length === 0 ? (
+        <p className="m-0 flex items-center gap-[8px] text-[13px] text-[#94a3b8]">
+          <Radio className="size-[15px] text-[#64748b]" /> No signals extracted for this company yet.
+        </p>
+      ) : (
+        <div className="flex flex-col divide-y divide-[#f1f5f9]">
+          {sorted.slice(0, 12).map((s) => (
+            <div className="flex items-center gap-[12px] py-[12px] first:pt-0" key={s.signal_id}>
+              <span className="flex size-[34px] shrink-0 items-center justify-center rounded-[9px] bg-[#eef1ff] text-[#5b3df5]">
+                {s.dollar_value_usd ? <Banknote className="size-[16px]" /> : <Radio className="size-[16px]" />}
               </span>
-              <span className="flex-1 text-[13px] font-medium text-[#334155]">{t.text}</span>
-              <span className="text-[12px] text-[#94a3b8]">{t.time}</span>
+              <div className="min-w-0 flex-1">
+                <p className="m-0 truncate text-[13px] font-bold text-[#0f172a]">{titleize(s.signal_type)}</p>
+                <p className="m-0 truncate text-[12px] text-[#64748b]">
+                  {s.core_fact || titleize(s.signal_category)}
+                  {s.dollar_value_usd ? ` · ${formatUsd(s.dollar_value_usd)}` : ""}
+                </p>
+              </div>
+              <Badge label={titleize(s.signal_category)} tone={categoryTone[s.signal_category] ?? "gray"} />
+              <div className="w-[70px] shrink-0 text-right">
+                <p className="m-0 text-[12px] font-bold text-[#0f172a]">
+                  {s.signal_confidence !== null ? `${Math.round(s.signal_confidence * 100)}%` : "—"}
+                </p>
+                <p className="m-0 text-[11px] text-[#94a3b8]">{relativeTime(s.ingested_at)}</p>
+              </div>
             </div>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
     </Card>
   );
 }
@@ -619,6 +481,8 @@ function EngagementTimeline() {
 
 export function EnterpriseDetailPage() {
   const [company, setCompany] = useState<CompanyOut | null>(null);
+  const [score, setScore] = useState<LeadScoreOut | NotScoredOut | null>(null);
+  const [signals, setSignals] = useState<SignalOut[]>([]);
   const companyId = getCompanyIdFromUrl();
 
   useEffect(() => {
@@ -626,11 +490,9 @@ export function EnterpriseDetailPage() {
     if (!organisationId || !companyId) {
       return;
     }
-    getCompany(organisationId, companyId)
-      .then(setCompany)
-      .catch(() => {
-        // No matching company - keep the dummy fallback data.
-      });
+    getCompany(organisationId, companyId).then(setCompany).catch(() => setCompany(null));
+    getScore(organisationId, companyId).then(setScore).catch(() => setScore(null));
+    getSignals(organisationId, companyId).then(setSignals).catch(() => setSignals([]));
   }, [companyId]);
 
   return (
@@ -645,33 +507,17 @@ export function EnterpriseDetailPage() {
         />
 
         <main className="flex-1 overflow-x-hidden px-[28px] py-[22px]">
-          <Header company={company} companyId={companyId} />
-          <Tabs companyId={companyId} />
+          <Header company={company} companyId={companyId} score={score} />
 
-          <div className="mt-[22px] grid grid-cols-1 gap-[20px] lg:grid-cols-2 xl:grid-cols-[1fr_1.2fr_1fr_1.3fr]">
-            <AccountSnapshot company={company} />
-            <SignalsOverTime />
-            <TopTriggers />
-            <KeySignals />
+          <div className="mt-[22px] grid grid-cols-1 gap-[20px] lg:grid-cols-3">
+            <Firmographics company={company} />
+            <Funding company={company} />
+            <LeadScoreSummary companyId={companyId} score={score} />
           </div>
 
-          <div className="mt-[20px] grid grid-cols-1 gap-[20px] xl:grid-cols-[1fr_1fr_1.3fr]">
-            <AccountFit />
-            <TechnologyStack company={company} />
-            <RelationshipMap />
-          </div>
-
-          <div className="mt-[20px] grid grid-cols-1 gap-[20px] lg:grid-cols-2">
-            <RecentNews />
-            <EngagementTimeline />
-          </div>
-
-          <div className="mt-[20px] flex flex-col gap-[8px] text-[12px] text-[#94a3b8] sm:flex-row sm:items-center sm:justify-between">
-            <span className="flex items-center gap-[6px]">
-              <span className="size-[7px] rounded-full bg-[#16a34a]" /> Data refreshed 2 minutes ago
-            </span>
-            <span>All times shown in IST (India Standard Time)</span>
-            <span>Data Source: 42 Integrated Sources</span>
+          <div className="mt-[20px] grid grid-cols-1 gap-[20px] lg:grid-cols-[1fr_1.3fr]">
+            <BuyingCommittee company={company} companyId={companyId} />
+            <CompanySignals signals={signals} />
           </div>
         </main>
       </div>

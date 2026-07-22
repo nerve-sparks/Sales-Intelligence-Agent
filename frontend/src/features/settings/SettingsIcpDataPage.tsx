@@ -1,13 +1,31 @@
 import { useEffect, useRef, useState } from "react";
-import { Building2, Check, ChevronDown } from "lucide-react";
+import { Building2, Check, ChevronDown, Pencil, Trash2, X } from "lucide-react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { cn } from "../../lib/cn";
-import { ApiError } from "../../api/client";
-import { createIcp, listIcps, listImportBatches, type IcpOut, type ImportBatchOut } from "../../api/icp";
-import { getIcpThresholds } from "../../api/companies";
+import { ApiError, BASE_URL } from "../../api/client";
+import {
+  createIcp,
+  deleteIcp,
+  listIcps,
+  listImportBatches,
+  updateIcp,
+  type IcpCreate,
+  type IcpOut,
+  type ImportBatchOut,
+} from "../../api/icp";
 import { uploadExcel, type ExcelImportStats } from "../../api/icpImports";
-import { createWorkspace, listWorkspaces, type WorkspaceOut } from "../../api/workspaces";
+import { uploadLogo } from "../../api/uploads";
+import {
+  createWorkspace,
+  listWorkspaces,
+  listWorkspaceMembers,
+  type MemberOut,
+  type WorkspaceOut,
+} from "../../api/workspaces";
+import { getOrganisation, updateOrganisation, type OrganisationOut } from "../../api/organisations";
+import { updateUser } from "../../api/users";
+import { auth } from "../../lib/firebase";
 import { getOrganisationId, getWorkspaceId, setWorkspaceId } from "../../lib/session";
 import uploadIconAsset from "../../assets/figma/onboarding/icons/upload.svg";
 import workspaceIconAsset from "../../assets/figma/onboarding/icons/workspace.svg";
@@ -97,6 +115,26 @@ function parseEmployeeRange(band: string): { min: number | null; max: number | n
   return match ? { min: Number(match[1]), max: Number(match[2]) } : { min: null, max: null };
 }
 
+/* Reverse of the parse* helpers: given a stored (min,max), find the preset
+ * band it came from so the edit form's dropdown can pre-select it. Returns
+ * null when the range doesn't line up with any preset (e.g. a Data-Matched
+ * ICP's percentile ranges) - callers show the raw range instead so editing
+ * never silently rounds a custom ICP to the nearest band. */
+function matchingBand(
+  options: string[],
+  parse: (band: string) => { min: number | null; max: number | null },
+  min: number | null,
+  max: number | null,
+): string | null {
+  if (min === null && max === null) {
+    return null;
+  }
+  return options.find((o) => {
+    const r = parse(o);
+    return r.min === min && r.max === max;
+  }) ?? null;
+}
+
 function parseRevenueRange(band: string): { min: number | null; max: number | null } {
   const toUsd = (v: string) => Number(v.replace(/[^0-9.]/g, "")) * 1_000_000;
   if (band === "<$1M") {
@@ -147,11 +185,18 @@ function prettyPersona(value: string): string {
     .join(" ");
 }
 
+/* Stores the ICP's real persisted shape (industry list + raw min/max
+ * numbers), not the dropdown band labels - so editing an ICP whose ranges
+ * don't map to a preset band (a Data-Matched ICP) round-trips losslessly.
+ * The size/revenue dropdowns are just convenience setters over these
+ * numbers. */
 type IcpFormState = {
   name: string;
-  industry: string;
-  company_size: string;
-  annual_revenue: string;
+  industries: string[];
+  employee_min: number | null;
+  employee_max: number | null;
+  revenue_min_usd: number | null;
+  revenue_max_usd: number | null;
   headquarters_countries: string[];
   technologies: string;
   buying_committee_personas: string[];
@@ -160,14 +205,50 @@ type IcpFormState = {
 
 const initialFormState: IcpFormState = {
   name: "",
-  industry: "",
-  company_size: "",
-  annual_revenue: "",
+  industries: [],
+  employee_min: null,
+  employee_max: null,
+  revenue_min_usd: null,
+  revenue_max_usd: null,
   headquarters_countries: [],
   technologies: "",
   buying_committee_personas: [],
   departments: "",
 };
+
+function formFromIcp(icp: IcpOut): IcpFormState {
+  return {
+    name: icp.name ?? "",
+    industries: icp.industries ?? [],
+    employee_min: icp.employee_min,
+    employee_max: icp.employee_max,
+    revenue_min_usd: icp.revenue_min_usd,
+    revenue_max_usd: icp.revenue_max_usd,
+    headquarters_countries: icp.countries ?? [],
+    technologies: (icp.technologies ?? []).join(", "),
+    buying_committee_personas: icp.buying_committee_personas ?? [],
+    departments: (icp.departments ?? []).join(", "),
+  };
+}
+
+function payloadFromForm(form: IcpFormState): IcpCreate {
+  const csv = (v: string) =>
+    v ? v.split(",").map((t) => t.trim()).filter(Boolean) : null;
+  return {
+    name: form.name || (form.industries[0] ? `${form.industries[0]} ICP` : "Untitled ICP"),
+    industries: form.industries.length ? form.industries : null,
+    employee_min: form.employee_min,
+    employee_max: form.employee_max,
+    revenue_min_usd: form.revenue_min_usd,
+    revenue_max_usd: form.revenue_max_usd,
+    countries: form.headquarters_countries.length ? form.headquarters_countries : null,
+    technologies: csv(form.technologies),
+    buying_committee_personas: form.buying_committee_personas.length
+      ? form.buying_committee_personas
+      : null,
+    departments: csv(form.departments),
+  };
+}
 
 function FieldLabel({ children }: { children: string }) {
   return (
@@ -365,6 +446,85 @@ function MultiSelectField({
   );
 }
 
+/* Explicit ICP picker for the Upload Data card itself - the "Your ICPs" pill
+ * row above already sets selectedIcpId, but that's a scroll away and easy to
+ * lose track of once several ICPs exist. Putting a second, always-visible
+ * selector directly beside the Upload button removes any doubt about which
+ * ICP a file is about to be scored against; picking here also updates the
+ * pill row above (same selectedIcpId state), so the two stay in sync. */
+function IcpTargetSelect({
+  icps,
+  selectedIcpId,
+  onChange,
+}: {
+  icps: IcpOut[];
+  selectedIcpId: string;
+  onChange: (icpId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected = icps.find((i) => i.icp_id === selectedIcpId) ?? null;
+
+  useEffect(() => {
+    if (!open) return;
+    const onOutsideClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onOutsideClick);
+    return () => document.removeEventListener("mousedown", onOutsideClick);
+  }, [open]);
+
+  if (icps.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-col gap-[6px]">
+      <label className="font-['Inter'] text-[11px] font-semibold uppercase tracking-[0.4px] text-[#94a3b8]">
+        Uploading to
+      </label>
+      <div className="relative" ref={rootRef}>
+        <button
+          className="relative flex h-[36px] w-full min-w-[220px] items-center rounded-[8px] border border-[#005bff] bg-[#eff6ff] pl-[12px] pr-[32px] text-left font-['Inter'] text-[13px] font-bold text-[#005bff] outline-none"
+          onClick={() => setOpen((o) => !o)}
+          type="button"
+        >
+          <span className="truncate">{selected?.name || "Untitled ICP"}</span>
+          <ChevronDown
+            aria-hidden="true"
+            className="pointer-events-none absolute right-[10px] size-[15px] text-[#005bff]"
+            strokeWidth={2}
+          />
+        </button>
+
+        {open && (
+          <div className="absolute right-0 top-[calc(100%+4px)] z-20 max-h-[220px] w-full min-w-[220px] overflow-y-auto rounded-[8px] border border-[#e2e8f0] bg-white py-[4px] shadow-[0px_8px_20px_rgba(15,23,42,0.12)]">
+            {icps.map((icp) => (
+              <button
+                className={`block w-full truncate px-[14px] py-[9px] text-left font-['Inter'] text-[13px] ${
+                  icp.icp_id === selectedIcpId
+                    ? "bg-[#eef1ff] font-bold text-[#005bff]"
+                    : "text-[#0f172a] hover:bg-[#f8fafc]"
+                }`}
+                key={icp.icp_id}
+                onClick={() => {
+                  onChange(icp.icp_id);
+                  setOpen(false);
+                }}
+                type="button"
+              >
+                {icp.name || "Untitled ICP"}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ExcelUploadButton({
   icpId,
   workspaceId,
@@ -432,6 +592,317 @@ function ExcelUploadButton({
         <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#16a34a]">
           Scored {uploadedLabel}
         </p>
+      )}
+    </div>
+  );
+}
+
+const LOGO_ACCEPT = "image/png,image/jpeg,image/svg+xml";
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+
+function OrgLogoUpload({ value, onChange }: { value: string; onChange: (url: string) => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/svg+xml"].includes(file.type)) {
+      setError("Logo must be a PNG, JPG, or SVG image.");
+      return;
+    }
+    if (file.size > MAX_LOGO_BYTES) {
+      setError("Logo must be 2MB or smaller.");
+      return;
+    }
+    setError(null);
+    setUploading(true);
+    try {
+      const { url } = await uploadLogo(file);
+      onChange(url);
+    } catch (err) {
+      setError(err instanceof ApiError ? String(err.detail) : "Upload failed. Please try again.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-[8px]">
+      <FieldLabel>Company Logo</FieldLabel>
+      <input
+        accept={LOGO_ACCEPT}
+        className="hidden"
+        onChange={(e) => {
+          void handleFile(e.target.files?.[0]);
+          e.target.value = "";
+        }}
+        ref={inputRef}
+        type="file"
+      />
+      <div className="relative flex h-[42px] w-fit items-center gap-[10px] rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc] px-[10px]">
+        {value ? (
+          <img alt="Company logo" className="size-[26px] rounded-full object-cover" src={`${BASE_URL}${value}`} />
+        ) : (
+          <span className="flex size-[26px] items-center justify-center rounded-full bg-white">
+            <img alt="" className="size-[13px]" src={icons.upload} />
+          </span>
+        )}
+        <button
+          className="font-['Inter'] text-[12px] font-bold text-[#005bff] disabled:opacity-60"
+          disabled={uploading}
+          onClick={() => inputRef.current?.click()}
+          type="button"
+        >
+          {uploading ? "Uploading..." : value ? "Change" : "Upload"}
+        </button>
+        {value && !uploading && (
+          <button
+            aria-label="Remove logo"
+            className="text-[#94a3b8] hover:text-[#dc2626]"
+            onClick={() => {
+              onChange("");
+              setError(null);
+            }}
+            type="button"
+          >
+            <X className="size-[13px]" strokeWidth={2.5} />
+          </button>
+        )}
+      </div>
+      {error && <p className="m-0 font-['Inter'] text-[11px] text-[#dc2626]">{error}</p>}
+    </div>
+  );
+}
+
+type OrgFormState = {
+  company_name: string;
+  website: string;
+  legal_business_name: string;
+  industry: string;
+  headquarters_location: string;
+  company_description: string;
+  account_logo_url: string;
+  designation: string;
+};
+
+function orgFormFrom(org: OrganisationOut, me: MemberOut | null): OrgFormState {
+  return {
+    company_name: org.company_name ?? "",
+    website: org.website ?? "",
+    legal_business_name: org.legal_business_name ?? "",
+    industry: org.industry ?? "",
+    headquarters_location: org.headquarters_location ?? "",
+    company_description: org.company_description ?? "",
+    account_logo_url: org.account_logo_url ?? "",
+    designation: me?.designation ?? "",
+  };
+}
+
+/* Mirrors onboarding's (trimmed) Organization Setup step, so the same real
+ * Organisation fields collected once at signup stay editable afterward
+ * instead of being locked in forever. Designation lives here in the UI (same
+ * placement as onboarding) but is actually a per-person field stored on the
+ * caller's own User row - saved separately via updateUser, self-only (see
+ * app/controllers/users.py's update). */
+function OrganizationPanel({
+  organisationId,
+  workspaceId,
+}: {
+  organisationId: string | null;
+  workspaceId: string | null;
+}) {
+  const [org, setOrg] = useState<OrganisationOut | null>(null);
+  const [me, setMe] = useState<MemberOut | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<OrgFormState | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!organisationId) return;
+    getOrganisation(organisationId).then(setOrg).catch(() => setOrg(null));
+  }, [organisationId]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    const email = auth.currentUser?.email;
+    listWorkspaceMembers(workspaceId)
+      .then((members) => setMe(members.find((m) => m.email === email) ?? null))
+      .catch(() => setMe(null));
+  }, [workspaceId]);
+
+  if (!organisationId || !org) {
+    return null;
+  }
+
+  const startEdit = () => {
+    setForm(orgFormFrom(org, me));
+    setError(null);
+    setEditing(true);
+  };
+
+  const handleFieldChange = <K extends keyof OrgFormState>(field: K, value: OrgFormState[K]) => {
+    setForm((prev) => (prev ? { ...prev, [field]: value } : prev));
+  };
+
+  const save = async () => {
+    if (!form) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await updateOrganisation(organisationId, {
+        company_name: form.company_name,
+        website: form.website || null,
+        legal_business_name: form.legal_business_name || null,
+        industry: form.industry || null,
+        headquarters_location: form.headquarters_location || null,
+        company_description: form.company_description || null,
+        account_logo_url: form.account_logo_url || null,
+      });
+      setOrg(updated);
+      if (me && form.designation !== (me.designation ?? "")) {
+        const updatedUser = await updateUser(organisationId, me.user_id, {
+          designation: form.designation || null,
+        });
+        setMe({ ...me, designation: updatedUser.designation });
+      }
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof ApiError ? String(err.detail) : "Could not save changes.");
+    }
+    setSaving(false);
+  };
+
+  const rows: [string, string][] = [
+    ["Company Name", org.company_name || "—"],
+    ["Website", org.website || "—"],
+    ["Legal Business Name", org.legal_business_name || "—"],
+    ["Industry", org.industry || "—"],
+    ["Headquarters Location", org.headquarters_location || "—"],
+    ["Your Designation", me?.designation || "—"],
+  ];
+
+  return (
+    <div className="mb-[20px] rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-[10px]">
+          <span className="flex size-[36px] items-center justify-center rounded-[9px] bg-[#eef1ff] text-[#4f46e5]">
+            <Building2 className="size-[18px]" />
+          </span>
+          <div>
+            <h2 className="m-0 font-['Inter'] text-[16px] font-bold text-[#0f172a]">Organization</h2>
+            <p className="m-0 mt-[2px] font-['Inter'] text-[12px] text-[#64748b]">
+              The company profile collected during onboarding.
+            </p>
+          </div>
+        </div>
+        {!editing && (
+          <button
+            className="flex h-[36px] items-center gap-[6px] rounded-[8px] border border-[#e2e8f0] bg-white px-[14px] font-['Inter'] text-[12px] font-bold text-[#334155] hover:bg-[#f1f5f9]"
+            onClick={startEdit}
+            type="button"
+          >
+            <Pencil className="size-[13px]" />
+            Edit
+          </button>
+        )}
+      </div>
+
+      {!editing ? (
+        <div className="mt-[14px] grid grid-cols-1 gap-[10px] sm:grid-cols-2 xl:grid-cols-3">
+          {rows.map(([label, value]) => (
+            <div key={label}>
+              <p className="m-0 font-['Inter'] text-[11px] font-semibold uppercase tracking-[0.4px] text-[#94a3b8]">
+                {label}
+              </p>
+              <p className="m-0 mt-[2px] truncate font-['Inter'] text-[13px] font-medium text-[#0f172a]">{value}</p>
+            </div>
+          ))}
+          {org.company_description && (
+            <div className="sm:col-span-2 xl:col-span-3">
+              <p className="m-0 font-['Inter'] text-[11px] font-semibold uppercase tracking-[0.4px] text-[#94a3b8]">
+                Company Description
+              </p>
+              <p className="m-0 mt-[2px] font-['Inter'] text-[13px] font-medium leading-[19px] text-[#0f172a]">
+                {org.company_description}
+              </p>
+            </div>
+          )}
+        </div>
+      ) : (
+        form && (
+          <div className="mt-[16px] flex flex-col gap-[14px]">
+            <div className="grid grid-cols-1 gap-[12px] md:grid-cols-2 xl:grid-cols-3">
+              <TextField
+                icon={icons.workspace}
+                label="Company Name"
+                onChange={(v) => handleFieldChange("company_name", v)}
+                value={form.company_name}
+              />
+              <TextField
+                icon={icons.globe}
+                label="Website"
+                onChange={(v) => handleFieldChange("website", v)}
+                value={form.website}
+              />
+              <TextField
+                icon={icons.workspace}
+                label="Legal Business Name"
+                onChange={(v) => handleFieldChange("legal_business_name", v)}
+                value={form.legal_business_name}
+              />
+              <TextField
+                icon={icons.workspace}
+                label="Industry"
+                onChange={(v) => handleFieldChange("industry", v)}
+                placeholder="e.g. Software"
+                value={form.industry}
+              />
+              <TextField
+                icon={icons.globe}
+                label="Headquarters Location"
+                onChange={(v) => handleFieldChange("headquarters_location", v)}
+                value={form.headquarters_location}
+              />
+              <TextField
+                icon={icons.workspace}
+                label="Your Designation"
+                onChange={(v) => handleFieldChange("designation", v)}
+                placeholder="e.g. VP of Sales"
+                value={form.designation}
+              />
+              <OrgLogoUpload onChange={(v) => handleFieldChange("account_logo_url", v)} value={form.account_logo_url} />
+            </div>
+            <div className="flex flex-col gap-[8px]">
+              <FieldLabel>Company Description</FieldLabel>
+              <textarea
+                className="min-h-[74px] w-full resize-none rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc] px-[14px] py-[12px] font-['Inter'] text-[13px] font-normal leading-[20px] text-[#0f172a] outline-none"
+                maxLength={500}
+                onChange={(e) => handleFieldChange("company_description", e.target.value)}
+                value={form.company_description}
+              />
+            </div>
+            {error && <p className="m-0 font-['Inter'] text-[12px] text-[#ef4444]">{error}</p>}
+            <div className="flex items-center gap-[8px]">
+              <button
+                className="h-[36px] rounded-[8px] bg-[#005bff] px-[20px] font-['Inter'] text-[12px] font-bold text-white disabled:opacity-60"
+                disabled={saving}
+                onClick={save}
+                type="button"
+              >
+                {saving ? "Saving..." : "Save Changes"}
+              </button>
+              <button
+                className="h-[36px] rounded-[8px] border border-[#e2e8f0] bg-white px-[16px] font-['Inter'] text-[12px] font-bold text-[#334155]"
+                onClick={() => setEditing(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )
       )}
     </div>
   );
@@ -597,10 +1068,12 @@ export function SettingsIcpDataPage() {
   const [icps, setIcps] = useState<IcpOut[]>([]);
   const [selectedIcpId, setSelectedIcpId] = useState<string>("");
   const [showCreateForm, setShowCreateForm] = useState(false);
+  // null = the open form is creating a new ICP; a string = editing that ICP.
+  const [editingIcpId, setEditingIcpId] = useState<string | null>(null);
   const [form, setForm] = useState<IcpFormState>(initialFormState);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [creatingFromData, setCreatingFromData] = useState(false);
+  const [deletingIcpId, setDeletingIcpId] = useState<string | null>(null);
   const [history, setHistory] = useState<ImportBatchOut[]>([]);
   const [uploadStats, setUploadStats] = useState<"idle" | "uploading" | ExcelImportStats>("idle");
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -639,77 +1112,81 @@ export function SettingsIcpDataPage() {
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleCreateIcp = async () => {
+  const openCreate = () => {
+    setEditingIcpId(null);
+    setForm(initialFormState);
+    setCreateError(null);
+    setShowCreateForm(true);
+  };
+
+  const openEdit = (icp: IcpOut) => {
+    setEditingIcpId(icp.icp_id);
+    setForm(formFromIcp(icp));
+    setCreateError(null);
+    setShowCreateForm(true);
+  };
+
+  const closeForm = () => {
+    setShowCreateForm(false);
+    setEditingIcpId(null);
+    setForm(initialFormState);
+    setCreateError(null);
+  };
+
+  // Create or full-replace update, depending on whether the form was opened
+  // via "+ New ICP" (editingIcpId null) or an ICP's "Edit" button.
+  const handleSubmitIcp = async () => {
     if (!workspaceId) {
       return;
     }
     setCreating(true);
     setCreateError(null);
-    const employees = parseEmployeeRange(form.company_size);
-    const revenue = parseRevenueRange(form.annual_revenue);
+    const payload = payloadFromForm(form);
     try {
-      const icp = await createIcp(workspaceId, {
-        name: form.name || (form.industry ? `${form.industry} ICP` : "Untitled ICP"),
-        industries: form.industry ? [form.industry] : null,
-        employee_min: employees.min,
-        employee_max: employees.max,
-        revenue_min_usd: revenue.min,
-        revenue_max_usd: revenue.max,
-        countries: form.headquarters_countries.length ? form.headquarters_countries : null,
-        technologies: form.technologies
-          ? form.technologies.split(",").map((t) => t.trim()).filter(Boolean)
-          : null,
-        buying_committee_personas: form.buying_committee_personas.length
-          ? form.buying_committee_personas
-          : null,
-        departments: form.departments
-          ? form.departments.split(",").map((t) => t.trim()).filter(Boolean)
-          : null,
-      });
-      setIcps((prev) => [icp, ...prev]);
-      setSelectedIcpId(icp.icp_id);
-      setShowCreateForm(false);
-      setForm(initialFormState);
+      if (editingIcpId) {
+        const updated = await updateIcp(workspaceId, editingIcpId, payload);
+        setIcps((prev) => prev.map((i) => (i.icp_id === updated.icp_id ? updated : i)));
+        setSelectedIcpId(updated.icp_id);
+      } else {
+        const icp = await createIcp(workspaceId, payload);
+        setIcps((prev) => [icp, ...prev]);
+        setSelectedIcpId(icp.icp_id);
+      }
+      closeForm();
     } catch (err) {
       setCreateError(err instanceof ApiError ? String(err.detail) : "Something went wrong. Please try again.");
     }
     setCreating(false);
   };
 
-  // Builds an ICP straight from the ranges of the companies already uploaded
-  // (10th-90th percentile employee/revenue + most common industries/countries
-  // - see companies/icp-thresholds), so it actually matches the data instead
-  // of the preset dropdowns' guessed ranges. One-click since those derived
-  // numbers don't line up with the dropdown options anyway.
-  const handleCreateFromData = async () => {
-    if (!workspaceId || !organisationId) {
+  const handleDeleteIcp = async (icp: IcpOut) => {
+    if (!workspaceId) {
       return;
     }
-    setCreatingFromData(true);
+    const confirmed = window.confirm(
+      `Delete "${icp.name || "Untitled ICP"}"?\n\nThis also removes this ICP's upload history. ` +
+        "Companies, signals and scores from past uploads are organisation-wide and are not affected.",
+    );
+    if (!confirmed) {
+      return;
+    }
+    setDeletingIcpId(icp.icp_id);
     setCreateError(null);
     try {
-      const t = await getIcpThresholds(organisationId);
-      if (t.company_count === 0) {
-        setCreateError("No uploaded companies yet to derive thresholds from.");
-        setCreatingFromData(false);
-        return;
+      await deleteIcp(workspaceId, icp.icp_id);
+      const remaining = icps.filter((i) => i.icp_id !== icp.icp_id);
+      setIcps(remaining);
+      if (selectedIcpId === icp.icp_id) {
+        setSelectedIcpId(remaining.length > 0 ? remaining[0].icp_id : "");
       }
-      const icp = await createIcp(workspaceId, {
-        name: "Data-Matched ICP",
-        industries: t.industries.length ? t.industries : null,
-        employee_min: t.employee_min,
-        employee_max: t.employee_max,
-        revenue_min_usd: t.revenue_min_usd,
-        revenue_max_usd: t.revenue_max_usd,
-        countries: t.countries.length ? t.countries : null,
-      });
-      setIcps((prev) => [icp, ...prev]);
-      setSelectedIcpId(icp.icp_id);
-      setShowCreateForm(false);
+      if (editingIcpId === icp.icp_id) {
+        closeForm();
+      }
+      loadHistory(); // that ICP's history rows were cascade-deleted
     } catch (err) {
-      setCreateError(err instanceof ApiError ? String(err.detail) : "Could not build an ICP from your data.");
+      setCreateError(err instanceof ApiError ? String(err.detail) : "Could not delete this ICP.");
     }
-    setCreatingFromData(false);
+    setDeletingIcpId(null);
   };
 
   const handleUploadComplete = (stats: ExcelImportStats) => {
@@ -739,6 +1216,8 @@ export function SettingsIcpDataPage() {
             </p>
           </div>
 
+          <OrganizationPanel organisationId={organisationId} workspaceId={workspaceId} />
+
           <WorkspacesPanel organisationId={organisationId} />
 
           {!workspaceId ? (
@@ -752,17 +1231,8 @@ export function SettingsIcpDataPage() {
                   <h2 className="m-0 font-['Inter'] text-[16px] font-bold text-[#0f172a]">Your ICPs</h2>
                   <div className="flex items-center gap-[8px]">
                     <button
-                      className="h-[36px] rounded-[8px] border border-[#005bff] bg-white px-[14px] font-['Inter'] text-[12px] font-bold text-[#005bff] disabled:opacity-60"
-                      disabled={creatingFromData}
-                      onClick={handleCreateFromData}
-                      title="Create an ICP whose ranges are derived from the companies you've uploaded, so it actually matches your data"
-                      type="button"
-                    >
-                      {creatingFromData ? "Building..." : "✨ From uploaded data"}
-                    </button>
-                    <button
                       className="h-[36px] rounded-[8px] bg-[#005bff] px-[16px] font-['Inter'] text-[12px] font-bold text-white"
-                      onClick={() => setShowCreateForm((v) => !v)}
+                      onClick={() => (showCreateForm ? closeForm() : openCreate())}
                       type="button"
                     >
                       {showCreateForm ? "Cancel" : "+ New ICP"}
@@ -798,6 +1268,30 @@ export function SettingsIcpDataPage() {
 
                 {selectedIcp && !showCreateForm && (
                   <div className="mt-[14px] rounded-[10px] border border-[#f1f5f9] bg-[#f8fafc] p-[14px]">
+                    <div className="mb-[12px] flex flex-wrap items-center justify-between gap-[10px] border-b border-[#e9edf5] pb-[12px]">
+                      <p className="m-0 font-['Inter'] text-[14px] font-bold text-[#0f172a]">
+                        {selectedIcp.name || "Untitled ICP"}
+                      </p>
+                      <div className="flex items-center gap-[8px]">
+                        <button
+                          className="flex h-[32px] items-center gap-[6px] rounded-[8px] border border-[#e2e8f0] bg-white px-[12px] font-['Inter'] text-[12px] font-bold text-[#334155] hover:bg-[#f1f5f9]"
+                          onClick={() => openEdit(selectedIcp)}
+                          type="button"
+                        >
+                          <Pencil className="size-[13px]" />
+                          Edit
+                        </button>
+                        <button
+                          className="flex h-[32px] items-center gap-[6px] rounded-[8px] border border-[#fecaca] bg-white px-[12px] font-['Inter'] text-[12px] font-bold text-[#dc2626] hover:bg-[#fef2f2] disabled:opacity-60"
+                          disabled={deletingIcpId === selectedIcp.icp_id}
+                          onClick={() => handleDeleteIcp(selectedIcp)}
+                          type="button"
+                        >
+                          <Trash2 className="size-[13px]" />
+                          {deletingIcpId === selectedIcp.icp_id ? "Deleting..." : "Delete"}
+                        </button>
+                      </div>
+                    </div>
                     <div className="grid grid-cols-1 gap-[10px] sm:grid-cols-2 xl:grid-cols-4">
                       {(
                         [
@@ -841,6 +1335,9 @@ export function SettingsIcpDataPage() {
 
                 {showCreateForm && (
                   <div className="mt-[16px] flex flex-col gap-[14px]">
+                    <p className="m-0 font-['Inter'] text-[14px] font-bold text-[#0f172a]">
+                      {editingIcpId ? "Edit ICP" : "New ICP"}
+                    </p>
                     <div className="grid grid-cols-1 gap-[12px] md:grid-cols-2 xl:grid-cols-3">
                       <TextField
                         icon={icons.workspace}
@@ -849,26 +1346,47 @@ export function SettingsIcpDataPage() {
                         placeholder="e.g. Enterprise Software"
                         value={form.name}
                       />
-                      <SelectField
+                      <MultiSelectField
                         icon={icons.workspace}
                         label="Primary Industry"
-                        onChange={(v) => handleFieldChange("industry", v)}
+                        onChange={(v) => handleFieldChange("industries", v)}
                         options={INDUSTRY_OPTIONS}
-                        value={form.industry}
+                        values={form.industries}
                       />
                       <SelectField
                         icon={icons.workspace}
                         label="Company Size (Employees)"
-                        onChange={(v) => handleFieldChange("company_size", v)}
+                        onChange={(v) => {
+                          const r = parseEmployeeRange(v);
+                          setForm((prev) => ({ ...prev, employee_min: r.min, employee_max: r.max }));
+                        }}
                         options={COMPANY_SIZE_OPTIONS}
-                        value={form.company_size}
+                        value={
+                          matchingBand(COMPANY_SIZE_OPTIONS, parseEmployeeRange, form.employee_min, form.employee_max) ??
+                          (form.employee_min === null && form.employee_max === null
+                            ? ""
+                            : formatRange(form.employee_min, form.employee_max, (v) => (v === null ? "" : String(v))))
+                        }
                       />
                       <SelectField
                         icon={icons.currency}
                         label="Annual Revenue"
-                        onChange={(v) => handleFieldChange("annual_revenue", v)}
+                        onChange={(v) => {
+                          const r = parseRevenueRange(v);
+                          setForm((prev) => ({ ...prev, revenue_min_usd: r.min, revenue_max_usd: r.max }));
+                        }}
                         options={ANNUAL_REVENUE_OPTIONS}
-                        value={form.annual_revenue}
+                        value={
+                          matchingBand(
+                            ANNUAL_REVENUE_OPTIONS,
+                            parseRevenueRange,
+                            form.revenue_min_usd,
+                            form.revenue_max_usd,
+                          ) ??
+                          (form.revenue_min_usd === null && form.revenue_max_usd === null
+                            ? ""
+                            : formatRange(form.revenue_min_usd, form.revenue_max_usd, formatMoney))
+                        }
                       />
                       <MultiSelectField
                         icon={icons.globe}
@@ -907,14 +1425,27 @@ export function SettingsIcpDataPage() {
                     {createError && (
                       <p className="m-0 font-['Inter'] text-[12px] text-[#ef4444]">{createError}</p>
                     )}
-                    <div>
+                    <div className="flex items-center gap-[8px]">
                       <button
                         className="h-[36px] rounded-[8px] bg-[#005bff] px-[20px] font-['Inter'] text-[12px] font-bold text-white disabled:opacity-60"
                         disabled={creating}
-                        onClick={handleCreateIcp}
+                        onClick={handleSubmitIcp}
                         type="button"
                       >
-                        {creating ? "Creating..." : "Create ICP"}
+                        {creating
+                          ? editingIcpId
+                            ? "Saving..."
+                            : "Creating..."
+                          : editingIcpId
+                            ? "Save Changes"
+                            : "Create ICP"}
+                      </button>
+                      <button
+                        className="h-[36px] rounded-[8px] border border-[#e2e8f0] bg-white px-[16px] font-['Inter'] text-[12px] font-bold text-[#334155]"
+                        onClick={closeForm}
+                        type="button"
+                      >
+                        Cancel
                       </button>
                     </div>
                   </div>
@@ -922,28 +1453,24 @@ export function SettingsIcpDataPage() {
               </div>
 
               <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-                <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="m-0 font-['Inter'] text-[16px] font-bold text-[#0f172a]">Upload Data</h2>
                     <p className="m-0 mt-[2px] font-['Inter'] text-[13px] text-[#64748b]">
-                      {selectedIcp ? (
-                        <>
-                          Scoring against{" "}
-                          <span className="font-semibold text-[#0f172a]">
-                            {selectedIcp.name || "Untitled ICP"}
-                          </span>
-                        </>
-                      ) : (
-                        "Select or create an ICP above first."
-                      )}
+                      {icps.length === 0
+                        ? "Create an ICP above first."
+                        : "Pick the ICP to score this file against, then upload."}
                     </p>
                   </div>
-                  <ExcelUploadButton
-                    icpId={selectedIcpId || null}
-                    onUploadComplete={handleUploadComplete}
-                    onUploadStart={() => setUploadStats("uploading")}
-                    workspaceId={workspaceId}
-                  />
+                  <div className="flex flex-wrap items-end gap-[10px]">
+                    <IcpTargetSelect icps={icps} onChange={setSelectedIcpId} selectedIcpId={selectedIcpId} />
+                    <ExcelUploadButton
+                      icpId={selectedIcpId || null}
+                      onUploadComplete={handleUploadComplete}
+                      onUploadStart={() => setUploadStats("uploading")}
+                      workspaceId={workspaceId}
+                    />
+                  </div>
                 </div>
 
                 {uploadStats !== "idle" && (

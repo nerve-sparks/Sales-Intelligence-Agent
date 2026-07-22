@@ -15,3 +15,5 @@ router.get("", response_model=list[IcpOut])(icp_controller.list_all)
 # Registered before /{icp_id}/companies so "imports" isn't swallowed as an icp_id path param.
 router.get("/imports", response_model=list[ImportBatchOut])(icp_controller.import_history)
 router.get("/{icp_id}/companies", response_model=IcpCompaniesOut)(icp_controller.companies)
+router.put("/{icp_id}", response_model=IcpOut)(icp_controller.update)
+router.delete("/{icp_id}", status_code=204)(icp_controller.delete)

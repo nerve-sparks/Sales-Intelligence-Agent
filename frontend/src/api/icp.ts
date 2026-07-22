@@ -1,5 +1,5 @@
 /* Mirrors backend/app/routes/icp.py */
-import { apiGet, apiPost } from "./client";
+import { apiDelete, apiGet, apiPost, apiPut } from "./client";
 
 export type IcpOut = {
   icp_id: string;
@@ -32,6 +32,7 @@ export type IcpCreate = {
 
 export type DecisionMakerOut = {
   decision_maker_id: string;
+  company_id: string;
   zi_person_id: number;
   first_name: string | null;
   last_name: string | null;
@@ -105,6 +106,18 @@ export type ImportBatchOut = {
 
 export function createIcp(workspaceId: string, payload: IcpCreate): Promise<IcpOut> {
   return apiPost<IcpOut>(`/workspaces/${workspaceId}/icp`, payload);
+}
+
+/* Full-replace update (PUT) - the Settings edit form submits every field, so
+ * an omitted field means "clear it", not "leave unchanged". */
+export function updateIcp(workspaceId: string, icpId: string, payload: IcpCreate): Promise<IcpOut> {
+  return apiPut<IcpOut>(`/workspaces/${workspaceId}/icp/${icpId}`, payload);
+}
+
+/* Deletes the ICP and (via the FK's ON DELETE CASCADE) its upload-history
+ * rows. Companies/signals/scores are organisation-scoped and untouched. */
+export function deleteIcp(workspaceId: string, icpId: string): Promise<void> {
+  return apiDelete<void>(`/workspaces/${workspaceId}/icp/${icpId}`);
 }
 
 export function listIcps(workspaceId: string): Promise<IcpOut[]> {

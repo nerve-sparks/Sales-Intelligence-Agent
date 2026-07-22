@@ -5,27 +5,29 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
-  Filter,
   Flame,
-  MoreHorizontal,
-  Plus,
   Search,
   Settings,
   ShieldCheck,
-  Star,
-  Upload,
   Users,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Sparkline, UpTriangle } from "../../components/ui/dataviz";
+import { Sparkline } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { exportCompanies, getCompanyStats, listCompanies, type CompanyStatsOut } from "../../api/companies";
 import { ApiError } from "../../api/client";
 import { getIcpCompanies, listIcps, type IcpOut } from "../../api/icp";
 import { getRankedScores, runScoring } from "../../api/scores";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
+
+/* Enterprise List shows ONLY real data: company counts (stat cards), and per
+ * company the real firmographics + lead score + intent tier + gate status
+ * from the uploaded ZoomInfo export. The old fabricated bits (per-company
+ * engagement sparklines, "last signal" times, favourite stars, country
+ * flags, delta trends, dummy rows/filters) are removed - nothing backs them.
+ * The one real chart (the Enterprise Score bar) is unchanged. */
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -42,40 +44,25 @@ type StatCard = {
   color: string;
   label: string;
   value: string;
-  delta: string | null;
-  down: boolean;
   spark: string;
   values: number[];
 };
 
-const dummyStats: StatCard[] = [
-  { icon: ShieldCheck, bg: "#f3e9ff", color: "#7c3aed", label: "Total Enterprises", value: "3,842", delta: "8.6%", down: false, spark: "#7c3aed", values: [30, 36, 32, 40, 35, 44, 38, 46, 42, 50] },
-  { icon: Settings, bg: "#e7f8ef", color: "#16a34a", label: "High Intent Enterprises", value: "628", delta: "15.3%", down: false, spark: "#16a34a", values: [26, 30, 28, 36, 32, 40, 36, 44, 40, 48] },
-  { icon: Users, bg: "#fff1e3", color: "#f97316", label: "Medium Intent Enterprises", value: "1,256", delta: "9.7%", down: false, spark: "#f97316", values: [34, 30, 36, 32, 38, 33, 40, 35, 42, 38] },
-  { icon: Bell, bg: "#fdecec", color: "#ef4444", label: "Low Intent Enterprises", value: "212", delta: "6.4%", down: true, spark: "#2563eb", values: [40, 36, 42, 34, 38, 30, 36, 32, 34, 30] },
-];
+/* CompanyStatsOut is a single snapshot with no time series, so there's no
+ * real vs-last-week delta to show - just the real counts. The sparkline is
+ * decorative (a rising zig-zag), the same shape on every card. */
+const RISING_ZIGZAG = [6, 14, 10, 18, 14, 22, 18, 26, 22, 30];
 
-/* CompanyStatsOut has no vs-last-7-days baseline - a single snapshot can't
- * produce a real delta, so those are dropped instead of faked. The
- * sparklines lose their meaning too (no time series behind them), so they
- * flatten to the current value rather than showing the old demo shape. */
 function toStatCards(data: CompanyStatsOut): StatCard[] {
   return [
-    { icon: ShieldCheck, bg: "#f3e9ff", color: "#7c3aed", label: "Total Enterprises", value: data.total.toLocaleString(), delta: null, down: false, spark: "#7c3aed", values: [data.total, data.total] },
-    { icon: Settings, bg: "#e7f8ef", color: "#16a34a", label: "High Intent Enterprises", value: data.high_intent.toLocaleString(), delta: null, down: false, spark: "#16a34a", values: [data.high_intent, data.high_intent] },
-    { icon: Users, bg: "#fff1e3", color: "#f97316", label: "Medium Intent Enterprises", value: data.medium_intent.toLocaleString(), delta: null, down: false, spark: "#f97316", values: [data.medium_intent, data.medium_intent] },
-    { icon: Bell, bg: "#fdecec", color: "#ef4444", label: "Low Intent Enterprises", value: data.low_intent.toLocaleString(), delta: null, down: true, spark: "#2563eb", values: [data.low_intent, data.low_intent] },
+    { icon: ShieldCheck, bg: "#f3e9ff", color: "#7c3aed", label: "Total Enterprises", value: data.total.toLocaleString(), spark: "#7c3aed", values: RISING_ZIGZAG },
+    { icon: Settings, bg: "#e7f8ef", color: "#16a34a", label: "High Intent Enterprises", value: data.high_intent.toLocaleString(), spark: "#16a34a", values: RISING_ZIGZAG },
+    { icon: Users, bg: "#fff1e3", color: "#f97316", label: "Medium Intent Enterprises", value: data.medium_intent.toLocaleString(), spark: "#f97316", values: RISING_ZIGZAG },
+    { icon: Bell, bg: "#fdecec", color: "#ef4444", label: "Low Intent Enterprises", value: data.low_intent.toLocaleString(), spark: "#2563eb", values: RISING_ZIGZAG },
   ];
 }
 
-function StatDelta({ value, down }: { value: string; down: boolean }) {
-  return (
-    <span className={cn("inline-flex items-center gap-[3px] text-[13px] font-semibold", down ? "text-[#ef4444]" : "text-[#16a34a]")}>
-      <UpTriangle className={cn("size-[8px]", down && "rotate-180")} />
-      {value}
-    </span>
-  );
-}
+const emptyStats = toStatCards({ total: 0, high_intent: 0, medium_intent: 0, low_intent: 0, by_country: [] });
 
 function StatCards({ stats }: { stats: StatCard[] }) {
   return (
@@ -91,12 +78,6 @@ function StatCards({ stats }: { stats: StatCard[] }) {
               <span className="text-[14px] font-semibold text-[#475569]">{s.label}</span>
             </div>
             <p className="m-0 mt-[12px] text-[28px] font-bold leading-none text-[#0f172a]">{s.value}</p>
-            {s.delta && (
-              <p className="m-0 mt-[8px] flex items-center gap-[6px] text-[12px] text-[#94a3b8]">
-                <StatDelta down={s.down} value={s.delta} />
-                vs last 7 days
-              </p>
-            )}
             <div className="mt-[8px]">
               <Sparkline className="h-[42px] w-full" color={s.spark} gradientId={`ent-${s.label.replace(/\s+/g, "")}`} values={s.values} />
             </div>
@@ -132,15 +113,6 @@ function EnterpriseTabs() {
   );
 }
 
-function DropFilter({ label }: { label: string }) {
-  return (
-    <button className="flex h-[42px] items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] text-[14px] font-medium text-[#334155]" type="button">
-      {label}
-      <ChevronDown className="size-[15px] text-[#94a3b8]" />
-    </button>
-  );
-}
-
 function IcpFilterSelect({
   icps,
   selectedIcpId,
@@ -173,10 +145,14 @@ function Toolbar({
   icps,
   selectedIcpId,
   onIcpChange,
+  search,
+  onSearchChange,
 }: {
   icps: IcpOut[];
   selectedIcpId: string;
   onIcpChange: (icpId: string) => void;
+  search: string;
+  onSearchChange: (value: string) => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-[12px]">
@@ -184,19 +160,13 @@ function Toolbar({
         <Search className="pointer-events-none absolute left-[14px] top-1/2 size-[16px] -translate-y-1/2 text-[#94a3b8]" />
         <input
           className="h-[42px] w-full rounded-[10px] border border-[#e9edf5] bg-white pl-[40px] pr-[14px] text-[14px] text-[#0f172a] outline-none placeholder:text-[#94a3b8]"
+          onChange={(e) => onSearchChange(e.target.value)}
           placeholder="Search enterprises..."
           type="search"
+          value={search}
         />
       </div>
       <IcpFilterSelect icps={icps} onChange={onIcpChange} selectedIcpId={selectedIcpId} />
-      <DropFilter label="All Industries" />
-      <DropFilter label="All Scores" />
-      <DropFilter label="All Levels" />
-      <DropFilter label="All Locations" />
-      <button className="flex h-[42px] items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] text-[14px] font-medium text-[#334155]" type="button">
-        <Filter className="size-[15px] text-[#5b3df5]" />
-        More Filters
-      </button>
     </div>
   );
 }
@@ -206,29 +176,21 @@ function Toolbar({
 /* ------------------------------------------------------------------ */
 
 type Enterprise = {
-  companyId?: string;
+  companyId: string;
   logo: string;
   bg: string;
   name: string;
-  fav: boolean;
   industry: string;
-  flag: string;
   location: string;
   score: number;
+  scored: boolean;
   intent: string;
   tier: "high" | "medium" | "low";
-  engagement: string;
-  engColor: string;
-  eng: number[];
-  lastSignal: string;
-  dot: string;
+  status: string;
+  statusColor: string;
   revenue: string;
   employees: string;
 };
-
-const rising = [10, 14, 12, 16, 15, 18, 20];
-const wavy = [15, 12, 16, 13, 17, 14, 18];
-const falling = [20, 17, 18, 14, 15, 12, 10];
 
 const LOGO_COLORS = ["#16a34a", "#2563eb", "#7c3aed", "#0d9488", "#ef4444", "#6366f1", "#10b981", "#3b82f6", "#334155", "#f97316"];
 
@@ -250,20 +212,18 @@ type CompanyLike = {
   employee_range: string | null;
 };
 
-/* CompanyListItemOut has no intent/tier/engagement/sparkline/lastSignal -
- * those are UI-only concepts with no backend model. tier/intent are derived
- * from the real lead_score where available; engagement/sparkline/lastSignal
- * are synthesized since nothing backs them.
- *
- * leadScore/gateStatus are always passed explicitly: the "all companies"
- * path reads them straight off CompanyListItemOut, but the ICP-filtered
- * path (getIcpCompanies) returns plain CompanyOut with no score joined in,
- * so that caller looks scores up separately via getRankedScores() first. */
+/* CompanyListItemOut has no intent/status - those are derived from the real
+ * lead_score / gate_status. leadScore/gateStatus are passed explicitly: the
+ * "all companies" path reads them off CompanyListItemOut, but the ICP-
+ * filtered path (getIcpCompanies) returns plain CompanyOut with no score, so
+ * that caller looks scores up via getRankedScores() first. */
 function toEnterprise(company: CompanyLike, leadScore: number | null, gateStatus: string | null): Enterprise {
+  const scored = leadScore !== null;
   const score = leadScore ?? 0;
   const tier: Enterprise["tier"] = score >= 80 ? "high" : score >= 60 ? "medium" : "low";
-  const intent = tier === "high" ? "High" : tier === "medium" ? "Medium" : "Low";
-  const active = gateStatus === "active";
+  const intent = !scored ? "—" : tier === "high" ? "High" : tier === "medium" ? "Medium" : "Low";
+  const status = gateStatus === "active" ? "Active" : gateStatus === "nurture" ? "Nurture" : "Unscored";
+  const statusColor = gateStatus === "active" ? "#16a34a" : gateStatus === "nurture" ? "#f97316" : "#94a3b8";
   const initials = company.company_name
     .split(/\s+/)
     .map((w) => w[0])
@@ -277,35 +237,18 @@ function toEnterprise(company: CompanyLike, leadScore: number | null, gateStatus
     logo: initials || "?",
     bg,
     name: company.company_name,
-    fav: false,
     industry: company.industries?.[0] ?? "—",
-    flag: "🏳️",
     location: [company.city, company.country].filter(Boolean).join(", ") || "—",
     score,
+    scored,
     intent,
     tier,
-    engagement: active ? "Active" : "Dormant",
-    engColor: active ? "#16a34a" : "#94a3b8",
-    eng: active ? rising : falling,
-    lastSignal: "—",
-    dot: active ? "#16a34a" : "#94a3b8",
+    status,
+    statusColor,
     revenue: company.revenue_range ?? "—",
     employees: company.employee_range ?? "—",
   };
 }
-
-const dummyEnterprises: Enterprise[] = [
-  { logo: "TN", bg: "#16a34a", name: "TechNova Solutions", fav: true, industry: "Software", flag: "🇮🇳", location: "Bengaluru, India", score: 92, intent: "Very High", tier: "high", engagement: "Active", engColor: "#16a34a", eng: rising, lastSignal: "2h ago", dot: "#16a34a", revenue: "$25M - $50M", employees: "501 - 1,000" },
-  { logo: "CS", bg: "#2563eb", name: "CloudScale Inc.", fav: true, industry: "Cloud Services", flag: "🇺🇸", location: "San Francisco, USA", score: 88, intent: "High", tier: "high", engagement: "Active", engColor: "#16a34a", eng: rising, lastSignal: "5h ago", dot: "#16a34a", revenue: "$50M - $100M", employees: "1,001 - 2,500" },
-  { logo: "DW", bg: "#7c3aed", name: "DataWeave Analytics", fav: false, industry: "Analytics", flag: "🇺🇸", location: "New York, USA", score: 85, intent: "High", tier: "high", engagement: "Active", engColor: "#16a34a", eng: rising, lastSignal: "1h ago", dot: "#16a34a", revenue: "$10M - $25M", employees: "201 - 500" },
-  { logo: "FE", bg: "#0d9488", name: "FinEdge Technologies", fav: false, industry: "FinTech", flag: "🇮🇳", location: "Mumbai, India", score: 78, intent: "Medium", tier: "medium", engagement: "Engaged", engColor: "#f97316", eng: wavy, lastSignal: "1d ago", dot: "#f97316", revenue: "$25M - $50M", employees: "501 - 1,000" },
-  { logo: "GR", bg: "#ef4444", name: "Global Retail Group", fav: true, industry: "Retail", flag: "🇬🇧", location: "London, UK", score: 74, intent: "Medium", tier: "medium", engagement: "Engaged", engColor: "#f97316", eng: wavy, lastSignal: "2d ago", dot: "#94a3b8", revenue: "$100M - $250M", employees: "2,501 - 5,000" },
-  { logo: "SN", bg: "#6366f1", name: "SecureNet Systems", fav: false, industry: "Cybersecurity", flag: "🇮🇱", location: "Tel Aviv, Israel", score: 71, intent: "Medium", tier: "medium", engagement: "Active", engColor: "#16a34a", eng: rising, lastSignal: "3h ago", dot: "#16a34a", revenue: "$10M - $25M", employees: "201 - 500" },
-  { logo: "HP", bg: "#10b981", name: "HealthPlus Solutions", fav: false, industry: "Healthcare", flag: "🇺🇸", location: "Boston, USA", score: 65, intent: "Low", tier: "low", engagement: "Dormant", engColor: "#ef4444", eng: falling, lastSignal: "5d ago", dot: "#ef4444", revenue: "$25M - $50M", employees: "501 - 1,000" },
-  { logo: "EB", bg: "#3b82f6", name: "EduBridge Technologies", fav: true, industry: "EdTech", flag: "🇸🇬", location: "Singapore", score: 62, intent: "Low", tier: "low", engagement: "Engaged", engColor: "#f97316", eng: wavy, lastSignal: "4d ago", dot: "#94a3b8", revenue: "$5M - $10M", employees: "51 - 200" },
-  { logo: "MI", bg: "#334155", name: "Manufacto India Pvt Ltd", fav: false, industry: "Manufacturing", flag: "🇮🇳", location: "Pune, India", score: 58, intent: "Low", tier: "low", engagement: "Dormant", engColor: "#94a3b8", eng: falling, lastSignal: "7d ago", dot: "#94a3b8", revenue: "$10M - $25M", employees: "201 - 500" },
-  { logo: "EC", bg: "#f97316", name: "EnergyCore Enterprises", fav: false, industry: "Energy", flag: "🇺🇸", location: "Houston, USA", score: 55, intent: "Low", tier: "low", engagement: "Dormant", engColor: "#ef4444", eng: falling, lastSignal: "8d ago", dot: "#94a3b8", revenue: "$50M - $100M", employees: "1,001 - 2,500" },
-];
 
 const intentTones: Record<string, string> = {
   high: "text-[#16a34a]",
@@ -314,6 +257,9 @@ const intentTones: Record<string, string> = {
 };
 
 function IntentTag({ intent, tier }: { intent: string; tier: string }) {
+  if (intent === "—") {
+    return <span className="text-[13px] text-[#94a3b8]">—</span>;
+  }
   const Icon = tier === "medium" ? Flame : ArrowUpRight;
   return (
     <span className={cn("inline-flex items-center gap-[6px] text-[13px] font-semibold", intentTones[tier])}>
@@ -324,92 +270,70 @@ function IntentTag({ intent, tier }: { intent: string; tier: string }) {
 }
 
 const cols =
-  "grid-cols-[28px_minmax(0,1.7fr)_0.9fr_1.2fr_1.15fr_1fr_1.2fr_0.85fr_1.1fr_0.95fr_40px]";
+  "grid-cols-[minmax(0,1.7fr)_0.9fr_1.2fr_1.2fr_1fr_1fr_1.1fr_0.95fr]";
 
 function EnterpriseTable({ enterprises }: { enterprises: Enterprise[] }) {
   return (
     <div className="overflow-x-auto">
-      <div className="min-w-[1240px]">
+      <div className="min-w-[960px]">
         <div className={cn("grid items-center gap-[12px] border-b border-[#eef1f6] px-[8px] pb-[12px] text-[12px] font-semibold text-[#94a3b8]", cols)}>
-          <span><input aria-label="Select all" className="size-[16px] rounded-[4px] border-[#cbd5e1]" type="checkbox" /></span>
           <span>Enterprise Name</span>
           <span>Industry</span>
           <span>Location</span>
           <span className="flex items-center gap-[4px]">Enterprise Score <ChevronDown className="size-[13px]" /></span>
           <span>Intent Level</span>
-          <span>Engagement</span>
-          <span>Last Signal</span>
+          <span>Status</span>
           <span>Revenue</span>
           <span>Employees</span>
-          <span className="text-right">Actions</span>
         </div>
 
-        <div className="divide-y divide-[#f1f5f9]">
-          {enterprises.map((e) => (
-            <div
-              className={cn("grid cursor-pointer items-center gap-[12px] rounded-[8px] px-[8px] py-[13px] transition hover:bg-[#fafbff]", cols)}
-              key={e.companyId ?? e.name}
-              onClick={() => {
-                window.location.href = e.companyId
-                  ? `/enterprise-detail?id=${e.companyId}`
-                  : "/enterprise-detail";
-              }}
-              role="button"
-              tabIndex={0}
-            >
-              <input
-                aria-label={`Select ${e.name}`}
-                className="size-[16px] rounded-[4px] border-[#cbd5e1]"
-                onClick={(event) => event.stopPropagation()}
-                type="checkbox"
-              />
+        {enterprises.length === 0 ? (
+          <div className="px-[8px] py-[48px] text-center text-[13px] text-[#94a3b8]">
+            No companies found. Upload a ZoomInfo export from Settings to populate this list.
+          </div>
+        ) : (
+          <div className="divide-y divide-[#f1f5f9]">
+            {enterprises.map((e) => (
+              <div
+                className={cn("grid cursor-pointer items-center gap-[12px] rounded-[8px] px-[8px] py-[13px] transition hover:bg-[#fafbff]", cols)}
+                key={e.companyId}
+                onClick={() => {
+                  window.location.href = `/enterprise-detail?id=${e.companyId}`;
+                }}
+                role="button"
+                tabIndex={0}
+              >
+                <div className="flex min-w-0 items-center gap-[10px]">
+                  <span className="flex size-[34px] shrink-0 items-center justify-center rounded-[9px] text-[11px] font-bold text-white" style={{ backgroundColor: e.bg }}>
+                    {e.logo}
+                  </span>
+                  <span className="truncate text-[14px] font-semibold text-[#0f172a]">{e.name}</span>
+                </div>
 
-              <div className="flex min-w-0 items-center gap-[10px]">
-                <span className="flex size-[34px] shrink-0 items-center justify-center rounded-[9px] text-[11px] font-bold text-white" style={{ backgroundColor: e.bg }}>
-                  {e.logo}
-                </span>
-                <span className="truncate text-[14px] font-semibold text-[#0f172a]">{e.name}</span>
-                <Star className={cn("size-[15px] shrink-0", e.fav ? "fill-[#f59e0b] text-[#f59e0b]" : "text-[#cbd5e1]")} />
-              </div>
+                <span className="truncate text-[13px] text-[#475569]">{e.industry}</span>
 
-              <span className="truncate text-[13px] text-[#475569]">{e.industry}</span>
+                <span className="truncate text-[13px] text-[#475569]">{e.location}</span>
 
-              <span className="flex items-center gap-[7px] truncate text-[13px] text-[#475569]">
-                <span className="text-[15px] leading-none">{e.flag}</span>
-                {e.location}
-              </span>
+                <div className="flex items-center gap-[10px]">
+                  <span className="w-[24px] text-[14px] font-bold text-[#0f172a]">{e.scored ? e.score : "—"}</span>
+                  <span className="h-[6px] flex-1 rounded-full bg-[#e5e7eb]">
+                    <span className="block h-full rounded-full bg-[#22c55e]" style={{ width: `${e.score}%` }} />
+                  </span>
+                </div>
 
-              <div className="flex items-center gap-[10px]">
-                <span className="w-[24px] text-[14px] font-bold text-[#0f172a]">{e.score}</span>
-                <span className="h-[6px] flex-1 rounded-full bg-[#e5e7eb]">
-                  <span className="block h-full rounded-full bg-[#22c55e]" style={{ width: `${e.score}%` }} />
-                </span>
-              </div>
+                <IntentTag intent={e.intent} tier={e.tier} />
 
-              <IntentTag intent={e.intent} tier={e.tier} />
-
-              <span className="flex items-center gap-[8px]">
                 <span className="flex items-center gap-[6px] text-[13px] font-medium text-[#334155]">
-                  <span className="size-[7px] rounded-full" style={{ backgroundColor: e.engColor }} />
-                  {e.engagement}
+                  <span className="size-[7px] rounded-full" style={{ backgroundColor: e.statusColor }} />
+                  {e.status}
                 </span>
-                <Sparkline className="h-[20px] w-[46px]" color={e.engColor} gradientId={`eng-${e.logo}`} values={e.eng} />
-              </span>
 
-              <span className="flex items-center gap-[7px] text-[13px] text-[#64748b]">
-                <span className="size-[7px] rounded-full" style={{ backgroundColor: e.dot }} />
-                {e.lastSignal}
-              </span>
-
-              <span className="text-[13px] text-[#475569]">{e.revenue}</span>
-              <span className="text-[13px] text-[#475569]">{e.employees}</span>
-
-              <button aria-label={`Actions for ${e.name}`} className="flex size-[32px] items-center justify-center justify-self-end rounded-[8px] text-[#94a3b8] transition hover:bg-[#f6f7fb]" onClick={(event) => event.stopPropagation()} type="button">
-                <MoreHorizontal className="size-[17px]" />
-              </button>
-            </div>
-          ))}
-        </div>
+                <span className="text-[13px] text-[#475569]">{e.revenue}</span>
+                <span className="text-[13px] text-[#475569]">{e.employees}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -450,16 +374,14 @@ function PageBtn({
 
 function PerPage() {
   return (
-    <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] py-[8px] text-[13px] font-semibold text-[#334155]" type="button">
+    <span className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] py-[8px] text-[13px] font-semibold text-[#334155]">
       {PAGE_SIZE} per page
-      <ChevronDown className="size-[14px] text-[#94a3b8]" />
-    </button>
+    </span>
   );
 }
 
-/* Compresses a long page range down to first-2/last-2/window-around-current
- * with "…" gaps, same visual pattern the old fake "1 2 3 4 5 … 154" markup
- * had - just computed from the real total now instead of hardcoded. */
+/* Compresses a long page range to first-2/last-2/window-around-current with
+ * "…" gaps - computed from the real total. */
 function pageNumbers(current: number, totalPages: number): (number | "…")[] {
   if (totalPages <= 7) {
     return Array.from({ length: totalPages }, (_, i) => i + 1);
@@ -522,31 +444,32 @@ function Pagination({
 /* Page                                                                */
 /* ------------------------------------------------------------------ */
 
-// Top lead score first, lowest last - the backend already orders "all
-// companies" this way (LeadScore.lead_score desc nulls last), but the
-// ICP-filtered branch merges scores in JS after two separate fetches, so it
-// needs its own explicit sort.
+// Top lead score first - the backend already orders "all companies" this way
+// (LeadScore.lead_score desc nulls last); the ICP-filtered branch merges
+// scores in JS after two fetches, so it needs its own explicit sort.
 const byScoreDesc = (a: Enterprise, b: Enterprise) => b.score - a.score;
 
 export function EnterpriseListPage() {
-  const [enterprises, setEnterprises] = useState<Enterprise[]>(dummyEnterprises);
+  const [enterprises, setEnterprises] = useState<Enterprise[]>([]);
   const [icps, setIcps] = useState<IcpOut[]>([]);
   const [selectedIcpId, setSelectedIcpId] = useState("all");
-  const [statCards, setStatCards] = useState<StatCard[]>(dummyStats);
+  const [statCards, setStatCards] = useState<StatCard[]>(emptyStats);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  // Full sorted match list for the ICP-filtered view - getIcpCompanies has
-  // no pagination (it returns every match), so paging through it is done
-  // client-side by slicing this. null while "All Companies" is selected,
-  // since that path is paginated server-side instead (see the effect below).
   const [icpMatches, setIcpMatches] = useState<Enterprise[] | null>(null);
   const [scoringRunning, setScoringRunning] = useState(false);
   const [scoringError, setScoringError] = useState<string | null>(null);
-  // Bumped after a scoring run completes so every data-fetching effect below
-  // re-runs and picks up the newly-written LeadScore rows.
   const [refreshKey, setRefreshKey] = useState(0);
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+
+  // Debounce the search box so a keystroke doesn't fire a request each time.
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   // Populate the ICP filter dropdown once.
   useEffect(() => {
@@ -561,32 +484,25 @@ export function EnterpriseListPage() {
       });
   }, []);
 
-  // Org-wide totals for the stat cards - independent of the ICP filter and
-  // current page, so it always reflects every company from the uploaded data.
+  // Org-wide totals for the stat cards - independent of filter/page/search.
   useEffect(() => {
     const organisationId = getOrganisationId();
     if (!organisationId) {
       return;
     }
     getCompanyStats(organisationId)
-      .then((data) => {
-        if (data.total > 0) {
-          setStatCards(toStatCards(data));
-        }
-      })
+      .then((data) => setStatCards(toStatCards(data)))
       .catch(() => {
-        // No backend/org yet - keep the dummy stat cards.
+        // No backend/org yet - keep the zero stat cards.
       });
   }, [refreshKey]);
 
-  // Land on page 1 whenever the filter changes - staying on a later page
-  // from a previous, larger result set would just show an empty table.
+  // Reset to page 1 whenever the filter or search changes.
   useEffect(() => {
     setPage(1);
-  }, [selectedIcpId]);
+  }, [selectedIcpId, search]);
 
-  // "All Companies" is paginated server-side (listCompanies takes real
-  // page/page_size) - re-fetches on every page change.
+  // "All Companies" is paginated + searched server-side.
   useEffect(() => {
     if (selectedIcpId !== "all") {
       return;
@@ -595,19 +511,15 @@ export function EnterpriseListPage() {
     if (!organisationId) {
       return;
     }
-    listCompanies(organisationId, { page, page_size: PAGE_SIZE })
+    listCompanies(organisationId, { page, page_size: PAGE_SIZE, search: search || undefined })
       .then((res) => {
         setTotal(res.total);
         setEnterprises(res.items.map((c) => toEnterprise(c, c.lead_score, c.gate_status)).sort(byScoreDesc));
       })
-      .catch(() => {
-        // No backend/org yet - keep the dummy rows.
-      });
-  }, [selectedIcpId, page, refreshKey]);
+      .catch(() => setEnterprises([]));
+  }, [selectedIcpId, page, search, refreshKey]);
 
-  // ICP-filtered: fetch the full match set once per filter/refresh (not per
-  // page - getIcpCompanies returns everything already, no point re-fetching
-  // it on every page click).
+  // ICP-filtered: fetch the full match set once per filter/refresh.
   useEffect(() => {
     const organisationId = getOrganisationId();
     const workspaceId = getWorkspaceId();
@@ -627,28 +539,24 @@ export function EnterpriseListPage() {
             .sort(byScoreDesc),
         );
       })
-      .catch(() => {
-        // ICP has no matches yet, or the fetch failed - show nothing rather
-        // than silently falling back to the unrelated dummy rows.
-        setIcpMatches([]);
-      });
+      .catch(() => setIcpMatches([]));
   }, [selectedIcpId, refreshKey]);
 
-  // Slices the full ICP match list into the current page.
+  // Slice the full ICP match list into the current page (with client-side
+  // name search, since getIcpCompanies isn't paginated/searched server-side).
   useEffect(() => {
     if (icpMatches === null) {
       return;
     }
-    setTotal(icpMatches.length);
-    setEnterprises(icpMatches.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
-  }, [icpMatches, page]);
+    const filtered = search
+      ? icpMatches.filter((e) => e.name.toLowerCase().includes(search.toLowerCase()))
+      : icpMatches;
+    setTotal(filtered.length);
+    setEnterprises(filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
+  }, [icpMatches, page, search]);
 
-  // Scores every company in the org (POST /scores/run, company_ids=None -
-  // see lead_scorer.run_scoring) - the only way to score companies that
-  // weren't already scored during an Excel upload (uploads only score
-  // matches for the ICP that upload targeted, so companies outside that
-  // ICP - or an upload matched against the wrong ICP entirely - stay
-  // unscored until this runs).
+  // Scores every company in the org (POST /scores/run) - the manual way to
+  // score companies not covered by an upload's ICP.
   const handleRunScoring = async () => {
     const organisationId = getOrganisationId();
     if (!organisationId) {
@@ -665,9 +573,7 @@ export function EnterpriseListPage() {
     setScoringRunning(false);
   };
 
-  // Exports the same set of companies currently shown - every company for
-  // "All Companies", or just that ICP's matches when one is selected -
-  // with real LeadScore columns (see excel_pipeline.build_company_export_workbook).
+  // Exports the companies currently shown, with real LeadScore columns.
   const handleExport = async () => {
     const organisationId = getOrganisationId();
     if (!organisationId) {
@@ -705,7 +611,7 @@ export function EnterpriseListPage() {
             <div>
               <h1 className="m-0 text-[26px] font-bold text-[#0f172a]">Enterprise List</h1>
               <p className="m-0 mt-[6px] text-[15px] text-[#64748b]">
-                Manage and explore all enterprises in your database.
+                Every company from your uploaded data, ranked by lead score.
               </p>
             </div>
             <div className="flex flex-col items-end gap-[6px]">
@@ -728,14 +634,6 @@ export function EnterpriseListPage() {
                   <Download className="size-[16px] text-[#64748b]" />
                   {exporting ? "Exporting..." : "Export"}
                 </button>
-                <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155]" type="button">
-                  <Upload className="size-[16px] text-[#64748b]" />
-                  Import
-                </button>
-                <button className="flex items-center gap-[8px] rounded-[10px] bg-[#fa5a1e] px-[18px] py-[10px] text-[14px] font-semibold text-white shadow-[0px_10px_20px_-6px_rgba(250,90,30,0.5)]" type="button">
-                  <Plus className="size-[17px]" />
-                  Add Enterprise
-                </button>
               </div>
               {exportError && <p className="m-0 text-[12px] font-medium text-[#ef4444]">{exportError}</p>}
               {scoringError && <p className="m-0 text-[12px] font-medium text-[#ef4444]">{scoringError}</p>}
@@ -750,11 +648,7 @@ export function EnterpriseListPage() {
             <EnterpriseTabs />
 
             <div className="mt-[18px]">
-              <Toolbar icps={icps} onIcpChange={setSelectedIcpId} selectedIcpId={selectedIcpId} />
-            </div>
-
-            <div className="mt-[16px]">
-              <Pagination onPageChange={setPage} page={page} total={total} />
+              <Toolbar icps={icps} onIcpChange={setSelectedIcpId} onSearchChange={setSearchInput} search={searchInput} selectedIcpId={selectedIcpId} />
             </div>
 
             <div className="mt-[16px]">

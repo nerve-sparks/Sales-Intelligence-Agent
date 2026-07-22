@@ -8,6 +8,7 @@ class DecisionMakerOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     decision_maker_id: UUID
+    company_id: UUID
     zi_person_id: int
     first_name: str | None = None
     last_name: str | None = None

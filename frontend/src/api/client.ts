@@ -65,6 +65,14 @@ export function apiPost<T>(path: string, body?: unknown): Promise<T> {
   return apiFetch<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 }
 
+export function apiPut<T>(path: string, body?: unknown): Promise<T> {
+  return apiFetch<T>(path, { method: "PUT", body: body === undefined ? undefined : JSON.stringify(body) });
+}
+
+export function apiDelete<T>(path: string): Promise<T> {
+  return apiFetch<T>(path, { method: "DELETE" });
+}
+
 /* For endpoints that take a multipart file and return JSON (e.g. the logo
  * upload) - as opposed to apiPostForBlob below, which is FormData in AND a
  * binary file out. */

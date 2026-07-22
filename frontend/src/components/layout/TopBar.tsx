@@ -1,7 +1,6 @@
 import { Building2, Check, ChevronDown, Scan, Search } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import {
-  AIAssistantButton,
   DetectionPill,
   NotificationBell,
   UserMenu,
@@ -105,14 +104,12 @@ export function TopBar({
   searchPlaceholder = "Search companies, signals, executives...",
   detectionIcon = Scan,
   showDetection = true,
-  showAIAssistant = true,
   showNotificationBell = true,
   showWorkspaceSwitcher = false,
 }: {
   searchPlaceholder?: string;
   detectionIcon?: ComponentType<{ className?: string }>;
   showDetection?: boolean;
-  showAIAssistant?: boolean;
   showNotificationBell?: boolean;
   showWorkspaceSwitcher?: boolean;
 }) {
@@ -160,7 +157,6 @@ export function TopBar({
       )}
 
       <div className="ml-auto flex items-center gap-[12px]">
-        {showAIAssistant && <AIAssistantButton />}
         {showNotificationBell && <NotificationBell />}
         <UserMenu {...(user ?? {})} />
       </div>

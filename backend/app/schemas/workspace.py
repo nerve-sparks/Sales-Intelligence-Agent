@@ -20,5 +20,6 @@ class MemberOut(BaseModel):
     user_id: UUID
     email: str | None = None
     full_name: str | None = None
+    designation: str | None = None
     role: str
     created_at: datetime | None = None

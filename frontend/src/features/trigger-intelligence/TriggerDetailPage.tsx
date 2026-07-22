@@ -1,13 +1,4 @@
-import {
-  Building2,
-  ChevronRight,
-  Clock,
-  MoreVertical,
-  Pencil,
-  Rocket,
-  Share2,
-  Tag,
-} from "lucide-react";
+import { Building2, ChevronRight, Clock, Rocket, Tag } from "lucide-react";
 import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
@@ -87,75 +78,31 @@ function DetailHeader({ trigger, eventCount }: { trigger: TriggerEventsOut["trig
   const style = category ? categoryStyle(category) : categoryStyle("");
 
   return (
-    <div className="flex flex-col gap-[18px] xl:flex-row xl:items-start xl:justify-between">
-      <div className="flex items-start gap-[18px]">
-        <LogoSquare bg={style.bg} color={style.color} icon={Rocket} radius={14} size={60} />
-        <div>
-          <div className="flex flex-wrap items-center gap-[12px]">
-            <h1 className="m-0 text-[24px] font-bold text-[#0f172a]">
-              {trigger.name || "Untitled Trigger"}
-            </h1>
-            {category && (
-              <span
-                className="rounded-[7px] px-[10px] py-[4px] text-[12px] font-semibold"
-                style={{ backgroundColor: style.bg, color: style.color }}
-              >
-                {categoryLabel(category)}
-              </span>
-            )}
-          </div>
-          <p className="m-0 mt-[6px] text-[14px] text-[#64748b]">
-            {eventCount} signal{eventCount === 1 ? "" : "s"} matched so far.
-          </p>
-          <p className="m-0 mt-[8px] flex flex-wrap items-center gap-x-[8px] gap-y-[4px] text-[13px] text-[#94a3b8]">
-            <span>Created: {formatDate(trigger.created_at)}</span>
-            <span>•</span>
-            <span>Last Modified: {formatDate(trigger.updated_at)}</span>
-          </p>
+    <div className="flex items-start gap-[18px]">
+      <LogoSquare bg={style.bg} color={style.color} icon={Rocket} radius={14} size={60} />
+      <div>
+        <div className="flex flex-wrap items-center gap-[12px]">
+          <h1 className="m-0 text-[24px] font-bold text-[#0f172a]">
+            {trigger.name || "Untitled Trigger"}
+          </h1>
+          {category && (
+            <span
+              className="rounded-[7px] px-[10px] py-[4px] text-[12px] font-semibold"
+              style={{ backgroundColor: style.bg, color: style.color }}
+            >
+              {categoryLabel(category)}
+            </span>
+          )}
         </div>
+        <p className="m-0 mt-[6px] text-[14px] text-[#64748b]">
+          {eventCount} signal{eventCount === 1 ? "" : "s"} matched so far.
+        </p>
+        <p className="m-0 mt-[8px] flex flex-wrap items-center gap-x-[8px] gap-y-[4px] text-[13px] text-[#94a3b8]">
+          <span>Created: {formatDate(trigger.created_at)}</span>
+          <span>•</span>
+          <span>Last Modified: {formatDate(trigger.updated_at)}</span>
+        </p>
       </div>
-
-      <div className="flex flex-wrap items-center gap-[10px]">
-        <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155]" type="button">
-          <Share2 className="size-[16px]" />
-          Share
-        </button>
-        <button className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155]" type="button">
-          <Pencil className="size-[16px] text-[#5b3df5]" />
-          Edit Trigger
-        </button>
-        <button aria-label="More actions" className="flex size-[42px] items-center justify-center rounded-[10px] border border-[#e9edf5] bg-white text-[#64748b]" type="button">
-          <MoreVertical className="size-[17px]" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function DetailTabs({ eventCount, companyCount }: { eventCount: number; companyCount: number }) {
-  const tabs = [
-    "Overview",
-    `Signals (${eventCount})`,
-    `Matched Companies (${companyCount})`,
-  ];
-
-  return (
-    <div className="mt-[18px] flex gap-[28px] overflow-x-auto border-b border-[#e9edf5]">
-      {tabs.map((tab, index) => {
-        const active = index === 0;
-        return (
-          <button
-            className={cn(
-              "-mb-px whitespace-nowrap border-b-2 pb-[14px] text-[14px] font-semibold transition",
-              active ? "border-[#5b3df5] text-[#5b3df5]" : "border-transparent text-[#64748b] hover:text-[#334155]",
-            )}
-            key={tab}
-            type="button"
-          >
-            {tab}
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -435,8 +382,6 @@ export function TriggerDetailPage() {
       .catch(() => setLoadError("Could not load this trigger."));
   }, []);
 
-  const companyCount = data ? new Set(data.events.map((e) => e.company_id)).size : 0;
-
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
       <Sidebar active="Trigger Intelligence" />
@@ -466,8 +411,6 @@ export function TriggerDetailPage() {
               <div className="mt-[16px]">
                 <DetailHeader eventCount={data.event_count} trigger={data.trigger} />
               </div>
-
-              <DetailTabs companyCount={companyCount} eventCount={data.event_count} />
 
               <div className="mt-[24px] grid grid-cols-1 gap-[24px] xl:grid-cols-[minmax(0,1fr)_340px]">
                 <div className="flex flex-col gap-[24px]">

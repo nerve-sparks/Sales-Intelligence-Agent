@@ -2,17 +2,25 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import VerifiedFirebaseUser, require_firebase_user
 from app.core.db import get_db
-from app.services.user_service import create_user
+from app.models import User
+from app.services.user_service import create_user, update_user
 
 
 class UserCreate(BaseModel):
     email: str
     full_name: str | None = None
+    designation: str | None = None
+
+
+class UserUpdate(BaseModel):
+    full_name: str | None = None
+    designation: str | None = None
 
 
 async def create(
@@ -37,3 +45,26 @@ async def create(
         # session gets reused.
         await db.rollback()
         raise HTTPException(status_code=409, detail="A user with this email already exists.")
+
+
+async def update(
+    organisation_id: UUID,
+    user_id: UUID,
+    payload: UserUpdate,
+    db: AsyncSession = Depends(get_db),
+    firebase_user: VerifiedFirebaseUser = Depends(require_firebase_user),
+):
+    # Self-edit only, same pattern as add_workspace_member: the caller's own
+    # resolved identity must match both the path's user_id and
+    # organisation_id - nobody can edit a teammate's profile through this,
+    # only their own (there's no "admin edits member" flow in this app).
+    caller = (
+        await db.execute(select(User).where(User.firebase_uid == firebase_user.uid))
+    ).scalar_one_or_none()
+    if caller is None or caller.user_id != user_id or caller.organisation_id != organisation_id:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this user")
+
+    user = await update_user(db, user_id, payload.model_dump(exclude_unset=True))
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    return user

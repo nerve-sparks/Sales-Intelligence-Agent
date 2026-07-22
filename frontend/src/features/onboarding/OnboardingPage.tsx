@@ -48,7 +48,6 @@ import { resolvePostLoginPath } from "../../lib/postLogin";
 import goLiveRocketImage from "../../assets/figma/onboarding/go-live-rocket.png";
 import heroImage from "../../assets/figma/onboarding/raw-image-1.png";
 import arrowRightIcon from "../../assets/figma/onboarding/icons/arrow-right.svg";
-import calendarIcon from "../../assets/figma/onboarding/icons/calendar.svg";
 import currencyIcon from "../../assets/figma/onboarding/icons/currency.svg";
 import globeIcon from "../../assets/figma/onboarding/icons/globe.svg";
 import secureIcon from "../../assets/figma/onboarding/icons/secure.svg";
@@ -60,7 +59,6 @@ const icons = {
   upload: uploadIcon,
   globe: globeIcon,
   currency: currencyIcon,
-  calendar: calendarIcon,
   secure: secureIcon,
   arrowRight: arrowRightIcon,
 };
@@ -94,20 +92,26 @@ const pageBackground =
  * created, a different backend concept from the organisation's own account
  * identity.
  *
- * time_in_business has no backend column but keeps a working UI field
- * (never sent to the API). date_format has no backend column either, and
- * account_url has a real one - both lost their UI field, so both now stay
- * in state always submitting their initial default, same as
- * sub_industry/founded_year above. */
+ * date_format has no backend column, and account_url has a real one - both
+ * lost their UI field, so both now stay in state always submitting their
+ * initial default, same as sub_industry/founded_year above.
+ *
+ * Company Size, Annual Revenue, Time in Business, Time Zone and Currency
+ * were dropped from Organization Setup entirely (Time in Business never had
+ * a backend column at all; the other four are real Organisation columns but
+ * are no longer collected here - still editable later from Settings for the
+ * ones that are). Industry is now free text instead of a fixed dropdown.
+ * designation is new - the founder's job title, collected here but stored
+ * on the User row (see app/models/user.py), submitted via createUser in the
+ * Workspace Setup step alongside user_full_name/user_email. */
 type OnboardingFormState = {
   workspace_name: string;
   workspace_purpose: string;
   user_full_name: string;
   user_email: string;
-  timezone: string;
+  designation: string;
   account_url: string;
   account_logo_url: string;
-  currency: string;
   date_format: string;
   company_name: string;
   website: string;
@@ -117,9 +121,6 @@ type OnboardingFormState = {
   business_type: string;
   headquarters_location: string;
   founded_year: string;
-  employee_count_range: string;
-  annual_revenue_range: string;
-  time_in_business: string;
   company_description: string;
 };
 
@@ -128,10 +129,9 @@ const initialFormState: OnboardingFormState = {
   workspace_purpose: "",
   user_full_name: "",
   user_email: "",
-  timezone: "",
+  designation: "",
   account_url: "",
   account_logo_url: "",
-  currency: "",
   date_format: "MM/DD/YYYY",
   company_name: "",
   website: "",
@@ -141,38 +141,14 @@ const initialFormState: OnboardingFormState = {
   business_type: "B2B",
   headquarters_location: "",
   founded_year: "",
-  employee_count_range: "",
-  annual_revenue_range: "",
-  time_in_business: "",
   company_description: "",
 };
 
-const TIMEZONE_OPTIONS = [
-  "(GMT-08:00) Pacific Time (US & Canada)",
-  "(GMT-06:00) Central Time (US & Canada)",
-  "(GMT-05:00) Eastern Time (Canada)",
-  "(GMT+00:00) UTC",
-  "(GMT+01:00) Central European Time",
-  "(GMT+05:30) India Standard Time",
-];
-const CURRENCY_OPTIONS = ["USD - US Dollar ( $ )", "EUR - Euro ( € )", "GBP - British Pound ( £ )", "INR - Indian Rupee ( ₹ )"];
-// Scoped to Organization Setup's "Industry" field only - the Industry
-// Selection step and ICP Generation's "Primary Industry" field still use
-// the full `industries` list further below. Real ZoomInfo "Primary Industry"
-// values pulled from actual uploaded company data (same source list as
-// Settings > ICP Data Management's industry dropdown) - was previously
-// hardcoded to a single "Manufacturing" option, forcing every organisation
-// created through onboarding to be mislabeled regardless of what the
-// company actually does.
-const ORG_INDUSTRY_OPTIONS = [
-  "Business Services", "Construction", "Education", "Energy, Utilities & Waste",
-  "Finance", "Healthcare Services", "Hospitality", "Hospitals & Physicians Clinics",
-  "Insurance", "Manufacturing", "Media & Internet", "Minerals & Mining",
-  "Real Estate", "Retail", "Software", "Telecommunications", "Transportation",
-];
+// Still used by ICP Generation's Company Size/Annual Revenue fields further
+// below - Organization Setup no longer has its own Company Size/Annual
+// Revenue dropdowns.
 const COMPANY_SIZE_OPTIONS = ["1 - 10", "11 - 50", "51 - 200", "201 - 500", "501 - 1000", "1000+"];
 const ANNUAL_REVENUE_OPTIONS = ["<$1M", "$1M - $10M", "$10M - $50M", "$50M - $100M", "$100M - $250M", "$250M+"];
-const TIME_IN_BUSINESS_OPTIONS = ["<1 Year", "1 - 5 Years", "6 - 10 Years", "10+ Years"];
 // "Department" (Workspace Setup) maps to Workspace.purpose - a real column
 // the onboarding UI never collected before (workspace creation always sent
 // purpose: null). Options depend on the industry chosen in Organization
@@ -922,11 +898,11 @@ function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
         placeholder="Acme Technologies Incorporated"
         value={form.legal_business_name}
       />
-      <SelectField
+      <TextField
         icon={icons.workspace}
         label="Industry"
         onChange={(v) => onFieldChange("industry", v)}
-        options={ORG_INDUSTRY_OPTIONS}
+        placeholder="e.g. Software"
         required
         value={form.industry}
       />
@@ -938,45 +914,12 @@ function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
         required
         value={form.headquarters_location}
       />
-      <SelectField
+      <TextField
         icon={icons.workspace}
-        label="Company Size (Employees)"
-        onChange={(v) => onFieldChange("employee_count_range", v)}
-        options={COMPANY_SIZE_OPTIONS}
-        required
-        value={form.employee_count_range}
-      />
-      <SelectField
-        icon={icons.currency}
-        label="Annual Revenue"
-        onChange={(v) => onFieldChange("annual_revenue_range", v)}
-        options={ANNUAL_REVENUE_OPTIONS}
-        required
-        value={form.annual_revenue_range}
-      />
-      <SelectField
-        icon={icons.calendar}
-        label="Time in Business"
-        onChange={(v) => onFieldChange("time_in_business", v)}
-        options={TIME_IN_BUSINESS_OPTIONS}
-        required
-        value={form.time_in_business}
-      />
-      <SelectField
-        icon={icons.globe}
-        label="Time Zone"
-        onChange={(v) => onFieldChange("timezone", v)}
-        options={TIMEZONE_OPTIONS}
-        required
-        value={form.timezone}
-      />
-      <SelectField
-        icon={icons.currency}
-        label="Currency"
-        onChange={(v) => onFieldChange("currency", v)}
-        options={CURRENCY_OPTIONS}
-        required
-        value={form.currency}
+        label="Designation"
+        onChange={(v) => onFieldChange("designation", v)}
+        placeholder="e.g. VP of Sales"
+        value={form.designation}
       />
       <LogoUpload
         onChange={(v) => onFieldChange("account_logo_url", v)}
@@ -2163,8 +2106,6 @@ function OnboardingCard() {
           account_name: form.company_name || null,
           account_url: form.account_url || null,
           account_logo_url: form.account_logo_url || null,
-          timezone: form.timezone || null,
-          currency: form.currency || null,
           company_name: form.company_name,
           website: form.website || null,
           legal_business_name: form.legal_business_name || null,
@@ -2173,8 +2114,6 @@ function OnboardingCard() {
           business_type: form.business_type || null,
           headquarters_location: form.headquarters_location || null,
           founded_year: form.founded_year || null,
-          employee_count_range: form.employee_count_range || null,
-          annual_revenue_range: form.annual_revenue_range || null,
           company_description: form.company_description || null,
         });
         setOrganisationId(org.organisation_id);
@@ -2222,6 +2161,7 @@ function OnboardingCard() {
         const user = await createUser(organisationId, {
           email: userEmail,
           full_name: form.user_full_name || null,
+          designation: form.designation || null,
         });
         await addWorkspaceMember(workspace.workspace_id, {
           user_id: user.user_id,

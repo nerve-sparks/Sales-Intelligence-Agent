@@ -15,3 +15,14 @@ async def create_user(session: AsyncSession, organisation_id: UUID, values: dict
 
 async def get_user(session: AsyncSession, user_id: UUID) -> User | None:
     return await session.get(User, user_id)
+
+
+async def update_user(session: AsyncSession, user_id: UUID, values: dict) -> User | None:
+    user = await session.get(User, user_id)
+    if user is None:
+        return None
+    for key, value in values.items():
+        setattr(user, key, value)
+    await session.commit()
+    await session.refresh(user)
+    return user

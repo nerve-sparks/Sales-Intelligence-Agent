@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,6 +20,38 @@ async def get_icp(session: AsyncSession, workspace_id: UUID, icp_id: UUID) -> Ic
         IcpProfile.icp_id == icp_id, IcpProfile.workspace_id == workspace_id
     )
     return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def update_icp(
+    session: AsyncSession, workspace_id: UUID, icp_id: UUID, values: dict
+) -> IcpProfile | None:
+    """Full-replace update, scoped by workspace_id so a member of one
+    workspace can never edit another workspace's ICP even by guessing its id
+    (the get_icp lookup already filters on workspace_id). Returns None when
+    there's no such ICP in this workspace - the controller turns that into a
+    404."""
+    icp = await get_icp(session, workspace_id, icp_id)
+    if icp is None:
+        return None
+    for key, value in values.items():
+        setattr(icp, key, value)
+    icp.updated_at = func.now()
+    await session.commit()
+    await session.refresh(icp)
+    return icp
+
+
+async def delete_icp(session: AsyncSession, workspace_id: UUID, icp_id: UUID) -> bool:
+    """Deletes one ICP (workspace-scoped, same isolation as update_icp). Its
+    icp_import_batch history rows go with it via the FK's ON DELETE CASCADE -
+    Company/Signal/LeadScore are organisation-scoped, not tied to the ICP, so
+    they're untouched. Returns False when there's nothing to delete."""
+    icp = await get_icp(session, workspace_id, icp_id)
+    if icp is None:
+        return False
+    await session.delete(icp)
+    await session.commit()
+    return True
 
 
 async def list_icps(session: AsyncSession, workspace_id: UUID) -> list[IcpProfile]:

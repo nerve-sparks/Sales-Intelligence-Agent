@@ -1,16 +1,11 @@
 import {
-  Bookmark,
   Building2,
-  Check,
   ChevronRight,
   Copy,
   Database,
   ExternalLink,
   Info,
-  MoreVertical,
   Radio,
-  Share2,
-  TrendingUp,
 } from "lucide-react";
 import { useEffect, useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
@@ -155,97 +150,49 @@ function Tag({ label, tone }: { label: string; tone: string }) {
 /* ------------------------------------------------------------------ */
 
 function DetailHeader({ signal }: { signal: SignalWithCompanyOut | null }) {
-  const title = signal ? titleCase(signal.signal_type) : "Series B funding round announced";
-  const company = signal?.company_name ?? "Acme Corp";
-  const detected = signal
-    ? `${new Date(signal.ingested_at ?? "").toLocaleString()} (${relativeTime(signal.ingested_at)})`
-    : "May 20, 2025 10:15 AM (8m ago)";
-  const category = signal ? categoryLabel(signal.signal_category) : "Funding & Investment";
-  const confidence = signal?.signal_confidence ?? 0.8;
-  const tier = confidenceTier(confidence);
-
-  return (
-    <div className="flex flex-col gap-[18px] xl:flex-row xl:items-start xl:justify-between">
+  if (!signal) {
+    return (
       <div className="flex items-start gap-[18px]">
         <LogoSquare bg="#0f172a" color="#ffffff" icon={Radio} radius={14} size={64} />
         <div>
-          <div className="flex flex-wrap items-center gap-[12px]">
-            <h1 className="m-0 text-[24px] font-bold text-[#0f172a]">
-              {title}
-            </h1>
-            <span className={cn("rounded-[7px] px-[10px] py-[4px] text-[12px] font-semibold", tagTones[tier.tone])}>
-              {tier.label}
-            </span>
-          </div>
-          <p className="m-0 mt-[8px] text-[14px] text-[#64748b]">
-            <span className="font-semibold text-[#334155]">{company}</span> • Detected
-            on {detected}
-          </p>
-          <div className="mt-[12px] flex flex-wrap gap-[8px]">
-            <Tag label={category} tone="purple" />
-            {signal && <Tag label={titleCase(signal.extraction_method ?? "rule_based")} tone="gray" />}
-            {signal?.is_action && <Tag label="Actionable" tone="green" />}
-          </div>
+          <h1 className="m-0 text-[24px] font-bold text-[#0f172a]">Signal</h1>
+          <p className="m-0 mt-[8px] text-[14px] text-[#64748b]">Loading signal details…</p>
         </div>
       </div>
+    );
+  }
 
-      <div className="flex flex-wrap items-center gap-[10px]">
-        <button
-          className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155]"
-          type="button"
-        >
-          <Bookmark className="size-[16px]" />
-          Add to Watchlist
-        </button>
-        <button
-          className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155]"
-          type="button"
-        >
-          <Share2 className="size-[16px]" />
-          Share
-        </button>
-        <button
-          className="flex items-center gap-[8px] rounded-[10px] bg-[#5b3df5] px-[16px] py-[10px] text-[14px] font-semibold text-white shadow-[0px_10px_20px_-6px_rgba(91,61,245,0.45)]"
-          type="button"
-        >
-          <Check className="size-[16px]" />
-          Validate Signal
-        </button>
-        <button
-          aria-label="More actions"
-          className="flex size-[42px] items-center justify-center rounded-[10px] border border-[#e9edf5] bg-white text-[#64748b]"
-          type="button"
-        >
-          <MoreVertical className="size-[17px]" />
-        </button>
-      </div>
-    </div>
-  );
-}
+  const title = titleCase(signal.signal_type);
+  const detected = `${new Date(signal.ingested_at ?? "").toLocaleString()} (${relativeTime(signal.ingested_at)})`;
+  const category = categoryLabel(signal.signal_category);
+  const confidence = signal.signal_confidence ?? 0;
+  const tier = confidenceTier(confidence);
 
-const tabs = ["Overview"];
-
-function DetailTabs() {
   return (
-    <div className="mt-[20px] flex gap-[28px] overflow-x-auto border-b border-[#e9edf5]">
-      {tabs.map((tab, index) => {
-        const active = index === 0;
-
-        return (
-          <button
-            className={cn(
-              "-mb-px whitespace-nowrap border-b-2 pb-[14px] text-[14px] font-semibold transition",
-              active
-                ? "border-[#5b3df5] text-[#5b3df5]"
-                : "border-transparent text-[#64748b] hover:text-[#334155]",
-            )}
-            key={tab}
-            type="button"
+    <div className="flex items-start gap-[18px]">
+      <LogoSquare bg="#0f172a" color="#ffffff" icon={Radio} radius={14} size={64} />
+      <div>
+        <div className="flex flex-wrap items-center gap-[12px]">
+          <h1 className="m-0 text-[24px] font-bold text-[#0f172a]">{title}</h1>
+          <span className={cn("rounded-[7px] px-[10px] py-[4px] text-[12px] font-semibold", tagTones[tier.tone])}>
+            {tier.label}
+          </span>
+        </div>
+        <p className="m-0 mt-[8px] text-[14px] text-[#64748b]">
+          <a
+            className="font-semibold text-[#334155] no-underline hover:text-[#5b3df5]"
+            href={`/enterprise-detail?id=${signal.company_id}`}
           >
-            {tab}
-          </button>
-        );
-      })}
+            {signal.company_name}
+          </a>{" "}
+          • Detected on {detected}
+        </p>
+        <div className="mt-[12px] flex flex-wrap gap-[8px]">
+          <Tag label={category} tone="purple" />
+          <Tag label={titleCase(signal.extraction_method ?? "rule_based")} tone="gray" />
+          {signal.is_action && <Tag label="Actionable" tone="green" />}
+        </div>
+      </div>
     </div>
   );
 }
@@ -255,12 +202,12 @@ function DetailTabs() {
 /* ------------------------------------------------------------------ */
 
 function IntentScoreCard({ signal }: { signal: SignalWithCompanyOut | null }) {
-  const confidence = signal?.signal_confidence ?? 0.96;
+  const confidence = signal?.signal_confidence ?? 0;
   const score = Math.round(confidence * 100);
   const tier = confidenceTier(confidence);
 
   return (
-    <div className="max-w-[420px] rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
+    <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <p className="m-0 text-[14px] font-semibold text-[#475569]">Intent Score</p>
       <div className="mt-[10px] flex items-center gap-[12px]">
         <span className="text-[30px] font-bold leading-none text-[#0f172a]">
@@ -284,35 +231,29 @@ function IntentScoreCard({ signal }: { signal: SignalWithCompanyOut | null }) {
 
 /* IntentScoreOverTime (a fake 7-day line chart) had no backing data -
  * signals don't have a score history, just one ingested_at/scored_at pair -
- * so this replaces it with the real fields that actually explain how the
- * signal was extracted and classified. */
+ * so this shows the real fields that actually explain how the signal was
+ * extracted and classified. */
 function ExtractionDetailsCard({ signal }: { signal: SignalWithCompanyOut | null }) {
-  const rows: { label: string; value: string }[] = signal
-    ? (
-        [
-          { label: "Extraction Method", value: titleCase(signal.extraction_method ?? "rule_based") },
-          {
-            label: "Extraction Confidence",
-            value: signal.extraction_confidence !== null ? `${Math.round(signal.extraction_confidence * 100)}%` : "—",
-          },
-          { label: "Source Type", value: sourceTypeLabel(signal.original_source) },
-          { label: "Signal Type", value: titleCase(signal.signal_type) },
-          {
-            label: "Action Signal",
-            value: signal.is_action ? "Yes — direct action detected" : "No — contextual/informational",
-          },
-          signal.dollar_value_usd
-            ? { label: "Deal Value", value: `$${signal.dollar_value_usd.toLocaleString()}` }
-            : null,
-        ] as ({ label: string; value: string } | null)[]
-      ).filter((r): r is { label: string; value: string } => r !== null)
-    : [
-        { label: "Extraction Method", value: "Rule Based" },
-        { label: "Extraction Confidence", value: "92%" },
-        { label: "Source Type", value: "News Article" },
-        { label: "Signal Type", value: "Funding Round Announced" },
-        { label: "Action Signal", value: "No — contextual/informational" },
-      ];
+  if (!signal) return null;
+
+  const rows = (
+    [
+      { label: "Extraction Method", value: titleCase(signal.extraction_method ?? "rule_based") },
+      {
+        label: "Extraction Confidence",
+        value: signal.extraction_confidence !== null ? `${Math.round(signal.extraction_confidence * 100)}%` : "—",
+      },
+      { label: "Source Type", value: sourceTypeLabel(signal.original_source) },
+      { label: "Signal Type", value: titleCase(signal.signal_type) },
+      {
+        label: "Action Signal",
+        value: signal.is_action ? "Yes — direct action detected" : "No — contextual/informational",
+      },
+      signal.dollar_value_usd
+        ? { label: "Deal Value", value: `$${signal.dollar_value_usd.toLocaleString()}` }
+        : null,
+    ] as ({ label: string; value: string } | null)[]
+  ).filter((r): r is { label: string; value: string } => r !== null);
 
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
@@ -336,24 +277,20 @@ function ExtractionDetailsCard({ signal }: { signal: SignalWithCompanyOut | null
 
 /* Real confidence formula (signal_extractor.compute_signal_confidence):
  * confidence = m2_corroboration x m3_recency x m4_resourcing, clamped to
- * [0,1]. Replaces the fake "Event Significance/Source Credibility/..."
- * breakdown with the model's actual component multipliers. */
+ * [0,1]. The model's actual component multipliers, not a fake "Event
+ * Significance/Source Credibility" breakdown. */
 function ConfidenceBreakdownCard({ signal }: { signal: SignalWithCompanyOut | null }) {
-  const confidence = signal?.signal_confidence ?? 0.96;
+  if (!signal) return null;
+
+  const confidence = signal.signal_confidence ?? 0;
   const score = Math.round(confidence * 100);
   const tier = confidenceTier(confidence);
 
-  const components = signal
-    ? [
-        { label: "Corroboration", value: signal.m2_corroboration ?? 1, color: "#7c3aed" },
-        { label: "Recency", value: signal.m3_recency ?? 1, color: "#16a34a" },
-        { label: "Directness", value: signal.m4_resourcing ?? 1, color: "#f59e0b" },
-      ]
-    : [
-        { label: "Corroboration", value: 1.15, color: "#7c3aed" },
-        { label: "Recency", value: 1.0, color: "#16a34a" },
-        { label: "Directness", value: 1.1, color: "#f59e0b" },
-      ];
+  const components = [
+    { label: "Corroboration", value: signal.m2_corroboration ?? 1, color: "#7c3aed" },
+    { label: "Recency", value: signal.m3_recency ?? 1, color: "#16a34a" },
+    { label: "Directness", value: signal.m4_resourcing ?? 1, color: "#f59e0b" },
+  ];
 
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
@@ -379,10 +316,7 @@ function ConfidenceBreakdownCard({ signal }: { signal: SignalWithCompanyOut | nu
           {components.map((c) => (
             <div className="flex items-center justify-between gap-[12px]" key={c.label}>
               <span className="flex items-center gap-[10px]">
-                <span
-                  className="size-[10px] rounded-full"
-                  style={{ backgroundColor: c.color }}
-                />
+                <span className="size-[10px] rounded-full" style={{ backgroundColor: c.color }} />
                 <span className="text-[13px] font-medium text-[#334155]">{c.label}</span>
               </span>
               <span className="whitespace-nowrap text-[13px] font-semibold text-[#0f172a]">
@@ -401,34 +335,23 @@ function ConfidenceBreakdownCard({ signal }: { signal: SignalWithCompanyOut | nu
 /* ------------------------------------------------------------------ */
 
 function SignalDetailsCard({ signal, company }: { signal: SignalWithCompanyOut | null; company: CompanyOut | null }) {
-  const rows: { label: string; value: string }[] = signal
-    ? [
-        {
-          label: "Detected",
-          value: `${new Date(signal.ingested_at ?? "").toLocaleString()} (${relativeTime(signal.ingested_at)})`,
-        },
-        { label: "Source", value: titleCase(signal.source ?? "ZoomInfo") },
-        { label: "Source Type", value: sourceTypeLabel(signal.original_source) },
-        { label: "Location", value: company ? [company.city, company.country].filter(Boolean).join(", ") || "—" : "—" },
-        { label: "Employees", value: company?.employee_range ?? "—" },
-        { label: "Revenue", value: company?.revenue_range ?? "—" },
-        { label: "Industry", value: company?.industries?.[0] ?? "—" },
-      ]
-    : [
-        { label: "Detected", value: "May 20, 2025 10:15 AM (8m ago)" },
-        { label: "Source", value: "ZoomInfo" },
-        { label: "Source Type", value: "News Article" },
-        { label: "Location", value: "United States" },
-        { label: "Employees", value: "501-1K" },
-        { label: "Revenue", value: "$50M - $100M" },
-        { label: "Industry", value: "Software Development" },
-      ];
+  if (!signal) return null;
 
-  const tags = signal
-    ? [categoryLabel(signal.signal_category), ...(signal.is_action ? ["Actionable"] : [])]
-    : ["Funding", "Growth"];
+  const rows = [
+    {
+      label: "Detected",
+      value: `${new Date(signal.ingested_at ?? "").toLocaleString()} (${relativeTime(signal.ingested_at)})`,
+    },
+    { label: "Source", value: titleCase(signal.source ?? "ZoomInfo") },
+    { label: "Source Type", value: sourceTypeLabel(signal.original_source) },
+    { label: "Location", value: company ? [company.city, company.country].filter(Boolean).join(", ") || "—" : "—" },
+    { label: "Employees", value: company?.employee_range ?? "—" },
+    { label: "Revenue", value: company?.revenue_range ?? "—" },
+    { label: "Industry", value: company?.industries?.[0] ?? "—" },
+  ];
 
-  const description = signal?.core_fact ?? "No summary was extracted for this signal.";
+  const tags = [categoryLabel(signal.signal_category), ...(signal.is_action ? ["Actionable"] : [])];
+  const description = signal.core_fact ?? "No summary was extracted for this signal.";
 
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
@@ -461,12 +384,12 @@ function SignalDetailsCard({ signal, company }: { signal: SignalWithCompanyOut |
 }
 
 function SourceSnippetCard({ signal }: { signal: SignalWithCompanyOut | null }) {
-  const url = signal ? extractUrl(signal.original_source) : null;
-  const sourceName = url ? hostnameOf(url) : signal ? titleCase(signal.source ?? "ZoomInfo") : "TechCrunch";
-  const detected = signal?.ingested_at ? new Date(signal.ingested_at).toLocaleString() : "May 20, 2025 10:00 AM";
-  const snippet =
-    signal?.core_fact ??
-    "Acme Corp, an AI-powered platform for enterprise automation, today announced it has raised $25 million in Series B funding led by Sequoia Capital, with participation from existing investors...";
+  if (!signal) return null;
+
+  const url = extractUrl(signal.original_source);
+  const sourceName = url ? hostnameOf(url) : titleCase(signal.source ?? "ZoomInfo");
+  const detected = signal.ingested_at ? new Date(signal.ingested_at).toLocaleString() : "—";
+  const snippet = signal.core_fact ?? "No source text was captured for this signal.";
 
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
@@ -499,145 +422,43 @@ function SourceSnippetCard({ signal }: { signal: SignalWithCompanyOut | null }) 
 
 type RelatedCompany = { companyId: string; name: string; score: number };
 
-/* Real replacement for the fake "Similar Companies" list (Databricks/
- * Snowflake/OpenAI) - there's no similarity model in the backend, so this
- * shows other real companies that have a signal in the same signal_category. */
+/* Other real companies that have a signal in the same signal_category
+ * (there's no similarity model in the backend, so "similar" = same
+ * category). Empty state when this is the only company with the category. */
 function SimilarCompaniesCard({ related, categoryName }: { related: RelatedCompany[]; categoryName: string }) {
-  const rows: RelatedCompany[] =
-    related.length > 0
-      ? related
-      : [
-          { companyId: "", name: "Databricks", score: 92 },
-          { companyId: "", name: "Snowflake", score: 90 },
-          { companyId: "", name: "OpenAI", score: 89 },
-        ];
-
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Companies with Similar Signals</h2>
       <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Other companies with a {categoryName} signal.</p>
 
-      <div className="mt-[16px] flex flex-col gap-[16px]">
-        {rows.map((c) => (
-          <div
-            className={cn("flex items-center gap-[12px]", c.companyId && "cursor-pointer")}
-            key={c.companyId || c.name}
-            onClick={
-              c.companyId
-                ? () => {
-                    window.location.href = `/enterprise-detail?id=${c.companyId}`;
-                  }
-                : undefined
-            }
-            role={c.companyId ? "button" : undefined}
-            tabIndex={c.companyId ? 0 : undefined}
-          >
-            <LogoSquare bg="#eef1ff" color="#4f46e5" icon={Building2} radius={10} size={40} />
-            <div className="min-w-0 flex-1">
-              <p className="m-0 truncate text-[14px] font-bold text-[#0f172a]">{c.name}</p>
-              <p className="m-0 text-[12px] text-[#94a3b8]">{categoryName}</p>
-            </div>
-            <span className="whitespace-nowrap text-[12px] text-[#94a3b8]">
-              Score: <span className="font-semibold text-[#334155]">{c.score}</span>
-            </span>
-          </div>
-        ))}
-      </div>
-
-      <button
-        className="mt-[18px] flex items-center gap-[6px] text-[13px] font-semibold text-[#5b3df5]"
-        type="button"
-      >
-        View all similar companies
-        <ChevronRight className="size-[15px]" />
-      </button>
-    </section>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Activity timeline                                                   */
-/* ------------------------------------------------------------------ */
-
-/* The fake timeline had 5 steps (Signal Detected/Data Enriched/AI Analysis
- * Complete/Added to Queue/Pending Review) - none of that workflow state
- * exists in the backend. Signal only has two real timestamps. */
-function ActivityTimeline({ signal }: { signal: SignalWithCompanyOut | null }) {
-  const steps = signal
-    ? [
-        {
-          icon: Radio,
-          bg: "#e6f0ff",
-          color: "#2563eb",
-          title: "Signal Ingested",
-          time: signal.ingested_at ? new Date(signal.ingested_at).toLocaleString() : "—",
-          desc: `Extracted via ${titleCase(signal.extraction_method ?? "rule_based")} from ${sourceTypeLabel(signal.original_source)}.`,
-        },
-        {
-          icon: TrendingUp,
-          bg: "#f3e9ff",
-          color: "#7c3aed",
-          title: "Confidence Scored",
-          time: signal.scored_at ? new Date(signal.scored_at).toLocaleString() : "—",
-          desc: `Confidence computed at ${Math.round((signal.signal_confidence ?? 0) * 100)}%.`,
-        },
-      ]
-    : [
-        {
-          icon: Radio,
-          bg: "#e6f0ff",
-          color: "#2563eb",
-          title: "Signal Ingested",
-          time: "May 20, 2025, 10:15 AM",
-          desc: "Extracted via Rule Based from News Article.",
-        },
-        {
-          icon: TrendingUp,
-          bg: "#f3e9ff",
-          color: "#7c3aed",
-          title: "Confidence Scored",
-          time: "May 20, 2025, 10:16 AM",
-          desc: "Confidence computed at 96%.",
-        },
-      ];
-
-  return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Signal Activity Timeline</h2>
-
-      <div className="mt-[20px] grid grid-cols-1 gap-[24px] sm:grid-cols-2">
-        {steps.map((step, index) => {
-          const Icon = step.icon;
-
-          return (
-            <div className="relative" key={step.title}>
-              <div className="flex items-center">
-                <span
-                  className="flex size-[38px] shrink-0 items-center justify-center rounded-[10px]"
-                  style={{ backgroundColor: step.bg, color: step.color }}
-                >
-                  <Icon className="size-[19px]" />
-                </span>
-                {index < steps.length - 1 && (
-                  <span className="relative mx-[8px] hidden h-px flex-1 sm:block">
-                    <span className="absolute inset-0 border-t border-dashed border-[#cbd5e1]" />
-                    <span className="absolute left-1/2 top-1/2 size-[6px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#c7d2fe]" />
-                  </span>
-                )}
+      {related.length === 0 ? (
+        <p className="m-0 mt-[16px] text-[13px] text-[#94a3b8]">
+          No other companies have a {categoryName} signal yet.
+        </p>
+      ) : (
+        <div className="mt-[16px] flex flex-col gap-[16px]">
+          {related.map((c) => (
+            <div
+              className="flex cursor-pointer items-center gap-[12px]"
+              key={c.companyId}
+              onClick={() => {
+                window.location.href = `/enterprise-detail?id=${c.companyId}`;
+              }}
+              role="button"
+              tabIndex={0}
+            >
+              <LogoSquare bg="#eef1ff" color="#4f46e5" icon={Building2} radius={10} size={40} />
+              <div className="min-w-0 flex-1">
+                <p className="m-0 truncate text-[14px] font-bold text-[#0f172a]">{c.name}</p>
+                <p className="m-0 text-[12px] text-[#94a3b8]">{categoryName}</p>
               </div>
-              <div className="mt-[12px]">
-                <p className="m-0 text-[14px] font-bold text-[#0f172a]">{step.title}</p>
-                <p className="m-0 mt-[3px] text-[12px] text-[#94a3b8]">
-                  {step.time}
-                </p>
-                <p className="m-0 mt-[8px] text-[12px] leading-[18px] text-[#64748b]">
-                  {step.desc}
-                </p>
-              </div>
+              <span className="whitespace-nowrap text-[12px] text-[#94a3b8]">
+                Score: <span className="font-semibold text-[#334155]">{c.score}</span>
+              </span>
             </div>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -646,49 +467,19 @@ function ActivityTimeline({ signal }: { signal: SignalWithCompanyOut | null }) {
 /* Right rail                                                          */
 /* ------------------------------------------------------------------ */
 
-/* "Pending Review" implied a review workflow that doesn't exist in the
- * backend (no reviewed/status field on Signal) - this shows the real
- * is_action classification and confidence tier instead. */
-function SignalStatusCard({ signal }: { signal: SignalWithCompanyOut | null }) {
-  const confidence = signal?.signal_confidence ?? 0.96;
-  const tier = confidenceTier(confidence);
-  const isAction = signal?.is_action ?? false;
-
-  return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Signal Classification</h2>
-      <p className="m-0 mt-[14px] flex items-center gap-[8px] text-[15px] font-bold" style={{ color: tier.color }}>
-        {isAction ? <Check className="size-[18px]" /> : <Info className="size-[18px]" />}
-        {isAction ? "Actionable Signal" : "Informational Signal"}
-      </p>
-      <p className="m-0 mt-[10px] text-[13px] leading-[20px] text-[#64748b]">
-        {isAction
-          ? "This signal reflects a direct action taken by the company - a strong basis for outreach."
-          : "This signal provides context about the company rather than a direct action - useful for qualification, less urgent for outreach."}
-      </p>
-
-      <p className="m-0 mt-[18px] text-[14px] font-bold text-[#0f172a]">Confidence Tier</p>
-      <p className="m-0 mt-[8px] text-[13px] leading-[20px] text-[#64748b]">
-        {tier.label} ({Math.round(confidence * 100)}/100) —{" "}
-        {tier.tone === "purple"
-          ? "strong, well-corroborated signal."
-          : tier.tone === "orange"
-            ? "moderate corroboration or recency."
-            : "limited corroboration or an older source."}
-      </p>
-    </section>
-  );
-}
-
 /* Renamed from "AI Summary" - nothing here is LLM-generated (extraction is
  * rule-based, see extraction_method), so the "AI"/"Beta" badge implied a
  * capability that doesn't exist. Body is the real core_fact plus the same
  * category description shown on the Trigger Library. */
 function SummaryCard({ signal, categoryName }: { signal: SignalWithCompanyOut | null; categoryName: string }) {
-  const categoryDesc = signal ? CATEGORY_DESCRIPTIONS[signal.signal_category] : null;
-  const text = signal?.core_fact
+  if (!signal) return null;
+
+  const categoryDesc = CATEGORY_DESCRIPTIONS[signal.signal_category];
+  const text = signal.core_fact
     ? `${signal.core_fact}${categoryDesc ? ` This is a ${categoryName} signal: ${categoryDesc}` : ""}`
-    : "Acme Corp has announced a $25M Series B funding round led by Sequoia Capital. The funding will be used to expand their AI platform and enter new markets.";
+    : categoryDesc
+      ? `${categoryName} signal: ${categoryDesc}`
+      : "No summary was extracted for this signal.";
 
   const copy = () => {
     if (typeof navigator !== "undefined" && navigator.clipboard) {
@@ -714,57 +505,46 @@ function SummaryCard({ signal, categoryName }: { signal: SignalWithCompanyOut | 
 
 type CompanySignalRow = { signalId: string; title: string; category: string; date: string; score: number };
 
-/* Real replacement for the fake "Similar Signals" list - other real
- * signals extracted for this same company, sorted by confidence (see
- * controllers.signals.get_signals). */
-function SimilarSignalsCard({ rows, companyName }: { rows: CompanySignalRow[]; companyName: string }) {
-  const list: CompanySignalRow[] =
-    rows.length > 0
-      ? rows
-      : [
-          { signalId: "", title: "Series A Funding", category: "budget_and_capital", date: "Mar 5, 2024", score: 88 },
-          { signalId: "", title: "Product Launch", category: "ai_seriousness", date: "Jan 10, 2024", score: 82 },
-          { signalId: "", title: "Company Expansion", category: "urgency_and_catalysts", date: "Nov 5, 2023", score: 76 },
-        ];
-
+/* Other real signals extracted for this same company, sorted by confidence
+ * (see controllers.signals.get_signals). Empty state when this is the only
+ * signal on file for the company. */
+function MoreCompanySignalsCard({ rows, companyName }: { rows: CompanySignalRow[]; companyName: string }) {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="flex items-center justify-between">
-        <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">More Signals from {companyName}</h2>
-      </div>
+      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">More Signals from {companyName}</h2>
 
-      <div className="mt-[16px] flex flex-col gap-[16px]">
-        {list.map((s) => {
-          const style = categoryStyle(s.category);
-          const Icon = style.icon;
+      {rows.length === 0 ? (
+        <p className="m-0 mt-[16px] text-[13px] text-[#94a3b8]">No other signals on file for {companyName} yet.</p>
+      ) : (
+        <div className="mt-[16px] flex flex-col gap-[16px]">
+          {rows.map((s) => {
+            const style = categoryStyle(s.category);
+            const Icon = style.icon;
 
-          return (
-            <div
-              className={cn("flex items-center gap-[12px]", s.signalId && "cursor-pointer")}
-              key={s.signalId || s.title}
-              onClick={
-                s.signalId
-                  ? () => {
-                      window.location.href = `/signal-detail?id=${s.signalId}`;
-                    }
-                  : undefined
-              }
-              role={s.signalId ? "button" : undefined}
-              tabIndex={s.signalId ? 0 : undefined}
-            >
-              <LogoSquare bg={style.bg} color={style.color} icon={Icon} radius={10} size={38} />
-              <div className="min-w-0 flex-1">
-                <p className="m-0 truncate text-[14px] font-bold text-[#0f172a]">{s.title}</p>
-                <p className="m-0 text-[12px] text-[#94a3b8]">{s.date}</p>
+            return (
+              <div
+                className="flex cursor-pointer items-center gap-[12px]"
+                key={s.signalId}
+                onClick={() => {
+                  window.location.href = `/signal-detail?id=${s.signalId}`;
+                }}
+                role="button"
+                tabIndex={0}
+              >
+                <LogoSquare bg={style.bg} color={style.color} icon={Icon} radius={10} size={38} />
+                <div className="min-w-0 flex-1">
+                  <p className="m-0 truncate text-[14px] font-bold text-[#0f172a]">{s.title}</p>
+                  <p className="m-0 text-[12px] text-[#94a3b8]">{s.date}</p>
+                </div>
+                <div className="text-right">
+                  <p className="m-0 text-[11px] text-[#94a3b8]">Intent Score</p>
+                  <p className="m-0 text-[15px] font-bold text-[#0f172a]">{s.score}</p>
+                </div>
               </div>
-              <div className="text-right">
-                <p className="m-0 text-[11px] text-[#94a3b8]">Intent Score</p>
-                <p className="m-0 text-[15px] font-bold text-[#0f172a]">{s.score}</p>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
@@ -778,11 +558,13 @@ export function SignalDetailPage() {
   const [company, setCompany] = useState<CompanyOut | null>(null);
   const [companySignals, setCompanySignals] = useState<SignalOut[]>([]);
   const [categorySignals, setCategorySignals] = useState<SignalWithCompanyOut[]>([]);
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     const organisationId = getOrganisationId();
     const signalId = getSignalIdFromUrl();
     if (!organisationId || !signalId) {
+      setNotFound(true);
       return;
     }
     getSignalById(organisationId, signalId)
@@ -791,28 +573,20 @@ export function SignalDetailPage() {
 
         getCompany(organisationId, s.company_id)
           .then(setCompany)
-          .catch(() => {
-            // Company lookup failed - Signal Details card falls back to "—".
-          });
+          .catch(() => setCompany(null));
 
         getSignals(organisationId, s.company_id)
           .then((rows) => setCompanySignals(rows.filter((r) => r.signal_id !== s.signal_id)))
-          .catch(() => {
-            // No other signals for this company yet - keep the dummy rows.
-          });
+          .catch(() => setCompanySignals([]));
 
         listSignals(organisationId, { category: s.signal_category, page_size: 12 })
           .then((res) => setCategorySignals(res.items.filter((r) => r.company_id !== s.company_id)))
-          .catch(() => {
-            // No other companies with this category yet - keep the dummy rows.
-          });
+          .catch(() => setCategorySignals([]));
       })
-      .catch(() => {
-        // No matching signal - keep the dummy fallback data.
-      });
+      .catch(() => setNotFound(true));
   }, []);
 
-  const categoryName = signal ? categoryLabel(signal.signal_category) : "Funding & Investment";
+  const categoryName = signal ? categoryLabel(signal.signal_category) : "this category";
 
   const relatedCompanies: RelatedCompany[] = (() => {
     const seen = new Set<string>();
@@ -859,32 +633,30 @@ export function SignalDetailPage() {
             <DetailHeader signal={signal} />
           </div>
 
-          <DetailTabs />
+          {notFound && !signal ? (
+            <p className="mt-[24px] text-[14px] font-medium text-[#64748b]">This signal could not be found.</p>
+          ) : (
+            <div className="mt-[24px] grid grid-cols-1 gap-[24px] xl:grid-cols-[minmax(0,1fr)_340px]">
+              <div className="flex flex-col gap-[24px]">
+                <div className="grid grid-cols-1 gap-[24px] lg:grid-cols-[1.45fr_1fr]">
+                  <ExtractionDetailsCard signal={signal} />
+                  <ConfidenceBreakdownCard signal={signal} />
+                </div>
 
-          <div className="mt-[24px] grid grid-cols-1 gap-[24px] xl:grid-cols-[minmax(0,1fr)_340px]">
-            <div className="flex flex-col gap-[24px]">
-              <IntentScoreCard signal={signal} />
-
-              <div className="grid grid-cols-1 gap-[24px] lg:grid-cols-[1.45fr_1fr]">
-                <ExtractionDetailsCard signal={signal} />
-                <ConfidenceBreakdownCard signal={signal} />
+                <div className="grid grid-cols-1 gap-[24px] lg:grid-cols-3">
+                  <SignalDetailsCard company={company} signal={signal} />
+                  <SourceSnippetCard signal={signal} />
+                  <SimilarCompaniesCard categoryName={categoryName} related={relatedCompanies} />
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-[24px] lg:grid-cols-3">
-                <SignalDetailsCard company={company} signal={signal} />
-                <SourceSnippetCard signal={signal} />
-                <SimilarCompaniesCard categoryName={categoryName} related={relatedCompanies} />
+              <div className="flex flex-col gap-[24px]">
+                <IntentScoreCard signal={signal} />
+                <SummaryCard categoryName={categoryName} signal={signal} />
+                <MoreCompanySignalsCard companyName={signal?.company_name ?? "this company"} rows={otherSignals} />
               </div>
-
-              <ActivityTimeline signal={signal} />
             </div>
-
-            <div className="flex flex-col gap-[24px]">
-              <SignalStatusCard signal={signal} />
-              <SummaryCard categoryName={categoryName} signal={signal} />
-              <SimilarSignalsCard companyName={signal?.company_name ?? "this company"} rows={otherSignals} />
-            </div>
-          </div>
+          )}
         </main>
       </div>
     </div>

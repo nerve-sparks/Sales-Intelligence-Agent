@@ -1,5 +1,5 @@
 import { signOut } from "firebase/auth";
-import { Bell, ChevronDown, LogOut, Scan, Sparkles } from "lucide-react";
+import { Bell, ChevronDown, LogOut, Scan } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "../../lib/cn";
@@ -36,18 +36,6 @@ export function DetectionPill({
       </div>
       <Icon className="ml-[6px] size-[18px] text-[#94a3b8]" />
     </div>
-  );
-}
-
-export function AIAssistantButton() {
-  return (
-    <button
-      className="flex items-center gap-[8px] rounded-[12px] border border-[#e9edf5] bg-white px-[16px] py-[11px] text-[14px] font-semibold text-[#005bff]"
-      type="button"
-    >
-      <Sparkles className="size-[18px] text-[#7c3aed]" />
-      <span className="hidden sm:inline">AI Assistant</span>
-    </button>
   );
 }
 
@@ -151,7 +139,6 @@ export function TopActions({
   return (
     <div className="flex items-center gap-[12px]">
       <DetectionPill className="hidden md:flex" icon={detectionIcon} />
-      <AIAssistantButton />
       <NotificationBell />
       <UserMenu />
     </div>

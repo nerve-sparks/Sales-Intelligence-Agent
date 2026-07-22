@@ -2,7 +2,6 @@ import {
   ChevronDown,
   ChevronRight,
   Contact,
-  Gauge,
   Home,
   Radio,
   Settings,
@@ -35,7 +34,6 @@ const navItems: NavEntry[] = [
     ],
   },
   { icon: Contact, label: "Enterprise List", href: "/enterprise-list" },
-  { icon: Gauge, label: "Score Breakdown", href: "/score-breakdown" },
 ];
 
 const settingsItem: NavEntry = { icon: Settings, label: "Settings", href: "/settings" };

@@ -1,12 +1,20 @@
 from uuid import UUID
 
 from fastapi import Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.services.excel_pipeline import list_import_batches
-from app.services.icp_filter import create_icp, filter_companies, get_icp, list_icps
+from app.services.icp_filter import (
+    create_icp,
+    delete_icp,
+    filter_companies,
+    get_icp,
+    list_icps,
+    update_icp,
+)
 from app.schemas.icp import IcpCompaniesOut, ImportBatchOut
 
 
@@ -25,6 +33,25 @@ class IcpCreate(BaseModel):
 
 async def create(workspace_id: UUID, payload: IcpCreate, db: AsyncSession = Depends(get_db)):
     return await create_icp(db, workspace_id, payload.model_dump())
+
+
+async def update(
+    workspace_id: UUID, icp_id: UUID, payload: IcpCreate, db: AsyncSession = Depends(get_db)
+):
+    # Full replace (PUT): the Settings edit form always submits every field
+    # pre-filled from the current ICP, so unset fields legitimately mean
+    # "clear this criterion", not "leave unchanged".
+    icp = await update_icp(db, workspace_id, icp_id, payload.model_dump())
+    if icp is None:
+        raise HTTPException(status_code=404, detail="icp not found")
+    return icp
+
+
+async def delete(workspace_id: UUID, icp_id: UUID, db: AsyncSession = Depends(get_db)):
+    deleted = await delete_icp(db, workspace_id, icp_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="icp not found")
+    return Response(status_code=204)
 
 
 async def list_all(workspace_id: UUID, db: AsyncSession = Depends(get_db)):

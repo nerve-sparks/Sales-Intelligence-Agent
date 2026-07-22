@@ -16,7 +16,7 @@ import { lazy, Suspense } from "react";
 import earthImage from "../../assets/earth.png";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Delta, UpTriangle, smoothPath } from "../../components/ui/dataviz";
+import { Delta, Sparkline, UpTriangle, smoothPath } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { useEffect, useRef, useState } from "react";
 import { getRankedScores, type RankedLeadScoreOut } from "../../api/scores";
@@ -337,18 +337,23 @@ function MiniBars({ trend }: { trend: SignalStatsOut["trend"] }) {
 /* Stat cards                                                          */
 /* ------------------------------------------------------------------ */
 
+/* Same rising zig-zag sparkline used on Enterprise List/Signal Intelligence's
+ * stat cards - purely decorative (no stored day-over-day history exists to
+ * compute a real trend from). */
+const RISING_ZIGZAG = [6, 14, 10, 18, 14, 22, 18, 26, 22, 30];
+
 /* Same 5 icon slots as before - "Pipeline Value"/"Meetings Booked"/
  * "Conversion Rate" had no backend concept at all (no deals/meetings model
  * exists), so those 3 now show real CompanyStatsOut/SignalStatsOut numbers
- * instead. Dropped the fake per-card sparkline/delta - there's no stored
- * history to compute a real "vs last 7 days" change from. */
+ * instead. Dropped the fake per-card delta - there's no stored history to
+ * compute a real "vs last 7 days" change from. */
 function StatCards({ companyStats, signalStats }: { companyStats: CompanyStatsOut; signalStats: SignalStatsOut }) {
   const stats = [
-    { icon: Flame, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Hot Prospects", value: String(companyStats.high_intent) },
-    { icon: DollarSign, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Total Companies", value: String(companyStats.total) },
-    { icon: Radio, iconBg: "bg-[#f3e8ff]", iconColor: "text-[#7c3aed]", label: "New Signals", value: String(signalStats.total) },
-    { icon: Calendar, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Actionable Signals", value: String(signalStats.actionable_count) },
-    { icon: Target, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Avg Signal Confidence", value: `${Math.round((signalStats.avg_confidence ?? 0) * 100)}%` },
+    { icon: Flame, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Hot Prospects", value: String(companyStats.high_intent), spark: "#f97316", values: RISING_ZIGZAG },
+    { icon: DollarSign, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Total Companies", value: String(companyStats.total), spark: "#2563eb", values: RISING_ZIGZAG },
+    { icon: Radio, iconBg: "bg-[#f3e8ff]", iconColor: "text-[#7c3aed]", label: "New Signals", value: String(signalStats.total), spark: "#7c3aed", values: RISING_ZIGZAG },
+    { icon: Calendar, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Actionable Signals", value: String(signalStats.actionable_count), spark: "#f97316", values: RISING_ZIGZAG },
+    { icon: Target, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Avg Signal Confidence", value: `${Math.round((signalStats.avg_confidence ?? 0) * 100)}%`, spark: "#2563eb", values: RISING_ZIGZAG },
   ];
 
   return (
@@ -380,6 +385,17 @@ function StatCards({ companyStats, signalStats }: { companyStats: CompanyStatsOu
                 {stat.value}
               </span>
             </div>
+
+            {stat.values && (
+              <div className="mt-[8px]">
+                <Sparkline
+                  className="h-[36px] w-full"
+                  color={stat.spark!}
+                  gradientId={`dash-${stat.label.replace(/\s+/g, "")}`}
+                  values={stat.values}
+                />
+              </div>
+            )}
           </div>
         );
       })}
@@ -937,7 +953,6 @@ export function DashboardPage() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar
-          showAIAssistant={false}
           showDetection={false}
           showNotificationBell={false}
           showWorkspaceSwitcher

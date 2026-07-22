@@ -11,4 +11,5 @@ class UserOut(BaseModel):
     organisation_id: UUID
     email: str
     full_name: str | None = None
+    designation: str | None = None
     created_at: datetime | None = None
