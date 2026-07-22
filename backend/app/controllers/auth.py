@@ -15,9 +15,28 @@ async def me(
     user = (
         await db.execute(select(User).where(User.firebase_uid == firebase_user.uid))
     ).scalar_one_or_none()
+
+    if user is None and firebase_user.email:
+        # No row for this exact Firebase UID, but app_user.email is globally
+        # unique (see app/models/user.py) - if this email already has a row
+        # under a *different* UID (a recreated Firebase account, a re-login
+        # via a different provider, etc.), it's the same real account. Without
+        # this fallback, onboarding treated it as brand new, created a fresh
+        # Organisation + Workspace, and only then failed on createUser's
+        # unique-email constraint - three steps too late, leaving orphaned
+        # Organisation/Workspace rows behind. Backfilling firebase_uid here
+        # heals the mismatch so future logins resolve on the fast path above.
+        user = (
+            await db.execute(select(User).where(User.email == firebase_user.email))
+        ).scalar_one_or_none()
+        if user is not None:
+            user.firebase_uid = firebase_user.uid
+            await db.commit()
+            await db.refresh(user)
+
     if user is None:
-        # No app_user row tied to this Firebase account yet - a brand new
-        # signup, or one from before firebase_uid existed on old rows.
+        # No app_user row tied to this Firebase account or email yet - a
+        # genuinely brand new signup.
         return CurrentUserOut(has_account=False)
 
     # A user can belong to multiple workspaces (Sales AND Marketing, etc.) -
