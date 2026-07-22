@@ -557,16 +557,7 @@ function LeadTrend({ signalStats }: { signalStats: SignalStatsOut }) {
 
   return (
     <section className="flex flex-col rounded-[18px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="flex items-center justify-between">
-        <h2 className="m-0 text-[18px] font-bold text-[#0f172a]">Signal Trends</h2>
-        <button
-          className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[12px] py-[7px] text-[13px] font-semibold text-[#475569]"
-          type="button"
-        >
-          Recent
-          <ChevronDown className="size-[14px] text-[#94a3b8]" />
-        </button>
-      </div>
+      <h2 className="m-0 text-[18px] font-bold text-[#0f172a]">Signal Trends</h2>
 
       <div className="mt-[14px] flex items-center gap-[10px]">
         <span className="text-[26px] font-bold leading-none text-[#0f172a]">{signalStats.total}</span>
