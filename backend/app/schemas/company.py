@@ -61,44 +61,13 @@ class CompanyOut(BaseModel):
 
 
 class CompanyWithDecisionMakersOut(CompanyOut):
-    """Company shape used where `decision_makers` was eagerly loaded
-    (e.g. selectinload in icp_filter.filter_companies). Kept separate from
-    CompanyOut so responses backed by a freshly-upserted Company (Enrich
-    endpoints) never trigger an unloaded-relationship lazy load.
+    """Company shape used where `decision_makers` was eagerly loaded (e.g.
+    selectinload in icp_filter.filter_companies) - kept separate from
+    CompanyOut so a response backed by that eager load never triggers an
+    unloaded-relationship lazy load.
     """
 
     decision_makers: list[DecisionMakerOut] = []
-
-
-class IntentOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    intent_id: str
-    company_id: UUID
-    category: str | None = None
-    topic: str | None = None
-    signal_score: int | None = None
-    signal_date: datetime | None = None
-    recommended_contacts: list | dict | None = None
-
-
-class ScoopOut(BaseModel):
-    scoop_id: str
-    company_id: UUID
-    description: str | None = None
-    published_date: datetime | None = None
-    topics: list | dict | None = None
-    types: list | dict | None = None
-
-
-class NewsOut(BaseModel):
-    news_id: str
-    company_id: UUID
-    domain: str | None = None
-    title: str | None = None
-    description: str | None = None
-    category: str | None = None
-    page_date: datetime | None = None
 
 
 class CompanyListItemOut(BaseModel):
@@ -157,18 +126,3 @@ class IcpThresholdsOut(BaseModel):
     industries: list[str] = []
     countries: list[str] = []
     company_count: int
-
-
-class ScoopEnrichOut(BaseModel):
-    count: int
-    scoops: list[ScoopOut]
-
-
-class NewsEnrichOut(BaseModel):
-    count: int
-    news: list[NewsOut]
-
-
-class IntentEnrichOut(BaseModel):
-    count: int
-    signals: list[IntentOut]

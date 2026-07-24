@@ -16,7 +16,6 @@ from app.routes import (
     uploads,
     users,
     workspaces,
-    zoominfo_enrich,
 )
 
 app = FastAPI(title="SIGNAL Backend")
@@ -53,5 +52,4 @@ app.include_router(scores.router)
 app.include_router(icp.router)
 app.include_router(icp_imports.router)
 app.include_router(triggers.router)
-app.include_router(zoominfo_enrich.router)
 app.include_router(uploads.router)

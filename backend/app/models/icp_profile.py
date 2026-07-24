@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BIGINT, TIMESTAMP, ForeignKey, Index, Integer, Text, text
+from sqlalchemy import BIGINT, TIMESTAMP, CheckConstraint, ForeignKey, Index, Integer, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +15,7 @@ class IcpProfile(Base):
     __tablename__ = "icp_profile"
     __table_args__ = (
         Index("idx_icp_profile_workspace_id", "workspace_id"),
+        CheckConstraint("fit_mode IN ('strict', 'flexible')", name="icp_profile_fit_mode_check"),
     )
 
     icp_id: Mapped[uuid.UUID] = mapped_column(
@@ -34,6 +35,10 @@ class IcpProfile(Base):
     technologies: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     buying_committee_personas: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     departments: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+
+    # D6 ICP-fit band behaviour (lead_scorer._d6_icp_fit): 'flexible' grades
+    # near-misses (20%/50% outside range), 'strict' is all-or-nothing.
+    fit_mode: Mapped[str] = mapped_column(Text, server_default="flexible", nullable=False)
 
     created_at: Mapped[object | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")

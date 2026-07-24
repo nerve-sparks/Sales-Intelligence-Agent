@@ -18,8 +18,8 @@ import { FLAT_LINE, Sparkline } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { exportCompanies, getCompanyStats, listCompanies, type CompanyStatsOut } from "../../api/companies";
 import { ApiError } from "../../api/client";
-import { getIcpCompanies, listIcps, type IcpOut } from "../../api/icp";
-import { getRankedScores, runScoring } from "../../api/scores";
+import { getIcpCompanies, listIcps, listImportBatches, type IcpOut, type ImportBatchOut } from "../../api/icp";
+import { getRankedScores } from "../../api/scores";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
 
 /* Enterprise List shows ONLY real data: company counts (stat cards), and per
@@ -139,16 +139,65 @@ function IcpFilterSelect({
   );
 }
 
+function formatBatchLabel(batch: ImportBatchOut): string {
+  const when = batch.created_at
+    ? new Date(batch.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : "Unknown date";
+  const suffix = batch.scoring_status === "pending" ? " (Scoring…)" : "";
+  return `${when} · ${batch.icp_name || "Untitled ICP"} · ${batch.companies_ingested} companies${suffix}`;
+}
+
+/* Filters to one specific Excel upload (Company.import_batch_id) - separate
+ * axis from the ICP dropdown above (ICP fit vs. "which upload did this
+ * company come from"). Selecting a batch here and an ICP there don't
+ * currently compose (getIcpCompanies has no batch param) - picking one
+ * resets the other back to "all", so it's always unambiguous which single
+ * filter is active. Batches still mid-scoring show a "Scoring…" suffix so
+ * it's clear the numbers you'd see for that upload aren't final yet. */
+function UploadFilterSelect({
+  batches,
+  selectedBatchId,
+  onChange,
+}: {
+  batches: ImportBatchOut[];
+  selectedBatchId: string;
+  onChange: (batchId: string) => void;
+}) {
+  return (
+    <div className="relative flex h-[42px] items-center rounded-[10px] border border-[#e9edf5] bg-white px-[14px]">
+      <select
+        className="h-full max-w-[220px] appearance-none bg-transparent pr-[24px] text-[14px] font-medium text-[#334155] outline-none"
+        onChange={(e) => onChange(e.target.value)}
+        value={selectedBatchId}
+      >
+        <option value="all">Every Upload</option>
+        {batches.map((batch) => (
+          <option key={batch.import_batch_id} value={batch.import_batch_id}>
+            {formatBatchLabel(batch)}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-[14px] size-[15px] text-[#94a3b8]" />
+    </div>
+  );
+}
+
 function Toolbar({
   icps,
   selectedIcpId,
   onIcpChange,
+  batches,
+  selectedBatchId,
+  onBatchChange,
   search,
   onSearchChange,
 }: {
   icps: IcpOut[];
   selectedIcpId: string;
   onIcpChange: (icpId: string) => void;
+  batches: ImportBatchOut[];
+  selectedBatchId: string;
+  onBatchChange: (batchId: string) => void;
   search: string;
   onSearchChange: (value: string) => void;
 }) {
@@ -165,6 +214,7 @@ function Toolbar({
         />
       </div>
       <IcpFilterSelect icps={icps} onChange={onIcpChange} selectedIcpId={selectedIcpId} />
+      <UploadFilterSelect batches={batches} onChange={onBatchChange} selectedBatchId={selectedBatchId} />
     </div>
   );
 }
@@ -455,17 +505,28 @@ export function EnterpriseListPage() {
   const [enterprises, setEnterprises] = useState<Enterprise[]>([]);
   const [icps, setIcps] = useState<IcpOut[]>([]);
   const [selectedIcpId, setSelectedIcpId] = useState("all");
+  const [batches, setBatches] = useState<ImportBatchOut[]>([]);
+  const [selectedBatchId, setSelectedBatchId] = useState("all");
   const [statCards, setStatCards] = useState<StatCard[]>(emptyStats);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [icpMatches, setIcpMatches] = useState<Enterprise[] | null>(null);
-  const [scoringRunning, setScoringRunning] = useState(false);
-  const [scoringError, setScoringError] = useState<string | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+
+  // The ICP filter and the per-upload filter are separate axes that don't
+  // currently compose (see UploadFilterSelect's comment) - picking one
+  // resets the other, so exactly one is ever active.
+  const handleIcpChange = (icpId: string) => {
+    setSelectedIcpId(icpId);
+    setSelectedBatchId("all");
+  };
+  const handleBatchChange = (batchId: string) => {
+    setSelectedBatchId(batchId);
+    setSelectedIcpId("all");
+  };
 
   // Debounce the search box so a keystroke doesn't fire a request each time.
   useEffect(() => {
@@ -486,6 +547,22 @@ export function EnterpriseListPage() {
       });
   }, []);
 
+  // Populate the per-upload filter dropdown, then keep polling while any
+  // upload is still scoring - so a batch's "(Scoring…)" label (and the
+  // company list, if that batch happens to be selected) picks up newly-
+  // scored companies as the background scoring task progresses, without
+  // requiring a manual page reload.
+  useEffect(() => {
+    const workspaceId = getWorkspaceId();
+    if (!workspaceId) {
+      return;
+    }
+    const load = () => listImportBatches(workspaceId).then(setBatches).catch(() => {});
+    load();
+    const interval = setInterval(load, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Org-wide totals for the stat cards - independent of filter/page/search.
   useEffect(() => {
     const organisationId = getOrganisationId();
@@ -497,14 +574,16 @@ export function EnterpriseListPage() {
       .catch(() => {
         // No backend/org yet - keep the zero stat cards.
       });
-  }, [refreshKey]);
+  }, []);
 
   // Reset to page 1 whenever the filter or search changes.
   useEffect(() => {
     setPage(1);
-  }, [selectedIcpId, search]);
+  }, [selectedIcpId, selectedBatchId, search]);
 
-  // "All Companies" is paginated + searched server-side.
+  // "All Companies" is paginated + searched server-side. selectedBatchId
+  // narrows it to one upload's companies; the "all"/"all" guard stays
+  // correct because handleBatchChange always resets selectedIcpId to "all".
   useEffect(() => {
     if (selectedIcpId !== "all") {
       return;
@@ -513,13 +592,18 @@ export function EnterpriseListPage() {
     if (!organisationId) {
       return;
     }
-    listCompanies(organisationId, { page, page_size: PAGE_SIZE, search: search || undefined })
+    listCompanies(organisationId, {
+      page,
+      page_size: PAGE_SIZE,
+      search: search || undefined,
+      import_batch_id: selectedBatchId !== "all" ? selectedBatchId : undefined,
+    })
       .then((res) => {
         setTotal(res.total);
         setEnterprises(res.items.map((c) => toEnterprise(c, c.lead_score, c.gate_status)).sort(byScoreDesc));
       })
       .catch(() => setEnterprises([]));
-  }, [selectedIcpId, page, search, refreshKey]);
+  }, [selectedIcpId, selectedBatchId, page, search]);
 
   // ICP-filtered: fetch the full match set once per filter/refresh.
   useEffect(() => {
@@ -542,7 +626,7 @@ export function EnterpriseListPage() {
         );
       })
       .catch(() => setIcpMatches([]));
-  }, [selectedIcpId, refreshKey]);
+  }, [selectedIcpId]);
 
   // Slice the full ICP match list into the current page (with client-side
   // name search, since getIcpCompanies isn't paginated/searched server-side).
@@ -556,24 +640,6 @@ export function EnterpriseListPage() {
     setTotal(filtered.length);
     setEnterprises(filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
   }, [icpMatches, page, search]);
-
-  // Scores every company in the org (POST /scores/run) - the manual way to
-  // score companies not covered by an upload's ICP.
-  const handleRunScoring = async () => {
-    const organisationId = getOrganisationId();
-    if (!organisationId) {
-      return;
-    }
-    setScoringRunning(true);
-    setScoringError(null);
-    try {
-      await runScoring(organisationId);
-      setRefreshKey((k) => k + 1);
-    } catch (err) {
-      setScoringError(err instanceof ApiError ? String(err.detail) : "Scoring failed. Please try again.");
-    }
-    setScoringRunning(false);
-  };
 
   // Exports the companies currently shown, with real LeadScore columns.
   const handleExport = async () => {
@@ -620,15 +686,6 @@ export function EnterpriseListPage() {
               <div className="flex flex-wrap items-center gap-[10px]">
                 <button
                   className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155] disabled:opacity-60"
-                  disabled={scoringRunning}
-                  onClick={handleRunScoring}
-                  type="button"
-                >
-                  <Flame className="size-[16px] text-[#64748b]" />
-                  {scoringRunning ? "Scoring..." : "Run Scoring"}
-                </button>
-                <button
-                  className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155] disabled:opacity-60"
                   disabled={exporting}
                   onClick={handleExport}
                   type="button"
@@ -638,7 +695,6 @@ export function EnterpriseListPage() {
                 </button>
               </div>
               {exportError && <p className="m-0 text-[12px] font-medium text-[#ef4444]">{exportError}</p>}
-              {scoringError && <p className="m-0 text-[12px] font-medium text-[#ef4444]">{scoringError}</p>}
             </div>
           </div>
 
@@ -650,7 +706,16 @@ export function EnterpriseListPage() {
             <EnterpriseTabs />
 
             <div className="mt-[18px]">
-              <Toolbar icps={icps} onIcpChange={setSelectedIcpId} onSearchChange={setSearchInput} search={searchInput} selectedIcpId={selectedIcpId} />
+              <Toolbar
+                batches={batches}
+                icps={icps}
+                onBatchChange={handleBatchChange}
+                onIcpChange={handleIcpChange}
+                onSearchChange={setSearchInput}
+                search={searchInput}
+                selectedBatchId={selectedBatchId}
+                selectedIcpId={selectedIcpId}
+              />
             </div>
 
             <div className="mt-[16px]">

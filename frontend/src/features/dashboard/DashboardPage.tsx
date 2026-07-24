@@ -805,16 +805,29 @@ function RecentSignals({ signals }: { signals: typeof dummyRecentSignals }) {
 /* ------------------------------------------------------------------ */
 /* Company Overview (was "Pipeline Overview" - no deal/pipeline-stage    */
 /* model exists in the backend at all - then a real intent-tier donut,   */
-/* now an AI-generated (BridgeLLM, gemini/gemini-2.5-pro - see            */
-/* backend/app/controllers/companies.py::insight) plain-English read of   */
-/* the real CompanyStatsOut numbers + top 5 real ranked companies. Falls  */
-/* back to a plain real-numbers sentence server-side if the LLM isn't     */
-/* configured, so this card always shows something real either way.)     */
+/* now a full 3-paragraph analyst briefing (BridgeLLM, gemini-2.5-flash -  */
+/* see backend/app/controllers/companies.py::insight) covering pipeline   */
+/* health, named top opportunities, and signal trends + a recommended     */
+/* next action - all grounded in real gate/score/signal-category data,    */
+/* never invented. Falls back to a plain real-numbers sentence server-    */
+/* side if the LLM isn't configured, so this card always shows something  */
+/* real either way. Full-width row (moved out of the 3-column grid) since */
+/* a real 3-paragraph briefing needs real reading room.)                  */
 /* ------------------------------------------------------------------ */
 
 function CompanyOverview({ summary, loading }: { summary: string | null; loading: boolean }) {
+  // Backend writes one paragraph per section (health / opportunities /
+  // trends+action), separated by a blank line - split on that so each
+  // renders as its own paragraph instead of one dense wall of text.
+  const paragraphs = summary
+    ? summary
+        .split(/\n\s*\n/)
+        .map((p) => p.trim())
+        .filter(Boolean)
+    : [];
+
   return (
-    <section className="rounded-[18px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
+    <section className="rounded-[18px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex items-center gap-[8px]">
         <Sparkles className="size-[16px] text-[#7c3aed]" />
         <h2 className="m-0 text-[17px] font-bold text-[#0f172a]">AI Company Overview</h2>
@@ -822,8 +835,14 @@ function CompanyOverview({ summary, loading }: { summary: string | null; loading
 
       {loading ? (
         <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">Generating insight...</p>
-      ) : summary ? (
-        <p className="m-0 mt-[14px] text-[13px] leading-[20px] text-[#334155]">{summary}</p>
+      ) : paragraphs.length > 0 ? (
+        <div className="mt-[14px] flex max-w-[900px] flex-col gap-[12px]">
+          {paragraphs.map((p, i) => (
+            <p className="m-0 text-[13px] leading-[21px] text-[#334155]" key={i}>
+              {p}
+            </p>
+          ))}
+        </div>
       ) : (
         <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">No data yet.</p>
       )}
@@ -955,11 +974,11 @@ export function DashboardPage() {
         <main className="flex-1 overflow-x-hidden px-[24px] py-[24px]">
           <div className="flex items-start justify-between gap-[16px]">
             <div>
-              <h1 className="m-0 flex items-center gap-[8px] text-[26px] font-bold text-[#0f172a]">
-                Good morning, {firstName}! <span aria-hidden="true">👋</span>
+              <h1 className="m-0 text-[26px] font-bold text-[#0f172a]">
+                Good morning, {firstName}!
               </h1>
               <p className="m-0 mt-[6px] text-[15px] text-[#64748b]">
-                Your AI is working hard to uncover high-conversion opportunities.
+                Here's what's happening across your pipeline today.
               </p>
             </div>
             <TimelinePicker batches={importBatches} onSelect={setSelectedBatchId} selectedBatchId={selectedBatchId} />
@@ -974,9 +993,12 @@ export function DashboardPage() {
             <LeadTrend signalStats={signalStats} />
           </div>
 
-          <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[1.35fr_0.9fr_1.05fr]">
+          <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[1.35fr_1fr]">
             <TopPriorityProspects prospects={prospects} />
             <RecentSignals signals={recentSignals} />
+          </div>
+
+          <div className="mt-[22px]">
             <CompanyOverview loading={companyInsightLoading} summary={companyInsight} />
           </div>
         </main>

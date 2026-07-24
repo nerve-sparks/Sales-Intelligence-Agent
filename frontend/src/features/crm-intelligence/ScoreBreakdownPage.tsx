@@ -149,14 +149,19 @@ function Header({ company, score }: { company: CompanyOut | null; score: LeadSco
 /* Score by Dimension (real d1-d7)                                     */
 /* ------------------------------------------------------------------ */
 
+// Labels reflect the enhanced engine (lead_scorer.py): D1/D2/D5 are now
+// Gemini-judged (buying signal, intent relevance, urgency) instead of raw
+// signal counts; D6 is a real graded ICP-fit score instead of a hardcoded
+// 50. D7 is still computed/stored but no longer part of the lead_score
+// blend - see the "not weighted" note rendered below its row.
 const REAL_DIMENSION_LABELS: { key: keyof LeadScoreOut; name: string; color: string }[] = [
-  { key: "d1_pain_acuity", name: "Pain Acuity", color: "#2563eb" },
-  { key: "d2_ai_intent", name: "AI Intent", color: "#16a34a" },
+  { key: "d1_pain_acuity", name: "Buying Signal", color: "#2563eb" },
+  { key: "d2_ai_intent", name: "Intent Relevance", color: "#16a34a" },
   { key: "d3_economic_capacity", name: "Economic Capacity", color: "#7c3aed" },
   { key: "d4_authority", name: "Authority", color: "#f59e0b" },
-  { key: "d5_timing_catalyst", name: "Timing Catalyst", color: "#f97316" },
-  { key: "d6_solution_fit", name: "Solution Fit", color: "#ef4444" },
-  { key: "d7_competitive", name: "Competitive", color: "#94a3b8" },
+  { key: "d5_timing_catalyst", name: "Timing", color: "#f97316" },
+  { key: "d6_solution_fit", name: "ICP Fit", color: "#ef4444" },
+  { key: "d7_competitive", name: "Competitive (not weighted)", color: "#94a3b8" },
 ];
 
 function toRealDimensions(score: LeadScoreOut) {
@@ -176,7 +181,12 @@ const dimCols = "grid-cols-[minmax(0,1.6fr)_0.9fr_0.9fr]";
 
 function ScoreByDimension({ score }: { score: LeadScoreOut | NotScoredOut | null }) {
   const scored = isScored(score);
-  const dimensions = scored ? toRealDimensions(score) : [];
+  const allDimensions = scored ? toRealDimensions(score) : [];
+  // D7 no longer feeds lead_score (see lead_scorer.py's p_score weights) -
+  // excluded from the donut (which visually implies "these compose the
+  // score") and shown as a separate informational row below instead.
+  const dimensions = allDimensions.filter((d) => d.name !== "Competitive (not weighted)");
+  const competitive = allDimensions.find((d) => d.name === "Competitive (not weighted)");
   const overallScore = scored && score.lead_score !== null ? Math.round(score.lead_score) : null;
 
   return (
@@ -184,7 +194,7 @@ function ScoreByDimension({ score }: { score: LeadScoreOut | NotScoredOut | null
       <div className="flex items-start justify-between gap-[12px]">
         <div>
           <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Score by Dimension <Info className="size-[14px] text-[#cbd5e1]" /></h2>
-          <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">The seven scoring dimensions (d1-d7) that compose this company's lead score.</p>
+          <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">The six scoring dimensions (d1-d6) that compose this company's lead score.</p>
         </div>
       </div>
 
@@ -219,11 +229,20 @@ function ScoreByDimension({ score }: { score: LeadScoreOut | NotScoredOut | null
                     <span><Badge label={d.impact} tone={d.impTone} /></span>
                   </div>
                 ))}
-                <div className={cn("grid items-center gap-[12px] pt-[12px] text-[13px] font-bold text-[#0f172a]", dimCols)}>
-                  <span>Component Score</span>
-                  <span>{score.component_score !== null ? `${Math.round(score.component_score)}/100` : "—"}</span>
-                  <span />
+              </div>
+              {competitive && (
+                <div className={cn("grid items-center gap-[12px] border-t border-dashed border-[#eef1f6] pt-[11px] text-[13px] italic text-[#94a3b8]", dimCols)}>
+                  <span className="flex items-center gap-[10px]">
+                    <span className="size-[9px] shrink-0 rounded-full" style={{ backgroundColor: competitive.color }} /> {competitive.name}
+                  </span>
+                  <span>{competitive.score}<span>/100</span></span>
+                  <span><Badge label={competitive.impact} tone={competitive.impTone} /></span>
                 </div>
+              )}
+              <div className={cn("grid items-center gap-[12px] border-t border-[#eef1f6] pt-[12px] text-[13px] font-bold text-[#0f172a]", dimCols)}>
+                <span>Component Score</span>
+                <span>{score.component_score !== null ? `${Math.round(score.component_score)}/100` : "—"}</span>
+                <span />
               </div>
             </div>
           </div>

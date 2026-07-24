@@ -101,6 +101,9 @@ export type ImportBatchOut = {
   matched_icp_count: number;
   active_count: number;
   nurture_count: number;
+  // "pending" while scoring is still running in the background - active_count/
+  // nurture_count are 0 until this flips to "complete".
+  scoring_status: "pending" | "complete";
   created_at: string | null;
 };
 

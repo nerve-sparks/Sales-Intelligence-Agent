@@ -44,4 +44,8 @@ class ImportBatchOut(BaseModel):
     matched_icp_count: int
     active_count: int
     nurture_count: int
+    # 'pending' while background scoring is still running (see
+    # excel_pipeline.score_companies_in_background) - active_count/
+    # nurture_count are 0 until this flips to 'complete'.
+    scoring_status: str = "complete"
     created_at: datetime | None = None

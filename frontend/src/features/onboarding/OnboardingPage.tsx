@@ -40,9 +40,9 @@ import {
   setOrganisationId as setSessionOrganisationId,
   setWorkspaceId as setSessionWorkspaceId,
 } from "../../lib/session";
-import { createIcp, listIcps, type IcpOut } from "../../api/icp";
+import { createIcp, listIcps, listImportBatches, type IcpOut, type ImportBatchOut } from "../../api/icp";
 import { createTrigger, listTriggers, type TriggerCreate, type TriggerOut } from "../../api/triggers";
-import { uploadExcel, type ExcelImportStats } from "../../api/icpImports";
+import { uploadExcel } from "../../api/icpImports";
 import { useAuth } from "../../lib/useAuth";
 import { resolvePostLoginPath } from "../../lib/postLogin";
 import goLiveRocketImage from "../../assets/figma/onboarding/go-live-rocket.png";
@@ -469,46 +469,49 @@ function humanizeEnumValue(value: string): string {
     .join(" ");
 }
 
-/* Real stages of excel_pipeline.run_pipeline (see app/services/
- * excel_pipeline.py) - this replaces a mockup "AI is scanning your website/
- * LinkedIn/news" list with what the Excel upload on the ICP step actually
- * does server-side. All stages complete together once the pipeline
- * returns (it's one synchronous request, not real per-stage progress). */
+/* Real stages of excel_pipeline (see app/services/excel_pipeline.py) - this
+ * replaces a mockup "AI is scanning your website/LinkedIn/news" list with
+ * what the Excel upload on the ICP step actually does server-side. The
+ * first 4 stages complete synchronously (one request); scoring
+ * (isScoringStage) now runs as a background task afterward, so it can still
+ * be "in progress" after the other 4 have already finished - see
+ * AiBusinessDiscoveryForm's scoringDone handling below. */
 const DISCOVERY_STAGE_DEFS = [
   {
     name: "Excel File Parsed",
     description: "Reading the uploaded ZoomInfo export row by row",
     icon: Database,
     iconClassName: "bg-[#f3e8ff] text-[#7c3aed]",
-    detail: (s: ExcelImportStats) => `${s.totalRows} rows read`,
+    detail: (s: ImportBatchOut) => `${s.total_rows} rows read`,
   },
   {
     name: "Companies & Contacts Ingested",
     description: "Upserting companies and decision-makers into the database",
     icon: Users,
     iconClassName: "bg-[#dbeafe] text-[#005bff]",
-    detail: (s: ExcelImportStats) => `${s.companiesIngested} companies saved`,
+    detail: (s: ImportBatchOut) => `${s.companies_ingested} companies saved`,
   },
   {
     name: "Buying Signals Extracted",
     description: "Classifying news and scoop rows into buying signals",
     icon: RadioTower,
     iconClassName: "bg-[#dbeafe] text-[#2563eb]",
-    detail: (s: ExcelImportStats) => `${s.signalsExtracted} signals extracted`,
+    detail: (s: ImportBatchOut) => `${s.signals_extracted} signals extracted`,
   },
   {
     name: "Lead Scores Computed",
     description: "Scoring every company across the 7-dimension model",
     icon: BarChart3,
     iconClassName: "bg-[#fef3c7] text-[#b45309]",
-    detail: (s: ExcelImportStats) => `${s.activeCount} active, ${s.nurtureCount} nurture`,
+    isScoringStage: true,
+    detail: (s: ImportBatchOut) => `${s.active_count} active, ${s.nurture_count} nurture`,
   },
   {
     name: "ICP Filtering Applied",
     description: "Matching ingested companies against your ICP criteria in SQL",
     icon: Target,
     iconClassName: "bg-[#eef2ff] text-[#4f46e5]",
-    detail: (s: ExcelImportStats) => `${s.matchedIcp} companies matched your ICP`,
+    detail: (s: ImportBatchOut) => `${s.matched_icp_count} companies matched your ICP`,
   },
 ];
 
@@ -1476,14 +1479,14 @@ type IcpFormProps = {
   // instead of waiting on a second network round-trip to notice it.
   createdIcp: IcpOut | null;
   onUploadStart: () => void;
-  onUploadComplete: (stats: ExcelImportStats) => void;
+  onUploadComplete: (batch: ImportBatchOut) => void;
 };
 
 type ExcelUploadButtonProps = {
   icpId: string | null;
   workspaceId: string | null;
   onUploadStart: () => void;
-  onUploadComplete: (stats: ExcelImportStats) => void;
+  onUploadComplete: (batch: ImportBatchOut) => void;
 };
 
 function ExcelUploadButton({ icpId, workspaceId, onUploadStart, onUploadComplete }: ExcelUploadButtonProps) {
@@ -1501,9 +1504,12 @@ function ExcelUploadButton({ icpId, workspaceId, onUploadStart, onUploadComplete
     setError(null);
     onUploadStart();
     try {
-      const { stats } = await uploadExcel(workspaceId, icpId, files);
+      // Ingestion/signals/ICP-matching are done by the time this resolves;
+      // lead scoring keeps running in the background (batch.scoring_status
+      // === "pending") - see AiBusinessDiscoveryForm's polling below.
+      const batch = await uploadExcel(workspaceId, icpId, files);
       setUploadedLabel(files.length === 1 ? files[0].name : `${files.length} files`);
-      onUploadComplete(stats);
+      onUploadComplete(batch);
     } catch (err) {
       setError(err instanceof ApiError ? String(err.detail) : "Upload failed. Please try again.");
     }
@@ -1719,6 +1725,15 @@ function DiscoveryStatus({ status }: { status: string }) {
     );
   }
 
+  if (status === "Scoring…") {
+    return (
+      <span className="inline-flex items-center gap-[8px] font-['Inter'] text-[11px] font-bold text-[#b45309]">
+        <span className="size-[14px] rounded-full border-2 border-[#b45309] border-r-transparent" />
+        Scoring…
+      </span>
+    );
+  }
+
   return (
     <span className="inline-flex items-center gap-[8px] font-['Inter'] text-[11px] font-bold text-[#64748b]">
       <Clock3 aria-hidden="true" className="size-[15px]" />
@@ -1727,21 +1742,28 @@ function DiscoveryStatus({ status }: { status: string }) {
   );
 }
 
-function AiBusinessDiscoveryForm({ uploadStats }: { uploadStats: "idle" | "uploading" | ExcelImportStats }) {
+function AiBusinessDiscoveryForm({ uploadStats }: { uploadStats: "idle" | "uploading" | ImportBatchOut }) {
   const isUploading = uploadStats === "uploading";
-  const stats = uploadStats === "idle" || uploadStats === "uploading" ? null : uploadStats;
+  const batch = uploadStats === "idle" || uploadStats === "uploading" ? null : uploadStats;
+  // Ingestion/signals/ICP-matching finish synchronously; scoring now runs as
+  // a background task afterward (see excel_pipeline.py), so `batch` can be
+  // real and non-null while scoring is still going - that's a genuinely
+  // different state from "everything, including scoring, is done".
+  const scoringDone = batch !== null && batch.scoring_status === "complete";
 
-  const headline = stats
-    ? "Data Ingestion Complete"
+  const headline = batch
+    ? scoringDone
+      ? "Data Ingestion Complete"
+      : "Scoring In Progress"
     : isUploading
       ? "Processing Your Data"
       : "No Data Uploaded Yet";
-  const subtext = stats
-    ? `${stats.companiesIngested} companies ingested from ${stats.totalRows} rows${stats.filesProcessed > 1 ? ` across ${stats.filesProcessed} files` : ""} - ${stats.matchedIcp} matched your ICP, ${stats.activeCount} scored active.`
+  const subtext = batch
+    ? `${batch.companies_ingested} companies ingested from ${batch.total_rows} rows${batch.files_processed > 1 ? ` across ${batch.files_processed} files` : ""} - ${batch.matched_icp_count} matched your ICP${scoringDone ? `, ${batch.active_count} scored active` : ""}.${scoringDone ? "" : " Lead scoring is still running in the background and will finish shortly - check the Enterprise List after you go live."}`
     : isUploading
-      ? "Ingesting companies, extracting buying signals, computing lead scores, and filtering by your ICP - this runs as one pipeline on the server."
+      ? "Ingesting companies, extracting buying signals, and filtering by your ICP - lead scoring then continues in the background."
       : "Go back to the ICP Generation step and upload a ZoomInfo export to see real ingestion results here.";
-  const progressPct = stats ? 100 : isUploading ? 50 : 0;
+  const progressPct = batch ? (scoringDone ? 100 : 80) : isUploading ? 50 : 0;
 
   return (
     <div className="flex h-full flex-col gap-[14px]">
@@ -1764,7 +1786,7 @@ function AiBusinessDiscoveryForm({ uploadStats }: { uploadStats: "idle" | "uploa
           <div className="w-full max-w-[300px] pt-[6px]">
           <div className="mb-[14px] flex items-center justify-between">
             <span className="font-['Inter'] text-[13px] font-bold text-[#0f1f6f]">
-              {stats ? "5 of 5 stages" : isUploading ? "Processing..." : "Not started"}
+              {batch ? (scoringDone ? "5 of 5 stages" : "4 of 5 stages") : isUploading ? "Processing..." : "Not started"}
             </span>
             <span className="font-['Inter'] text-[13px] font-bold text-[#0f1f6f]">
               {progressPct}% Complete
@@ -1788,8 +1810,21 @@ function AiBusinessDiscoveryForm({ uploadStats }: { uploadStats: "idle" | "uploa
         <div className="mt-[16px] flex flex-col gap-[10px]">
           {DISCOVERY_STAGE_DEFS.map((stage) => {
             const Icon = stage.icon;
-            const status = stats ? "Completed" : isUploading ? "Analyzing" : "Pending";
-            const detail = stats ? stage.detail(stats) : isUploading ? "Processing..." : "Waiting for Excel upload";
+            const stagePending = stage.isScoringStage && batch !== null && !scoringDone;
+            const status = stagePending
+              ? "Scoring…"
+              : batch
+                ? "Completed"
+                : isUploading
+                  ? "Analyzing"
+                  : "Pending";
+            const detail = stagePending
+              ? "Running in the background"
+              : batch
+                ? stage.detail(batch)
+                : isUploading
+                  ? "Processing..."
+                  : "Waiting for Excel upload";
 
             return (
               <div
@@ -2023,9 +2058,34 @@ function OnboardingCard() {
   const [createdIcp, setCreatedIcp] = useState<IcpOut | null>(null);
   // Business Discovery (step 8) shows the REAL result of the Excel upload
   // pipeline triggered from the ICP step, not fake "AI is analyzing"
-  // content - "idle" (nothing uploaded yet), "uploading" (pipeline running
-  // server-side, synchronous), or the real stats once it returns.
-  const [uploadStats, setUploadStats] = useState<"idle" | "uploading" | ExcelImportStats>("idle");
+  // content - "idle" (nothing uploaded yet), "uploading" (ingestion/signals/
+  // ICP-matching running server-side), or the real batch once that
+  // finishes (still scoring_status: "pending" until the background scoring
+  // task catches up - see the polling effect below).
+  const [uploadStats, setUploadStats] = useState<"idle" | "uploading" | ImportBatchOut>("idle");
+
+  // Scoring runs in the background after the upload responds - poll until
+  // this specific batch flips to "complete" so step 8 updates itself
+  // instead of staying stuck showing "Scoring In Progress" forever.
+  useEffect(() => {
+    if (uploadStats === "idle" || uploadStats === "uploading" || uploadStats.scoring_status === "complete" || !workspaceId) {
+      return;
+    }
+    const batchId = uploadStats.import_batch_id;
+    const interval = setInterval(() => {
+      listImportBatches(workspaceId)
+        .then((batches) => {
+          const updated = batches.find((b) => b.import_batch_id === batchId);
+          if (updated && updated.scoring_status === "complete") {
+            setUploadStats(updated);
+          }
+        })
+        .catch(() => {
+          // Transient fetch failure - just try again on the next tick.
+        });
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [uploadStats, workspaceId]);
 
   useEffect(() => {
     if (!firebaseUser) {

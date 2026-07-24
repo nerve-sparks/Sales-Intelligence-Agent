@@ -36,6 +36,11 @@ class IcpImportBatch(Base):
     matched_icp_count: Mapped[int] = mapped_column(Integer, nullable=False)
     active_count: Mapped[int] = mapped_column(Integer, nullable=False)
     nurture_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 'pending' while the background scoring pass is still running (see
+    # excel_pipeline.py) - active_count/nurture_count are 0 until it flips
+    # to 'complete', so the UI can tell "still scoring" apart from
+    # "genuinely zero results" instead of reading 0/0 as a real outcome.
+    scoring_status: Mapped[str] = mapped_column(Text, server_default="complete", nullable=False)
 
     created_at: Mapped[object | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")

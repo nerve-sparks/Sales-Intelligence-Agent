@@ -14,7 +14,7 @@ import {
   type IcpOut,
   type ImportBatchOut,
 } from "../../api/icp";
-import { uploadExcel, type ExcelImportStats } from "../../api/icpImports";
+import { uploadExcel } from "../../api/icpImports";
 import { uploadLogo } from "../../api/uploads";
 import {
   createWorkspace,
@@ -26,6 +26,7 @@ import {
 import { getOrganisation, updateOrganisation, type OrganisationOut } from "../../api/organisations";
 import { updateUser } from "../../api/users";
 import { auth } from "../../lib/firebase";
+import { useRefreshCurrentUser } from "../../lib/CurrentUserContext";
 import { getOrganisationId, getWorkspaceId, setWorkspaceId } from "../../lib/session";
 import uploadIconAsset from "../../assets/figma/onboarding/icons/upload.svg";
 import workspaceIconAsset from "../../assets/figma/onboarding/icons/workspace.svg";
@@ -534,7 +535,7 @@ function ExcelUploadButton({
   icpId: string | null;
   workspaceId: string | null;
   onUploadStart: () => void;
-  onUploadComplete: (stats: ExcelImportStats) => void;
+  onUploadComplete: (batch: ImportBatchOut) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -550,9 +551,13 @@ function ExcelUploadButton({
     setError(null);
     onUploadStart();
     try {
-      const { stats } = await uploadExcel(workspaceId, icpId, files);
+      // Ingestion + signal extraction have already finished by the time this
+      // resolves; scoring is still running in the background on the server
+      // (batch.scoring_status === "pending") - see handleUploadComplete's
+      // polling, which refreshes history until it flips to "complete".
+      const batch = await uploadExcel(workspaceId, icpId, files);
       setUploadedLabel(files.length === 1 ? files[0].name : `${files.length} files`);
-      onUploadComplete(stats);
+      onUploadComplete(batch);
     } catch (err) {
       setError(err instanceof ApiError ? String(err.detail) : "Upload failed. Please try again.");
     }
@@ -590,7 +595,7 @@ function ExcelUploadButton({
       {error && <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#ef4444]">{error}</p>}
       {!error && uploadedLabel && (
         <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#16a34a]">
-          Scored {uploadedLabel}
+          Uploaded {uploadedLabel} — scoring in the background
         </p>
       )}
     </div>
@@ -718,6 +723,7 @@ function OrganizationPanel({
   const [form, setForm] = useState<OrgFormState | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const refreshCurrentUser = useRefreshCurrentUser();
 
   useEffect(() => {
     if (!organisationId) return;
@@ -766,6 +772,10 @@ function OrganizationPanel({
           designation: form.designation || null,
         });
         setMe({ ...me, designation: updatedUser.designation });
+        // TopBar's UserMenu reads the shared CurrentUserContext, which only
+        // re-fetches when the workspace changes - without this it would keep
+        // showing the old designation until a full page reload.
+        refreshCurrentUser();
       }
       setEditing(false);
     } catch (err) {
@@ -1075,7 +1085,7 @@ export function SettingsIcpDataPage() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [deletingIcpId, setDeletingIcpId] = useState<string | null>(null);
   const [history, setHistory] = useState<ImportBatchOut[]>([]);
-  const [uploadStats, setUploadStats] = useState<"idle" | "uploading" | ExcelImportStats>("idle");
+  const [uploadResult, setUploadResult] = useState<"idle" | "uploading" | ImportBatchOut>("idle");
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadIcps = () => {
@@ -1107,6 +1117,21 @@ export function SettingsIcpDataPage() {
     loadHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Scoring now runs in the background after upload responds (see
+  // icpImports.ts) - poll history while any batch is still "pending" so
+  // this page's stats/table pick up the real active/nurture counts on their
+  // own once scoring catches up, instead of staying frozen at 0/0 until a
+  // manual refresh.
+  const hasPendingBatch = history.some((b) => b.scoring_status === "pending");
+  useEffect(() => {
+    if (!hasPendingBatch) {
+      return;
+    }
+    const interval = setInterval(loadHistory, 5000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasPendingBatch]);
 
   const handleFieldChange = <K extends keyof IcpFormState>(field: K, value: IcpFormState[K]) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -1189,9 +1214,9 @@ export function SettingsIcpDataPage() {
     setDeletingIcpId(null);
   };
 
-  const handleUploadComplete = (stats: ExcelImportStats) => {
-    setUploadStats(stats);
-    loadHistory();
+  const handleUploadComplete = (batch: ImportBatchOut) => {
+    setUploadResult(batch);
+    loadHistory(); // adds the new (scoring_status: "pending") row, which the polling effect above then picks up
   };
 
   const selectedIcp = icps.find((i) => i.icp_id === selectedIcpId) ?? null;
@@ -1467,27 +1492,33 @@ export function SettingsIcpDataPage() {
                     <ExcelUploadButton
                       icpId={selectedIcpId || null}
                       onUploadComplete={handleUploadComplete}
-                      onUploadStart={() => setUploadStats("uploading")}
+                      onUploadStart={() => setUploadResult("uploading")}
                       workspaceId={workspaceId}
                     />
                   </div>
                 </div>
 
-                {uploadStats !== "idle" && (
+                {uploadResult !== "idle" && (
                   <div className="mt-[16px] grid grid-cols-2 gap-[12px] sm:grid-cols-3 xl:grid-cols-6">
-                    {uploadStats === "uploading" ? (
+                    {uploadResult === "uploading" ? (
                       <p className="col-span-full m-0 font-['Inter'] text-[13px] text-[#64748b]">
                         Processing upload...
                       </p>
                     ) : (
                       (
                         [
-                          ["Files Processed", uploadStats.filesProcessed],
-                          ["Companies Ingested", uploadStats.companiesIngested],
-                          ["Signals Extracted", uploadStats.signalsExtracted],
-                          ["Matched ICP", uploadStats.matchedIcp],
-                          ["Active", uploadStats.activeCount],
-                          ["Nurture", uploadStats.nurtureCount],
+                          ["Files Processed", uploadResult.files_processed],
+                          ["Companies Ingested", uploadResult.companies_ingested],
+                          ["Signals Extracted", uploadResult.signals_extracted],
+                          ["Matched ICP", uploadResult.matched_icp_count],
+                          [
+                            "Active",
+                            uploadResult.scoring_status === "pending" ? "Scoring…" : uploadResult.active_count,
+                          ],
+                          [
+                            "Nurture",
+                            uploadResult.scoring_status === "pending" ? "Scoring…" : uploadResult.nurture_count,
+                          ],
                         ] as const
                       ).map(([label, value]) => (
                         <div className="rounded-[10px] border border-[#f1f5f9] bg-[#f8fafc] p-[12px]" key={label}>
@@ -1500,6 +1531,14 @@ export function SettingsIcpDataPage() {
                     )}
                   </div>
                 )}
+                {uploadResult !== "idle" &&
+                  uploadResult !== "uploading" &&
+                  uploadResult.scoring_status === "pending" && (
+                    <p className="m-0 mt-[10px] font-['Inter'] text-[12px] text-[#64748b]">
+                      Scoring is running in the background — head to Enterprise List to see companies get scored
+                      as it progresses, or wait here and this will update automatically.
+                    </p>
+                  )}
               </div>
 
               <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
@@ -1511,50 +1550,72 @@ export function SettingsIcpDataPage() {
                     <table className="w-full min-w-[720px] border-collapse">
                       <thead>
                         <tr className="text-left">
-                          {["Date", "ICP", "Files", "Rows", "Companies", "Signals", "Matched", "Active", "Nurture"].map(
-                            (h) => (
-                              <th
-                                className="px-[8px] py-[8px] font-['Inter'] text-[11px] font-bold text-[#64748b]"
-                                key={h}
-                              >
-                                {h}
-                              </th>
-                            ),
-                          )}
+                          {[
+                            "Date",
+                            "ICP",
+                            "Files",
+                            "Rows",
+                            "Companies",
+                            "Signals",
+                            "Matched",
+                            "Status",
+                            "Active",
+                            "Nurture",
+                          ].map((h) => (
+                            <th
+                              className="px-[8px] py-[8px] font-['Inter'] text-[11px] font-bold text-[#64748b]"
+                              key={h}
+                            >
+                              {h}
+                            </th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {history.map((batch) => (
-                          <tr className="border-t border-[#f1f5f9]" key={batch.import_batch_id}>
-                            <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#334155]">
-                              {formatDate(batch.created_at)}
-                            </td>
-                            <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] font-semibold text-[#0f172a]">
-                              {batch.icp_name || "—"}
-                            </td>
-                            <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#334155]">
-                              {batch.files_processed}
-                            </td>
-                            <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#334155]">
-                              {batch.total_rows}
-                            </td>
-                            <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#334155]">
-                              {batch.companies_ingested}
-                            </td>
-                            <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#334155]">
-                              {batch.signals_extracted}
-                            </td>
-                            <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#334155]">
-                              {batch.matched_icp_count}
-                            </td>
-                            <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#16a34a]">
-                              {batch.active_count}
-                            </td>
-                            <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#f59e0b]">
-                              {batch.nurture_count}
-                            </td>
-                          </tr>
-                        ))}
+                        {history.map((batch) => {
+                          const pending = batch.scoring_status === "pending";
+                          return (
+                            <tr className="border-t border-[#f1f5f9]" key={batch.import_batch_id}>
+                              <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#334155]">
+                                {formatDate(batch.created_at)}
+                              </td>
+                              <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] font-semibold text-[#0f172a]">
+                                {batch.icp_name || "—"}
+                              </td>
+                              <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#334155]">
+                                {batch.files_processed}
+                              </td>
+                              <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#334155]">
+                                {batch.total_rows}
+                              </td>
+                              <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#334155]">
+                                {batch.companies_ingested}
+                              </td>
+                              <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#334155]">
+                                {batch.signals_extracted}
+                              </td>
+                              <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#334155]">
+                                {batch.matched_icp_count}
+                              </td>
+                              <td className="px-[8px] py-[8px] font-['Inter'] text-[12px]">
+                                <span
+                                  className={cn(
+                                    "rounded-[6px] px-[8px] py-[3px] text-[11px] font-semibold",
+                                    pending ? "bg-[#fef3c7] text-[#b45309]" : "bg-[#dcfce7] text-[#16a34a]",
+                                  )}
+                                >
+                                  {pending ? "Scoring…" : "Complete"}
+                                </span>
+                              </td>
+                              <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#16a34a]">
+                                {pending ? "—" : batch.active_count}
+                              </td>
+                              <td className="px-[8px] py-[8px] font-['Inter'] text-[12px] text-[#f59e0b]">
+                                {pending ? "—" : batch.nurture_count}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

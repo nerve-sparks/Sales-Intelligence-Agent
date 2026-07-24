@@ -6,6 +6,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.db import async_session_maker
 from app.models import (
     Company,
     CompanyIntent,
@@ -17,7 +18,7 @@ from app.models import (
     LeadScore,
 )
 from app.services import zoominfo_mapper as mapper
-from app.services.icp_filter import filter_companies
+from app.services.icp_filter import filter_companies, get_icp_by_organisation
 from app.services.lead_scorer import run_scoring
 from app.services.signal_extractor import extract_signals
 
@@ -127,28 +128,49 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
 
 async def run_pipeline(
     session: AsyncSession, organisation_id: UUID, raw_rows: list[dict], icp: IcpProfile
-) -> tuple[dict[int, UUID], dict, dict, set[UUID]]:
-    """Full pipeline: upsert data, extract signals (org-wide), and score
-    every ingested company (org-wide) so the whole Enterprise List / Detail /
-    Score Breakdown is analysed off the upload - not just the ICP's matches.
+) -> tuple[dict[int, UUID], dict, set[UUID]]:
+    """The fast, synchronous half of the pipeline: upsert data, extract
+    signals (org-wide), and compute which companies match this upload's ICP.
+    Deliberately does NOT score - scoring hundreds of companies (each
+    potentially an LLM call) is the slow part, so it runs separately, after
+    the caller has already responded to the upload request (see
+    score_companies_in_background + controllers/icp_imports.py's
+    BackgroundTasks usage). That's what lets the upload endpoint return
+    quickly instead of the request hanging until every company is scored.
 
-    The ICP is still computed (matching_ids) for the "Matches ICP" export
-    column and the batch's matched_icp_count, but it no longer *gates*
-    scoring: previously only ICP-matched companies were scored, so an upload
-    whose ICP matched few/none left the entire directory unscored and the CRM
-    pages looked un-analysed. Scoring is deterministic and cheap, so scoring
-    everyone is the right default.
-
-    Returns (zi_to_company_id, signal_result, score_result, matching_ids) -
-    signal_result is {"inserted","skipped"} from extract_signals,
-    score_result is {"active","nurture"} across every scored company.
+    Returns (zi_to_company_id, signal_result, matching_ids) - signal_result
+    is {"inserted","skipped"} from extract_signals.
     """
     zi_to_company_id = await upsert_rows(session, organisation_id, raw_rows)
     signal_result = await extract_signals(session, organisation_id)
     matches = await filter_companies(session, icp)
     matching_ids = {c.company_id for c in matches}
-    score_result = await run_scoring(session, organisation_id, company_ids=None)
-    return zi_to_company_id, signal_result, score_result, matching_ids
+    return zi_to_company_id, signal_result, matching_ids
+
+
+async def score_companies_in_background(organisation_id: UUID, icp_id: UUID, import_batch_id: UUID) -> None:
+    """Runs as a FastAPI BackgroundTask, after the upload response has
+    already been sent - the request's DB session is closed by then, so this
+    opens its own (and re-fetches the ICP fresh in it, rather than reusing
+    an ORM object loaded in a different, now-closed session). Scores every
+    company in the org against this ICP (chunked/concurrent, progressively
+    committing - see lead_scorer.run_scoring), then flips the batch's
+    scoring_status to 'complete' with the real active/nurture counts, so the
+    Settings upload-history list and Enterprise List's per-upload filter can
+    tell "still scoring" apart from "done"."""
+    async with async_session_maker() as session:
+        icp = await get_icp_by_organisation(session, organisation_id, icp_id)
+        score_result = await run_scoring(session, organisation_id, company_ids=None, icp=icp)
+        await session.execute(
+            update(IcpImportBatch)
+            .where(IcpImportBatch.import_batch_id == import_batch_id)
+            .values(
+                active_count=score_result["active"],
+                nurture_count=score_result["nurture"],
+                scoring_status="complete",
+            )
+        )
+        await session.commit()
 
 
 async def matching_company_ids(session: AsyncSession, icp: IcpProfile) -> set[UUID]:
@@ -250,11 +272,15 @@ async def record_import_batch(
     zi_to_company_id: dict[int, UUID],
     signal_result: dict,
     matching_ids: set[UUID],
-    score_result: dict,
 ) -> IcpImportBatch:
     """Persists one upload event for the Settings > ICP Data page's history
     list - a permanent audit record, separate from Company/Signal/LeadScore
-    which store the *result* of uploads, not that an upload happened."""
+    which store the *result* of uploads, not that an upload happened.
+
+    Created with scoring_status='pending' and active/nurture at 0 - scoring
+    runs afterward as a background task (see score_companies_in_background),
+    which updates this same row with the real counts and flips the status to
+    'complete' once it finishes."""
     batch = IcpImportBatch(
         icp_id=icp_id,
         file_names=file_names,
@@ -263,8 +289,9 @@ async def record_import_batch(
         companies_ingested=len(zi_to_company_id),
         signals_extracted=signal_result["inserted"],
         matched_icp_count=len(matching_ids),
-        active_count=score_result["active"],
-        nurture_count=score_result["nurture"],
+        active_count=0,
+        nurture_count=0,
+        scoring_status="pending",
     )
     session.add(batch)
     await session.commit()

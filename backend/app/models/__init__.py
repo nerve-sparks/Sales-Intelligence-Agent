@@ -8,6 +8,7 @@ from app.models.icp_profile import IcpProfile
 from app.models.lead_score import LeadScore
 from app.models.organisation import Organisation
 from app.models.signal import Signal
+from app.models.signal_extraction_check import SignalExtractionCheck
 from app.models.trigger_definition import TriggerDefinition
 from app.models.trigger_event import TriggerEvent
 from app.models.user import User
@@ -26,6 +27,7 @@ __all__ = [
     "LeadScore",
     "Organisation",
     "Signal",
+    "SignalExtractionCheck",
     "TriggerDefinition",
     "TriggerEvent",
     "User",

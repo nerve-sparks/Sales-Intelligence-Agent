@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { CurrentUserProvider } from "./lib/CurrentUserContext";
 import { PageTransition } from "./components/layout/PageTransition";
 import { RequireAuth } from "./components/auth/RequireAuth";
 import { RequireOnboarding } from "./components/auth/RequireOnboarding";
@@ -46,26 +47,31 @@ const routes: { path: string; element: ReactElement }[] = [
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        {routes.map(({ path, element }) => (
-          <Route
-            element={
-              <PageTransition>
-                <RequireAuth>
-                  {path === "/onboarding" ? element : <RequireOnboarding>{element}</RequireOnboarding>}
-                </RequireAuth>
-              </PageTransition>
-            }
-            key={path}
-            path={path}
-          />
-        ))}
-        {/* LoginPage covers "/", "/forgot-password" and "/mfa-verification"
-            itself (reads window.location.pathname to pick a mode) - the
-            wildcard catches all three plus anything unrecognized, same as
-            the old fallback. */}
-        <Route element={<PageTransition><LoginPage /></PageTransition>} path="*" />
-      </Routes>
+      {/* Mounted once, above every route, so client-side navigation between
+          pages never resets "who is logged in" back to unknown - see
+          lib/CurrentUserContext.tsx for why that used to flicker. */}
+      <CurrentUserProvider>
+        <Routes>
+          {routes.map(({ path, element }) => (
+            <Route
+              element={
+                <PageTransition>
+                  <RequireAuth>
+                    {path === "/onboarding" ? element : <RequireOnboarding>{element}</RequireOnboarding>}
+                  </RequireAuth>
+                </PageTransition>
+              }
+              key={path}
+              path={path}
+            />
+          ))}
+          {/* LoginPage covers "/", "/forgot-password" and "/mfa-verification"
+              itself (reads window.location.pathname to pick a mode) - the
+              wildcard catches all three plus anything unrecognized, same as
+              the old fallback. */}
+          <Route element={<PageTransition><LoginPage /></PageTransition>} path="*" />
+        </Routes>
+      </CurrentUserProvider>
     </BrowserRouter>
   );
 }

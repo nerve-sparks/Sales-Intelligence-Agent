@@ -6,7 +6,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Company, CompanyNews, CompanyScoop, Signal
+from app.models import Company, CompanyNews, CompanyScoop, Signal, SignalExtractionCheck
 from app.services import llm_client, signal_llm
 
 # classify_news' generic catch-all - a news row that only lands here is the
@@ -264,6 +264,42 @@ async def _insert_signal(session: AsyncSession, values: dict) -> bool:
     return result.first() is not None
 
 
+async def _already_checked_sources(session: AsyncSession, prefix: str) -> set[str]:
+    """original_source values ('news:{id}' / 'scoop:{id}') already run through
+    extraction at least once - see SignalExtractionCheck's docstring for why
+    this can't just be "does a Signal row exist": a row correctly classified
+    as carrying no real signal never gets one, so without this table it (and,
+    if it landed on the LLM fallback, a fresh Gemini call for it) was redone
+    on every single upload, forever. No org scoping needed - original_source
+    is already globally unique (see Signal's own unique constraint)."""
+    rows = await _rows(
+        session,
+        "SELECT original_source FROM signal_extraction_check WHERE original_source LIKE :prefix",
+        prefix=f"{prefix}%",
+    )
+    return {r[0] for r in rows}
+
+
+async def _mark_checked(session: AsyncSession, original_sources: list[str]) -> None:
+    """Records that every one of these rows was run through extraction this
+    pass, regardless of outcome - called once per extraction with every row
+    actually considered (i.e. not already skipped), so next time none of
+    them get re-classified or re-sent to the LLM."""
+    if not original_sources:
+        return
+    stmt = (
+        pg_insert(SignalExtractionCheck)
+        .values([{"original_source": s} for s in original_sources])
+        .on_conflict_do_nothing(index_elements=["original_source"])
+    )
+    await session.execute(stmt)
+
+
+async def _rows(session: AsyncSession, sql: str, **params):
+    result = await session.execute(text(sql), params)
+    return result.all()
+
+
 def _news_text(news) -> str:
     return f"{news.title or ''}. {news.description or ''}".strip()[:600]
 
@@ -275,7 +311,16 @@ async def _extract_news_signals(session: AsyncSession, organisation_id) -> tuple
         .join(Company, Company.company_id == CompanyNews.company_id)
         .where(Company.organisation_id == organisation_id)
     )
-    rows = (await session.execute(stmt)).all()
+    all_rows = (await session.execute(stmt)).all()
+
+    # Skip news already checked in a previous run (see _already_checked_sources)
+    # - re-processing the org's entire signal history on every upload meant
+    # re-classifying (and re-calling the LLM for) rows that were already
+    # done, every single time - including rows correctly found to carry no
+    # real signal, which never get a Signal row to check against.
+    already = await _already_checked_sources(session, "news:")
+    rows = [r for r in all_rows if f"news:{r[0].news_id}" not in already]
+    skipped += len(all_rows) - len(rows)
 
     # Phase 1 - classify. A confident keyword hit is trusted as-is (fast,
     # deterministic, high-precision). Anything that only landed on the generic
@@ -384,6 +429,11 @@ async def _extract_news_signals(session: AsyncSession, organisation_id) -> tuple
         else:
             skipped += 1
 
+    # Mark every row actually considered this pass as checked - including
+    # ones that resolved to "no real signal" and so never got a Signal row -
+    # so none of them get reclassified (or re-sent to the LLM) next time.
+    await _mark_checked(session, [f"news:{news.news_id}" for news, _cn, _ind in rows])
+
     return inserted, skipped
 
 
@@ -399,7 +449,13 @@ async def _extract_scoop_signals(session: AsyncSession, organisation_id) -> tupl
         .join(Company, Company.company_id == CompanyScoop.company_id)
         .where(Company.organisation_id == organisation_id)
     )
-    rows = (await session.execute(stmt)).all()
+    all_rows = (await session.execute(stmt)).all()
+
+    # Skip scoops already checked in a previous run - see the matching
+    # comment in _extract_news_signals above.
+    already = await _already_checked_sources(session, "scoop:")
+    rows = [r for r in all_rows if f"scoop:{r[0].scoop_id}" not in already]
+    skipped += len(all_rows) - len(rows)
 
     # Phase 1 - keyword topic-mapping first; scoops whose topic doesn't map to
     # a rule (previously silently dropped - lost recall) now go to the LLM.
@@ -489,6 +545,10 @@ async def _extract_scoop_signals(session: AsyncSession, organisation_id) -> tupl
             inserted += 1
         else:
             skipped += 1
+
+    # Mark every row actually considered this pass as checked - see the
+    # matching comment in _extract_news_signals above.
+    await _mark_checked(session, [f"scoop:{scoop.scoop_id}" for scoop, _cn, _ind in rows])
 
     return inserted, skipped
 

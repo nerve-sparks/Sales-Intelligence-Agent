@@ -47,6 +47,17 @@ class LeadScore(Base):
     p_convert: Mapped[float | None] = mapped_column(Numeric(4, 3))
     expected_deal_value_usd: Mapped[float | None] = mapped_column(Numeric(15, 2))
     lead_score: Mapped[float | None] = mapped_column(Numeric(15, 2))
+
+    # Enhanced-engine outputs (lead_scorer): Gemini reasoning strings for the
+    # three LLM-judged dimensions, the math recency factor behind D5, the
+    # readiness sub-score, and the fixed deal tier feeding the final blend.
+    d1_reasoning: Mapped[str | None] = mapped_column(Text)
+    d2_reasoning: Mapped[str | None] = mapped_column(Text)
+    d5_reasoning: Mapped[str | None] = mapped_column(Text)
+    recency_factor: Mapped[float | None] = mapped_column(Numeric(4, 3))
+    p_score: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    deal_tier: Mapped[float | None] = mapped_column(Numeric(5, 2))
+
     scored_at: Mapped[object | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")
     )

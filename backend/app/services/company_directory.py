@@ -18,7 +18,12 @@ MEDIUM_SCORE = 60
 
 
 async def list_companies(
-    session: AsyncSession, organisation_id: UUID, page: int, page_size: int, search: str | None = None
+    session: AsyncSession,
+    organisation_id: UUID,
+    page: int,
+    page_size: int,
+    search: str | None = None,
+    import_batch_id: UUID | None = None,
 ):
     stmt = (
         select(Company, LeadScore.lead_score, LeadScore.gate_status)
@@ -27,6 +32,8 @@ async def list_companies(
     )
     if search:
         stmt = stmt.where(Company.company_name.ilike(f"%{search}%"))
+    if import_batch_id is not None:
+        stmt = stmt.where(Company.import_batch_id == import_batch_id)
 
     total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
 
@@ -60,6 +67,40 @@ async def intent_counts(
     counts = {"high": 0, "medium": 0, "low": 0}
     counts.update(dict(rows))
     return counts
+
+
+async def gate_summary(session: AsyncSession, organisation_id: UUID) -> dict:
+    """Real gate_status breakdown (active/nurture/unscored) + average
+    lead_score across scored companies - feeds the Dashboard's AI Company
+    Overview with the qualification-rate context intent_counts' high/medium/
+    low tiers don't capture on their own."""
+    stmt = (
+        select(LeadScore.gate_status, func.count())
+        .select_from(Company)
+        .outerjoin(LeadScore, LeadScore.company_id == Company.company_id)
+        .where(Company.organisation_id == organisation_id)
+        .group_by(LeadScore.gate_status)
+    )
+    rows = (await session.execute(stmt)).all()
+    counts = {"active": 0, "nurture": 0, "unscored": 0}
+    for status, count in rows:
+        counts[status if status in ("active", "nurture") else "unscored"] = count
+
+    avg_row = (
+        await session.execute(
+            select(func.avg(LeadScore.lead_score))
+            .select_from(Company)
+            .join(LeadScore, LeadScore.company_id == Company.company_id)
+            .where(Company.organisation_id == organisation_id, LeadScore.lead_score.isnot(None))
+        )
+    ).scalar_one()
+
+    return {
+        "active_count": counts["active"],
+        "nurture_count": counts["nurture"],
+        "unscored_count": counts["unscored"],
+        "avg_lead_score": float(avg_row) if avg_row is not None else None,
+    }
 
 
 async def icp_thresholds(session: AsyncSession, organisation_id: UUID) -> dict:

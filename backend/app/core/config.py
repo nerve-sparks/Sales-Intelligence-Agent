@@ -11,9 +11,9 @@ class Settings:
     app_env: str
     log_level: str
     database_url: str
-    zoominfo_client_id: str | None
-    zoominfo_client_secret: str | None
     llm_api_key: str | None
+    ollama_base_url: str
+    ollama_model: str
     firebase_credentials_path: str | None
 
     @property
@@ -30,8 +30,10 @@ def get_settings() -> Settings:
         app_env=os.environ.get("APP_ENV", "local"),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         database_url=database_url,
-        zoominfo_client_id=os.environ.get("ZOOMINFO_CLIENT_ID"),
-        zoominfo_client_secret=os.environ.get("ZOOMINFO_CLIENT_SECRET"),
         llm_api_key=os.environ.get("LLM_API_KEY"),
+        # Defaults match the verified-working local fallback server, so this
+        # keeps working even in environments where the .env var isn't set.
+        ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://124.123.18.150:11434/v1"),
+        ollama_model=os.environ.get("OLLAMA_MODEL", "qwen3:14b"),
         firebase_credentials_path=os.environ.get("FIREBASE_CREDENTIALS_PATH"),
     )
