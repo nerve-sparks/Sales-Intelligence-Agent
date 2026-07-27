@@ -1,24 +1,32 @@
-/* Mirrors backend/app/routes/signals.py */
+/* Mirrors backend/app/routes/signals.py - Signal Intelligence backed by
+ * BuyingEvent (brief item 15), the active evidence pipeline. extractSignals/
+ * rescoreSignals are legacy no-ops kept for backward compatibility only. */
 import { apiGet, apiPost } from "./client";
+import type { EvidenceSource } from "./scores";
 
 export type SignalOut = {
-  signal_id: string;
+  buying_event_id: string;
   company_id: string;
-  source: string | null;
-  original_source: string | null;
-  signal_type: string;
-  signal_category: string;
-  core_fact: string | null;
-  dollar_value_usd: number | null;
-  extraction_method: string | null;
+  event_type: string;
+  category: string | null;
+  title: string | null;
+  summary: string | null;
+  published_at: string | null;
+  base_strength: number | null;
+  relevance: number | null;
+  freshness: number | null;
+  source_quality: number | null;
   extraction_confidence: number | null;
-  is_action: boolean | null;
-  m2_corroboration: number | null;
-  m3_recency: number | null;
-  m4_resourcing: number | null;
-  signal_confidence: number | null;
-  ingested_at: string | null;
-  scored_at: string | null;
+  status_factor: number | null;
+  event_score: number | null;
+  is_negative: boolean;
+  penalty_value: number | null;
+  best_offering: string | null;
+  reasoning: string | null;
+  evidence: EvidenceSource[] | null;
+  public_budget_usd: number | null;
+  budget_currency: string | null;
+  budget_confidence: string | null;
 };
 
 export type SignalExtractResult = {
@@ -41,10 +49,13 @@ export type SignalListOut = {
   page_size: number;
 };
 
+/** @deprecated inert - nothing populates CompanyNews/CompanyScoop anymore; the
+ * active pipeline researches via Serper directly into BuyingEvent. */
 export function extractSignals(organisationId: string): Promise<SignalExtractResult> {
   return apiPost<SignalExtractResult>(`/organisations/${organisationId}/signals/extract`);
 }
 
+/** @deprecated inert - see extractSignals. */
 export function rescoreSignals(organisationId: string): Promise<SignalRescoreResult> {
   return apiPost<SignalRescoreResult>(`/organisations/${organisationId}/signals/rescore`);
 }
@@ -71,7 +82,7 @@ export function getSignals(organisationId: string, companyId: string): Promise<S
 }
 
 export type SignalCategoryCount = {
-  signal_category: string;
+  signal_category: string | null;
   count: number;
   company_count: number;
   avg_confidence: number | null;
@@ -102,9 +113,9 @@ export type SourceCount = {
 
 export type SignalStatsOut = {
   total: number;
-  high_intent: number;
-  medium_intent: number;
-  low_intent: number;
+  high_relevance: number;
+  medium_relevance: number;
+  low_relevance: number;
   company_count: number;
   avg_confidence: number | null;
   executives_impacted: number;

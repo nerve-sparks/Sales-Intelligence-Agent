@@ -1,6 +1,5 @@
 import {
   BadgeCheck,
-  Banknote,
   ChevronRight,
   Facebook,
   Linkedin,
@@ -207,14 +206,20 @@ function Header({
             </p>
           </div>
           <div className="border-l border-[#eef1f6] pl-[20px]">
-            <p className="m-0 text-[12px] text-[#94a3b8]">Status</p>
+            <p className="m-0 text-[12px] text-[#94a3b8]">Sales Status</p>
             <div className="mt-[6px]">
-              {scored ? (
-                <Badge label={score.gate_status === "active" ? "Active" : "Nurture"} tone={score.gate_status === "active" ? "green" : "orange"} />
+              {scored && score.sales_status ? (
+                <Badge label={score.sales_status} tone={score.sales_status === "Sales Ready" || score.sales_status === "High Priority" ? "green" : "orange"} />
               ) : (
                 <Badge label="Not scored" tone="gray" />
               )}
             </div>
+          </div>
+          <div className="border-l border-[#eef1f6] pl-[20px]">
+            <p className="m-0 text-[12px] text-[#94a3b8]">Confidence</p>
+            <p className="m-0 mt-[4px] text-[16px] font-bold text-[#0f172a]">
+              {scored ? score.confidence_label ?? "—" : "—"}
+            </p>
           </div>
           <div className="border-l border-[#eef1f6] pl-[20px]">
             <p className="m-0 text-[12px] text-[#94a3b8]">Est. Deal Value</p>
@@ -323,12 +328,13 @@ function LeadScoreSummary({ score, companyId }: { score: LeadScoreOut | NotScore
     );
   }
 
-  const gates = [score.gate_check_1, score.gate_check_2, score.gate_check_3, score.gate_check_4, score.gate_check_5];
   const metrics: { label: string; value: string }[] = [
     { label: "Lead Score", value: score.lead_score !== null ? String(Math.round(score.lead_score)) : "—" },
-    { label: "Component Score", value: score.component_score !== null ? String(Math.round(score.component_score)) : "—" },
-    { label: "P(Convert)", value: score.p_convert !== null ? `${Math.round(score.p_convert * 100)}%` : "—" },
-    { label: "Est. Deal Value", value: formatUsd(score.expected_deal_value_usd) },
+    { label: "Sales Status", value: score.sales_status ?? "—" },
+    { label: "Buying Evidence", value: score.buying_evidence_score !== null ? String(Math.round(score.buying_evidence_score)) : "—" },
+    { label: "Contact Access", value: score.contact_access_score !== null ? String(Math.round(score.contact_access_score)) : "—" },
+    { label: "Negative Penalty", value: score.negative_event_score !== null ? String(Math.round(score.negative_event_score)) : "—" },
+    { label: "Confidence", value: score.confidence_label ?? "—" },
   ];
 
   return (
@@ -341,23 +347,18 @@ function LeadScoreSummary({ score, companyId }: { score: LeadScoreOut | NotScore
           </div>
         ))}
       </div>
-      <div className="mt-[14px]">
-        <p className="m-0 mb-[8px] text-[12px] text-[#94a3b8]">Gate Checks</p>
-        <div className="flex gap-[8px]">
-          {gates.map((passed, i) => (
-            <span
-              className={cn(
-                "flex size-[30px] items-center justify-center rounded-[8px] text-[12px] font-bold",
-                passed ? "bg-[#e7f8ef] text-[#16a34a]" : "bg-[#fef2f2] text-[#ef4444]",
-              )}
-              key={i}
-              title={`Gate ${i + 1}`}
-            >
-              {i + 1}
-            </span>
-          ))}
+      {score.best_offering && (
+        <div className="mt-[14px]">
+          <p className="m-0 text-[12px] text-[#94a3b8]">Best XSparks offering</p>
+          <p className="m-0 mt-[3px] text-[13px] font-semibold text-[#334155]">{score.best_offering}</p>
         </div>
-      </div>
+      )}
+      {score.why_now && (
+        <div className="mt-[10px]">
+          <p className="m-0 text-[12px] text-[#94a3b8]">Why now</p>
+          <p className="m-0 mt-[3px] text-[13px] text-[#475569]">{score.why_now}</p>
+        </div>
+      )}
     </Card>
   );
 }
@@ -438,34 +439,34 @@ const categoryTone: Record<string, string> = {
 };
 
 function CompanySignals({ signals }: { signals: SignalOut[] }) {
-  const sorted = [...signals].sort((a, b) => (b.signal_confidence ?? 0) - (a.signal_confidence ?? 0));
+  const positive = signals.filter((s) => !s.is_negative);
+  const sorted = [...positive].sort((a, b) => (b.event_score ?? 0) - (a.event_score ?? 0));
 
   return (
-    <Card title={`Signals${signals.length ? ` (${signals.length})` : ""}`}>
-      {signals.length === 0 ? (
+    <Card title={`Buying Events${positive.length ? ` (${positive.length})` : ""}`}>
+      {positive.length === 0 ? (
         <p className="m-0 flex items-center gap-[8px] text-[13px] text-[#94a3b8]">
-          <Radio className="size-[15px] text-[#64748b]" /> No signals extracted for this company yet.
+          <Radio className="size-[15px] text-[#64748b]" /> No buying events found for this company yet.
         </p>
       ) : (
         <div className="flex flex-col divide-y divide-[#f1f5f9]">
           {sorted.slice(0, 12).map((s) => (
-            <div className="flex items-center gap-[12px] py-[12px] first:pt-0" key={s.signal_id}>
+            <div className="flex items-center gap-[12px] py-[12px] first:pt-0" key={s.buying_event_id}>
               <span className="flex size-[34px] shrink-0 items-center justify-center rounded-[9px] bg-[#eef1ff] text-[#5b3df5]">
-                {s.dollar_value_usd ? <Banknote className="size-[16px]" /> : <Radio className="size-[16px]" />}
+                <Radio className="size-[16px]" />
               </span>
               <div className="min-w-0 flex-1">
-                <p className="m-0 truncate text-[13px] font-bold text-[#0f172a]">{titleize(s.signal_type)}</p>
+                <p className="m-0 truncate text-[13px] font-bold text-[#0f172a]">{s.title || titleize(s.event_type)}</p>
                 <p className="m-0 truncate text-[12px] text-[#64748b]">
-                  {s.core_fact || titleize(s.signal_category)}
-                  {s.dollar_value_usd ? ` · ${formatUsd(s.dollar_value_usd)}` : ""}
+                  {s.summary || titleize(s.category ?? undefined)}
                 </p>
               </div>
-              <Badge label={titleize(s.signal_category)} tone={categoryTone[s.signal_category] ?? "gray"} />
+              <Badge label={titleize(s.category ?? undefined)} tone={categoryTone[s.category ?? ""] ?? "gray"} />
               <div className="w-[70px] shrink-0 text-right">
                 <p className="m-0 text-[12px] font-bold text-[#0f172a]">
-                  {s.signal_confidence !== null ? `${Math.round(s.signal_confidence * 100)}%` : "—"}
+                  {s.event_score !== null ? Math.round(s.event_score) : "—"}
                 </p>
-                <p className="m-0 text-[11px] text-[#94a3b8]">{relativeTime(s.ingested_at)}</p>
+                <p className="m-0 text-[11px] text-[#94a3b8]">{relativeTime(s.published_at)}</p>
               </div>
             </div>
           ))}

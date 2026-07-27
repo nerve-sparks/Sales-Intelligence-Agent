@@ -107,6 +107,13 @@ class Company(Base):
     technologies: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     products: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
 
+    # When search_signal_ingest last ran Serper queries for this company -
+    # null means never searched yet. Set regardless of whether any results
+    # came back, so a company with genuinely no news doesn't get re-searched
+    # (and re-billed) on every scoring re-run - same "checked vs found"
+    # distinction as SignalExtractionCheck.
+    search_signals_fetched_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
+
     # Relationships
     organisation: Mapped["Organisation"] = relationship()
     decision_makers: Mapped[list["DecisionMaker"]] = relationship(

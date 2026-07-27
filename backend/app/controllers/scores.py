@@ -1,43 +1,88 @@
 from uuid import UUID
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.models import Company, LeadScore
-from app.services import icp_filter
-from app.services.lead_scorer import run_scoring
-from app.schemas.score import NotScoredOut
+from app.models import BuyingEvent, Company, CompanyImportBatch, LeadScore
+from app.schemas.score import BuyingEventOut, NotScoredOut, ScoreDetailOut
+from app.services.evidence_scorer import run_scoring
 
 
-async def run(organisation_id: UUID, icp_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
-    """Re-scores the org. icp_id, when given, drives D6 (ICP-fit) for every
-    company being scored - not just companies from that ICP's own upload -
-    so ranking genuinely reflects fit-to-the-chosen-ICP across the whole
-    org, rather than whatever ICP happened to be active when each company
-    last got scored."""
-    icp = None
-    if icp_id is not None:
-        icp = await icp_filter.get_icp_by_organisation(db, organisation_id, icp_id)
-        if icp is None:
-            raise HTTPException(status_code=404, detail="icp not found")
-    return await run_scoring(db, organisation_id, icp=icp)
+def _in_batch(import_batch_id: UUID):
+    """Company-in-batch predicate via the permanent membership table (item 5),
+    NOT Company.import_batch_id (which a later re-upload overwrites) - same
+    predicate as company_directory.py / buying_event_directory.py."""
+    return Company.company_id.in_(
+        select(CompanyImportBatch.company_id).where(CompanyImportBatch.import_batch_id == import_batch_id)
+    )
+
+
+async def run(organisation_id: UUID, import_batch_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
+    """Re-scores the org (or one upload's companies) from stored BuyingEvents.
+    No ICP (brief section 22). Returns per-sales-status counts."""
+    company_ids = None
+    if import_batch_id is not None:
+        company_ids = (
+            await db.execute(
+                select(Company.company_id).where(
+                    Company.organisation_id == organisation_id,
+                    _in_batch(import_batch_id),
+                )
+            )
+        ).scalars().all()
+    counts = await run_scoring(db, organisation_id, company_ids=company_ids)
+    return {
+        "sales_ready": counts["Sales Ready"],
+        "high_priority": counts["High Priority"],
+        "warm": counts["Warm"],
+        "monitor": counts["Monitor"],
+        "low_priority": counts["Low Priority"],
+    }
 
 
 async def ranked(organisation_id: UUID, import_batch_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
+    """Every scored company (brief section 22) - NO gate filter. Ordered by
+    lead score, then confidence, then most-recent score, then name."""
     stmt = (
-        select(Company.company_name, LeadScore.lead_score, LeadScore.component_score, LeadScore.gate_status)
+        select(Company.company_id, Company.company_name, LeadScore)
         .join(LeadScore, LeadScore.company_id == Company.company_id)
-        .where(LeadScore.gate_passed.is_(True), Company.organisation_id == organisation_id)
-        .order_by(LeadScore.lead_score.desc(), LeadScore.p_score.desc())
+        .where(Company.organisation_id == organisation_id)
+        .order_by(
+            LeadScore.lead_score.desc().nullslast(),
+            LeadScore.evidence_confidence.desc().nullslast(),
+            LeadScore.scored_at.desc().nullslast(),
+            Company.company_name.asc(),
+        )
     )
     if import_batch_id is not None:
-        stmt = stmt.where(Company.import_batch_id == import_batch_id)
-    return (await db.execute(stmt)).all()
+        stmt = stmt.where(_in_batch(import_batch_id))
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "company_id": company_id,
+            "company_name": company_name,
+            "lead_score": float(ls.lead_score) if ls.lead_score is not None else None,
+            "sales_status": ls.sales_status,
+            "confidence_label": ls.confidence_label,
+            "buying_evidence_score": float(ls.buying_evidence_score) if ls.buying_evidence_score is not None else None,
+            "contact_access_score": float(ls.contact_access_score) if ls.contact_access_score is not None else None,
+            "negative_event_score": float(ls.negative_event_score) if ls.negative_event_score is not None else None,
+            "best_offering": ls.best_offering,
+            "why_now": ls.why_now,
+            "expected_deal_min_usd": float(ls.expected_deal_min_usd) if ls.expected_deal_min_usd is not None else None,
+            "expected_deal_max_usd": float(ls.expected_deal_max_usd) if ls.expected_deal_max_usd is not None else None,
+            "expected_deal_value_usd": float(ls.expected_deal_value_usd) if ls.expected_deal_value_usd is not None else None,
+            "scored_at": ls.scored_at,
+        }
+        for company_id, company_name, ls in rows
+    ]
 
 
 async def get_score(organisation_id: UUID, company_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Full evidence-based score for one company, including its canonical
+    events with source URLs (brief section 21)."""
     stmt = (
         select(LeadScore)
         .join(Company, Company.company_id == LeadScore.company_id)
@@ -46,4 +91,13 @@ async def get_score(organisation_id: UUID, company_id: UUID, db: AsyncSession = 
     score = (await db.execute(stmt)).scalar_one_or_none()
     if score is None:
         return NotScoredOut(detail="not scored yet")
-    return score
+    events = (
+        await db.execute(
+            select(BuyingEvent)
+            .where(BuyingEvent.company_id == company_id)
+            .order_by(BuyingEvent.event_score.desc().nullslast())
+        )
+    ).scalars().all()
+    out = ScoreDetailOut.model_validate(score)
+    out.events = [BuyingEventOut.model_validate(e) for e in events]
+    return out

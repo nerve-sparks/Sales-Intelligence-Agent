@@ -36,8 +36,11 @@ class IcpProfile(Base):
     buying_committee_personas: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     departments: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
 
-    # D6 ICP-fit band behaviour (lead_scorer._d6_icp_fit): 'flexible' grades
-    # near-misses (20%/50% outside range), 'strict' is all-or-nothing.
+    # Legacy D6 ICP-fit band behaviour from the old gate/D1-D7 scoring engine
+    # (removed - see evidence_scorer.py): 'flexible' graded near-misses (20%/
+    # 50% outside range), 'strict' was all-or-nothing. This whole model is
+    # kept only for historical rows/FK integrity (icp_import_batch.icp_id);
+    # the active pipeline never creates, reads, or scores against an ICP.
     fit_mode: Mapped[str] = mapped_column(Text, server_default="flexible", nullable=False)
 
     created_at: Mapped[object | None] = mapped_column(

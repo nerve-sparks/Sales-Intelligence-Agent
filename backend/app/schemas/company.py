@@ -62,7 +62,7 @@ class CompanyOut(BaseModel):
 
 class CompanyWithDecisionMakersOut(CompanyOut):
     """Company shape used where `decision_makers` was eagerly loaded (e.g.
-    selectinload in icp_filter.filter_companies) - kept separate from
+    company_directory.get_company's selectinload) - kept separate from
     CompanyOut so a response backed by that eager load never triggers an
     unloaded-relationship lazy load.
     """
@@ -83,8 +83,16 @@ class CompanyListItemOut(BaseModel):
     revenue_range: str | None = None
     industries: list[str] | None = None
     logo_url: str | None = None
+    # Evidence-based score fields (brief section 23). No gate_status.
     lead_score: float | None = None
-    gate_status: str | None = None
+    sales_status: str | None = None
+    confidence_label: str | None = None
+    buying_evidence_score: float | None = None
+    contact_access_score: float | None = None
+    negative_event_score: float | None = None
+    best_offering: str | None = None
+    why_now: str | None = None
+    expected_deal_value_usd: float | None = None
 
 
 class CompanyListOut(BaseModel):
@@ -101,28 +109,21 @@ class CountryLeadScoreOut(BaseModel):
 
 
 class CompanyStatsOut(BaseModel):
+    """Evidence-based company stats (brief item 22) - sales-status bands, not
+    high/medium/low intent tiers."""
+
     total: int
-    high_intent: int
-    medium_intent: int
-    low_intent: int
+    scored: int = 0
+    unscored: int = 0
+    sales_ready: int = 0
+    high_priority: int = 0
+    warm: int = 0
+    monitor: int = 0
+    low_priority: int = 0
+    high_confidence: int = 0
+    provisional_pipeline_value: float = 0.0
     by_country: list[CountryLeadScoreOut] = []
 
 
 class CompanyInsightOut(BaseModel):
     summary: str
-
-
-class IcpThresholdsOut(BaseModel):
-    """Data-driven ICP suggestions computed from the org's actually-uploaded
-    companies (see company_directory.icp_thresholds) - so a new ICP's ranges
-    fit the real data instead of guessed numbers that match nothing. Employee
-    / revenue ranges are the 10th-90th percentiles; industries/countries are
-    the most common values in the data."""
-
-    employee_min: int | None = None
-    employee_max: int | None = None
-    revenue_min_usd: int | None = None
-    revenue_max_usd: int | None = None
-    industries: list[str] = []
-    countries: list[str] = []
-    company_count: int

@@ -15,6 +15,21 @@ class Settings:
     ollama_base_url: str
     ollama_model: str
     firebase_credentials_path: str | None
+    scraper_service_url: str | None
+    scraper_api_key: str | None
+    serper_api_key: str | None
+    # Concurrent companies researched at once (search_signal_ingest.py) - the
+    # real throughput lever for "how long does a 500-company upload take".
+    # Tunable via env without a redeploy since the right number depends on
+    # your Serper plan's rate limit and (now that Ollama is primary in
+    # llm_client.py) how many concurrent requests your Ollama server can
+    # actually serve without just queueing internally.
+    research_concurrency: int
+    # SQLAlchemy async engine pool sizing (app/core/db.py) - must scale with
+    # research_concurrency, or raising that just trades "waiting on Serper"
+    # for "waiting on a free DB connection" with no net throughput gain.
+    db_pool_size: int
+    db_max_overflow: int
 
     @property
     def database_url_sync(self) -> str:
@@ -26,6 +41,8 @@ def get_settings() -> Settings:
     if not database_url:
         raise RuntimeError("DATABASE_URL environment variable is not set")
 
+    research_concurrency = int(os.environ.get("RESEARCH_CONCURRENCY", "10"))
+
     return Settings(
         app_env=os.environ.get("APP_ENV", "local"),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -36,4 +53,15 @@ def get_settings() -> Settings:
         ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://124.123.18.150:11434/v1"),
         ollama_model=os.environ.get("OLLAMA_MODEL", "qwen3:14b"),
         firebase_credentials_path=os.environ.get("FIREBASE_CREDENTIALS_PATH"),
+        scraper_service_url=os.environ.get("SCRAPER_SERVICE_URL"),
+        scraper_api_key=os.environ.get("SCRAPER_API_KEY"),
+        # .env calls this SERP_API_KEY but it's actually a Serper.dev key
+        # (google.serper.dev), not a SerpApi.com/Google key - see serper_client.py.
+        serper_api_key=os.environ.get("SERP_API_KEY"),
+        research_concurrency=research_concurrency,
+        # Default headroom: research_concurrency's worth of long-lived
+        # research sessions, plus scoring's own chunk concurrency (3) and
+        # normal request traffic, split across a base pool + overflow.
+        db_pool_size=int(os.environ.get("DB_POOL_SIZE", str(max(research_concurrency, 5) + 5))),
+        db_max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", str(max(research_concurrency, 5) + 5))),
     )

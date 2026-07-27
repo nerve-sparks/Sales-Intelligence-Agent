@@ -8,7 +8,6 @@ from app.schemas.company import (
     CompanyStatsOut,
     CompanyWithDecisionMakersOut,
     DecisionMakerOut,
-    IcpThresholdsOut,
 )
 
 router = APIRouter(
@@ -19,7 +18,6 @@ router = APIRouter(
 
 router.get("", response_model=CompanyListOut)(companies_controller.list_companies)
 router.get("/stats", response_model=CompanyStatsOut)(companies_controller.stats)
-router.get("/icp-thresholds", response_model=IcpThresholdsOut)(companies_controller.icp_thresholds)
 router.get("/insight", response_model=CompanyInsightOut)(companies_controller.insight)
 router.get("/export")(companies_controller.export)
 router.get("/{company_id}", response_model=CompanyWithDecisionMakersOut)(companies_controller.get_company)

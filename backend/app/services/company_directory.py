@@ -1,6 +1,7 @@
-"""Read-only company/decision-maker directory queries - not scoped to an
-ICP's filter criteria (see icp_filter.py for that), just plain org-wide
+"""Read-only company/decision-maker directory queries - plain org-wide
 listing/lookup for pages like Enterprise List/Detail and Buying Committee.
+Never scoped to an ICP - the ICP-filtering module (icp_filter.py) and its
+CRUD API were removed entirely along with the ICP concept.
 """
 
 from uuid import UUID
@@ -9,12 +10,22 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import Company, DecisionMaker, LeadScore
+from app.models import Company, CompanyImportBatch, DecisionMaker, LeadScore
 
 # Same tiers the Enterprise List's row badges use (frontend toEnterprise()):
 # >=80 high, >=60 medium, everything else (incl. unscored/nurture) low.
 HIGH_SCORE = 80
 MEDIUM_SCORE = 60
+
+HIGH_CONFIDENCE_LABEL = "High"
+
+
+def _in_batch(import_batch_id: UUID):
+    """Company-in-batch predicate via the permanent membership table (item 5),
+    NOT Company.import_batch_id (which a later re-upload overwrites)."""
+    return Company.company_id.in_(
+        select(CompanyImportBatch.company_id).where(CompanyImportBatch.import_batch_id == import_batch_id)
+    )
 
 
 async def list_companies(
@@ -26,14 +37,14 @@ async def list_companies(
     import_batch_id: UUID | None = None,
 ):
     stmt = (
-        select(Company, LeadScore.lead_score, LeadScore.gate_status)
+        select(Company, LeadScore)
         .outerjoin(LeadScore, LeadScore.company_id == Company.company_id)
         .where(Company.organisation_id == organisation_id)
     )
     if search:
         stmt = stmt.where(Company.company_name.ilike(f"%{search}%"))
     if import_batch_id is not None:
-        stmt = stmt.where(Company.import_batch_id == import_batch_id)
+        stmt = stmt.where(_in_batch(import_batch_id))
 
     total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
 
@@ -62,113 +73,74 @@ async def intent_counts(
         .group_by(tier)
     )
     if import_batch_id is not None:
-        stmt = stmt.where(Company.import_batch_id == import_batch_id)
+        stmt = stmt.where(_in_batch(import_batch_id))
     rows = (await session.execute(stmt)).all()
     counts = {"high": 0, "medium": 0, "low": 0}
     counts.update(dict(rows))
     return counts
 
 
-async def gate_summary(session: AsyncSession, organisation_id: UUID) -> dict:
-    """Real gate_status breakdown (active/nurture/unscored) + average
-    lead_score across scored companies - feeds the Dashboard's AI Company
-    Overview with the qualification-rate context intent_counts' high/medium/
-    low tiers don't capture on their own."""
-    stmt = (
-        select(LeadScore.gate_status, func.count())
-        .select_from(Company)
-        .outerjoin(LeadScore, LeadScore.company_id == Company.company_id)
-        .where(Company.organisation_id == organisation_id)
-        .group_by(LeadScore.gate_status)
-    )
-    rows = (await session.execute(stmt)).all()
-    counts = {"active": 0, "nurture": 0, "unscored": 0}
-    for status, count in rows:
-        counts[status if status in ("active", "nurture") else "unscored"] = count
+async def sales_status_summary(
+    session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None
+) -> dict:
+    """Evidence-based rollup for the Dashboard/stats API (brief items 22, 29):
+    total/scored/unscored, the five sales-status band counts, average lead
+    score, high-confidence count, and provisional pipeline value (sum of
+    expected deal values). No gates/intent tiers. Optionally batch-scoped via
+    the membership table."""
+    scope = [Company.organisation_id == organisation_id]
+    if import_batch_id is not None:
+        scope.append(_in_batch(import_batch_id))
 
-    avg_row = (
+    total = (await session.execute(select(func.count()).select_from(Company).where(*scope))).scalar_one()
+
+    status_rows = (
         await session.execute(
-            select(func.avg(LeadScore.lead_score))
+            select(LeadScore.sales_status, func.count())
             .select_from(Company)
             .join(LeadScore, LeadScore.company_id == Company.company_id)
-            .where(Company.organisation_id == organisation_id, LeadScore.lead_score.isnot(None))
+            .where(*scope, LeadScore.lead_score.isnot(None))
+            .group_by(LeadScore.sales_status)
+        )
+    ).all()
+    by_status = {status: count for status, count in status_rows}
+
+    avg_row, value_row, total_scored = (
+        await session.execute(
+            select(
+                func.avg(LeadScore.lead_score),
+                func.sum(LeadScore.expected_deal_value_usd),
+                func.count(),
+            )
+            .select_from(Company)
+            .join(LeadScore, LeadScore.company_id == Company.company_id)
+            .where(*scope, LeadScore.lead_score.isnot(None))
+        )
+    ).one()
+
+    high_conf = (
+        await session.execute(
+            select(func.count())
+            .select_from(Company)
+            .join(LeadScore, LeadScore.company_id == Company.company_id)
+            .where(*scope, LeadScore.confidence_label == HIGH_CONFIDENCE_LABEL)
         )
     ).scalar_one()
 
+    scored = total_scored or 0
     return {
-        "active_count": counts["active"],
-        "nurture_count": counts["nurture"],
-        "unscored_count": counts["unscored"],
+        "total": total or 0,
+        "total_scored": scored,
+        "scored": scored,
+        "unscored": (total or 0) - scored,
+        "sales_ready": by_status.get("Sales Ready", 0),
+        "high_priority": by_status.get("High Priority", 0),
+        "warm": by_status.get("Warm", 0),
+        "monitor": by_status.get("Monitor", 0),
+        "low_priority": by_status.get("Low Priority", 0),
+        "high_confidence": high_conf or 0,
         "avg_lead_score": float(avg_row) if avg_row is not None else None,
-    }
-
-
-async def icp_thresholds(session: AsyncSession, organisation_id: UUID) -> dict:
-    """Suggests ICP ranges from the org's real uploaded companies: 10th-90th
-    percentile of employee_count/revenue_usd (a populated-but-targeted band,
-    not min/max which would just match everything), plus the most common
-    industries and countries. Feeds the Settings ICP form's "fill from
-    uploaded data" so a new ICP fits the data instead of guessed numbers."""
-    org = Company.organisation_id == organisation_id
-
-    emp = (
-        await session.execute(
-            select(
-                func.percentile_cont(0.1).within_group(Company.employee_count),
-                func.percentile_cont(0.9).within_group(Company.employee_count),
-            ).where(org, Company.employee_count.isnot(None))
-        )
-    ).first()
-    rev = (
-        await session.execute(
-            select(
-                func.percentile_cont(0.1).within_group(Company.revenue_usd),
-                func.percentile_cont(0.9).within_group(Company.revenue_usd),
-            ).where(org, Company.revenue_usd.isnot(None))
-        )
-    ).first()
-
-    # Unnest via a subquery so the GROUP BY is over the exploded values.
-    industry_sub = (
-        select(func.unnest(Company.industries).label("industry"))
-        .where(org, Company.industries.isnot(None))
-        .subquery()
-    )
-    industries = [
-        r[0]
-        for r in (
-            await session.execute(
-                select(industry_sub.c.industry)
-                .group_by(industry_sub.c.industry)
-                .order_by(func.count().desc())
-                .limit(3)
-            )
-        ).all()
-    ]
-
-    countries = [
-        r[0]
-        for r in (
-            await session.execute(
-                select(Company.country)
-                .where(org, Company.country.isnot(None))
-                .group_by(Company.country)
-                .order_by(func.count().desc())
-                .limit(3)
-            )
-        ).all()
-    ]
-
-    count = (await session.execute(select(func.count()).select_from(Company).where(org))).scalar_one()
-
-    return {
-        "employee_min": int(emp[0]) if emp and emp[0] is not None else None,
-        "employee_max": int(emp[1]) if emp and emp[1] is not None else None,
-        "revenue_min_usd": int(rev[0]) if rev and rev[0] is not None else None,
-        "revenue_max_usd": int(rev[1]) if rev and rev[1] is not None else None,
-        "industries": industries,
-        "countries": countries,
-        "company_count": count,
+        "pipeline_value": float(value_row) if value_row is not None else 0.0,
     }
 
 
@@ -189,7 +161,7 @@ async def lead_score_by_country(
         .group_by(Company.country)
     )
     if import_batch_id is not None:
-        stmt = stmt.where(Company.import_batch_id == import_batch_id)
+        stmt = stmt.where(_in_batch(import_batch_id))
     return (await session.execute(stmt)).all()
 
 

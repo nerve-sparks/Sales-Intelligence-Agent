@@ -19,8 +19,42 @@ export type OrganisationOut = {
   annual_revenue_range: string | null;
   business_type: string | null;
   company_description: string | null;
+  // XSparks Offering Profile (brief sections 5, 6)
+  offering_profile: OfferingProfile | null;
+  offering_profile_source_url: string | null;
+  offering_profile_status: string | null;
+  offering_profile_synced_at: string | null;
   created_at: string | null;
 };
+
+export type OfferingItem = {
+  name: string;
+  problems_solved?: string[];
+  technologies?: string[];
+  buying_signals?: string[];
+};
+
+export type OfferingProfile = {
+  company: string;
+  source_url?: string;
+  positioning?: string;
+  offerings: OfferingItem[];
+  problems_solved?: string[];
+  relevant_technologies?: string[];
+  alternative_solutions?: { category: string; inferred?: boolean }[];
+  accelerators?: string[];
+  synced_at?: string | null;
+  version?: number;
+};
+
+export type OfferingProfileSyncOut = {
+  status: string;
+  profile: OfferingProfile;
+};
+
+export function syncOfferingProfile(organisationId: string): Promise<OfferingProfileSyncOut> {
+  return apiPost<OfferingProfileSyncOut>(`/organisations/${organisationId}/offering-profile/sync`);
+}
 
 export type OrganisationCreate = {
   // Onboarding step 1 - account identity

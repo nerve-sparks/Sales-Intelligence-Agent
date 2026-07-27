@@ -24,4 +24,15 @@ class OrganisationOut(BaseModel):
     annual_revenue_range: str | None = None
     business_type: str | None = None
     company_description: str | None = None
+    # XSparks Offering Profile (brief sections 5, 6) - what the tenant sells,
+    # used for relevance scoring. Never an ICP; never excludes a prospect.
+    offering_profile: dict | None = None
+    offering_profile_source_url: str | None = None
+    offering_profile_status: str | None = None
+    offering_profile_synced_at: datetime | None = None
     created_at: datetime | None = None
+
+
+class OfferingProfileSyncOut(BaseModel):
+    status: str
+    profile: dict

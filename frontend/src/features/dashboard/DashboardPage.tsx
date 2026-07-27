@@ -111,7 +111,7 @@ function TimelinePicker({
                 {batch.import_batch_id === selectedBatchId && <span className="text-[#005bff]">•</span>}
               </span>
               <span className="truncate text-[11px] text-[#94a3b8]">
-                {batch.icp_name ?? "Unknown ICP"} · {batch.companies_ingested} companies
+                {batch.file_names?.[0] ?? "Upload"} · {batch.companies_ingested} companies
               </span>
             </button>
           ))}
@@ -137,7 +137,7 @@ function relativeTime(iso: string | null): string {
 /* RankedLeadScoreOut has no revenue/next-best-action - those are UI-only
  * concepts (revenue would need a join the ranked-scores endpoint doesn't
  * do; "next best action" has no backend concept at all). Real
- * name/score/gate_status come from the API. */
+ * name/score/sales_status come from the API. */
 function toProspect(row: RankedLeadScoreOut) {
   const score = row.lead_score !== null ? Math.round(row.lead_score) : 0;
   const initials = row.company_name
@@ -146,26 +146,28 @@ function toProspect(row: RankedLeadScoreOut) {
     .join("")
     .slice(0, 3)
     .toUpperCase();
+  const status = row.sales_status ?? "Low Priority";
+  const strong = status === "Sales Ready" || status === "High Priority";
   return {
     initials: initials || "?",
     company: row.company_name,
-    revenue: "—",
-    action: row.gate_status === "active" ? "Qualified Lead" : "Needs Nurturing",
-    tone: row.gate_status === "active" ? "blue" : "orange",
+    revenue: row.best_offering ?? "—",
+    action: status,
+    tone: strong ? "blue" : "orange",
     score,
     ring: score >= 75 ? "green" : "orange",
   };
 }
 
 /* SignalWithCompanyOut has no action-tag/score-ring vocabulary - those are
- * UI-only. Real company/time come from the API. */
+ * UI-only. Real company/time come from the API (BuyingEvent-backed). */
 function toRecentSignal(s: SignalWithCompanyOut) {
-  const confidence = s.signal_confidence ?? 0;
+  const confidence = s.extraction_confidence ?? 0;
   const score = Math.round(confidence * 100);
   return {
-    time: relativeTime(s.ingested_at),
+    time: relativeTime(s.published_at),
     company: s.company_name,
-    action: s.signal_type.replace(/_/g, " "),
+    action: s.event_type.replace(/_/g, " "),
     tone: "blue",
     score,
     ring: score >= 75 ? "green" : "orange",
@@ -351,12 +353,14 @@ function StatCards({ companyStats, signalStats }: { companyStats: CompanyStatsOu
   const newSignalsSeries =
     signalStats.trend.length >= 2 ? signalStats.trend.map((t) => t.total) : FLAT_LINE;
 
+  const pipeline = companyStats.provisional_pipeline_value;
+  const pipelineLabel = pipeline >= 1_000_000 ? `$${(pipeline / 1_000_000).toFixed(1)}M` : `$${Math.round(pipeline / 1000)}K`;
   const stats = [
-    { icon: Flame, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Hot Prospects", value: String(companyStats.high_intent), spark: "#f97316", values: FLAT_LINE },
+    { icon: Flame, iconBg: "bg-[#e7f8ef]", iconColor: "text-[#16a34a]", label: "Sales Ready", value: String(companyStats.sales_ready), spark: "#16a34a", values: FLAT_LINE },
+    { icon: Target, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "High Priority", value: String(companyStats.high_priority), spark: "#f97316", values: FLAT_LINE },
     { icon: DollarSign, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Total Companies", value: String(companyStats.total), spark: "#2563eb", values: FLAT_LINE },
-    { icon: Radio, iconBg: "bg-[#f3e8ff]", iconColor: "text-[#7c3aed]", label: "New Signals", value: String(signalStats.total), spark: "#7c3aed", values: newSignalsSeries },
-    { icon: Calendar, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Actionable Signals", value: String(signalStats.actionable_count), spark: "#f97316", values: FLAT_LINE },
-    { icon: Target, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Avg Signal Confidence", value: `${Math.round((signalStats.avg_confidence ?? 0) * 100)}%`, spark: "#2563eb", values: FLAT_LINE },
+    { icon: Radio, iconBg: "bg-[#f3e8ff]", iconColor: "text-[#7c3aed]", label: "High Confidence", value: String(companyStats.high_confidence), spark: "#7c3aed", values: newSignalsSeries },
+    { icon: Calendar, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Est. Pipeline Value", value: pipelineLabel, spark: "#2563eb", values: FLAT_LINE },
   ];
 
   return (
@@ -406,15 +410,46 @@ function StatCards({ companyStats, signalStats }: { companyStats: CompanyStatsOu
   );
 }
 
+/* StatCards above only has room for 5 slots and mixes org-level KPIs (Total
+ * Companies/High Confidence/Est. Pipeline Value) in with 2 of the 5 sales
+ * statuses (Sales Ready/High Priority) - this strip surfaces the remaining 3
+ * (Warm/Monitor/Low Priority) so every status band has a visible count
+ * somewhere on the Dashboard, matching the same 5-band thresholds shown in
+ * the Lead Opportunity Map legend below. */
+function SalesStatusBreakdown({ companyStats }: { companyStats: CompanyStatsOut }) {
+  const items = [
+    { label: "Warm", value: companyStats.warm, color: "#f97316", bg: "#fff1e8" },
+    { label: "Monitor", value: companyStats.monitor, color: "#eab308", bg: "#fef9e7" },
+    { label: "Low Priority", value: companyStats.low_priority, color: "#94a3b8", bg: "#f1f5f9" },
+  ];
+  return (
+    <div className="mt-[12px] grid grid-cols-3 gap-[12px]">
+      {items.map((item) => (
+        <div
+          className="flex items-center justify-between rounded-[12px] border border-[#eef1f6] bg-white px-[16px] py-[12px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]"
+          key={item.label}
+        >
+          <span className="flex items-center gap-[8px] text-[13px] font-semibold text-[#475569]">
+            <span className="size-[9px] rounded-full" style={{ backgroundColor: item.color }} />
+            {item.label}
+          </span>
+          <span className="text-[16px] font-bold text-[#0f172a]">{item.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Lead Opportunity Map (dark card)                                    */
 /* ------------------------------------------------------------------ */
 
 const mapLegend = [
-  { label: "Hot Zone", range: "80-100", color: "#ef4444" },
-  { label: "Warm Zone", range: "60-79", color: "#f97316" },
-  { label: "Emerging", range: "40-59", color: "#3b82f6" },
-  { label: "Monitor", range: "0-39", color: "#94a3b8" },
+  { label: "Sales Ready", range: "85-100", color: "#16a34a" },
+  { label: "High Priority", range: "70-84", color: "#22c55e" },
+  { label: "Warm", range: "50-69", color: "#f97316" },
+  { label: "Monitor", range: "30-49", color: "#eab308" },
+  { label: "Low Priority", range: "0-29", color: "#94a3b8" },
 ];
 
 const LeadGlobe = lazy(() => import("./LeadGlobe"));
@@ -550,9 +585,9 @@ function LeadTrend({ signalStats }: { signalStats: SignalStatsOut }) {
   const delta = firstTotal > 0 ? `${Math.round(((lastTotal - firstTotal) / firstTotal) * 100)}%` : null;
 
   const trendBuckets = [
-    { label: "High", value: String(signalStats.high_intent), className: "bg-[#f5f3ff] text-[#7c3aed]" },
-    { label: "Medium", value: String(signalStats.medium_intent), className: "bg-[#fff7ed] text-[#f97316]" },
-    { label: "Low", value: String(signalStats.low_intent), className: "bg-[#eff6ff] text-[#2563eb]" },
+    { label: "High", value: String(signalStats.high_relevance), className: "bg-[#f5f3ff] text-[#7c3aed]" },
+    { label: "Medium", value: String(signalStats.medium_relevance), className: "bg-[#fff7ed] text-[#f97316]" },
+    { label: "Low", value: String(signalStats.low_relevance), className: "bg-[#eff6ff] text-[#2563eb]" },
   ];
 
   return (
@@ -854,12 +889,12 @@ function CompanyOverview({ summary, loading }: { summary: string | null; loading
 /* Page                                                                */
 /* ------------------------------------------------------------------ */
 
-const emptyCompanyStats: CompanyStatsOut = { total: 0, high_intent: 0, medium_intent: 0, low_intent: 0, by_country: [] };
+const emptyCompanyStats: CompanyStatsOut = { total: 0, scored: 0, unscored: 0, sales_ready: 0, high_priority: 0, warm: 0, monitor: 0, low_priority: 0, high_confidence: 0, provisional_pipeline_value: 0, by_country: [] };
 const emptySignalStats: SignalStatsOut = {
   total: 0,
-  high_intent: 0,
-  medium_intent: 0,
-  low_intent: 0,
+  high_relevance: 0,
+  medium_relevance: 0,
+  low_relevance: 0,
   company_count: 0,
   avg_confidence: 0,
   executives_impacted: 0,
@@ -986,6 +1021,7 @@ export function DashboardPage() {
 
           <div className="mt-[22px]">
             <StatCards companyStats={companyStats} signalStats={signalStats} />
+            <SalesStatusBreakdown companyStats={companyStats} />
           </div>
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">

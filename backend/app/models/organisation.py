@@ -2,7 +2,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from sqlalchemy import TIMESTAMP, Text, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
@@ -44,6 +44,13 @@ class Organisation(Base):
     annual_revenue_range: Mapped[str | None] = mapped_column(Text)
     business_type: Mapped[str | None] = mapped_column(Text)
     company_description: Mapped[str | None] = mapped_column(Text)
+
+    # Product context for relevance scoring. This describes what the tenant
+    # sells; it is deliberately not an ICP and never excludes a prospect.
+    offering_profile: Mapped[dict | None] = mapped_column(JSONB)
+    offering_profile_source_url: Mapped[str | None] = mapped_column(Text)
+    offering_profile_status: Mapped[str | None] = mapped_column(Text)
+    offering_profile_synced_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
 
     created_at: Mapped[object | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")

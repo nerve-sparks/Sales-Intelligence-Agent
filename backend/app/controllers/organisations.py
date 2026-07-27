@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import VerifiedFirebaseUser, require_firebase_user, require_organisation_member
 from app.core.db import get_db
+from app.services.offering_profile_service import sync_offering_profile
 from app.services.organisation_service import create_organisation, get_organisation, update_organisation
 
 
@@ -75,3 +76,14 @@ async def update(
     if org is None:
         raise HTTPException(status_code=404, detail="organisation not found")
     return org
+
+
+async def sync_offering_profile_endpoint(
+    organisation_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _member: object = Depends(require_organisation_member),
+):
+    """Re-fetch XSparks' Offering Profile from xsparks.ai (scraper + LLM),
+    falling back cleanly if unavailable (brief section 6). Never 500s on a
+    scrape/LLM failure - returns status 'sync_failed' with the fallback."""
+    return await sync_offering_profile(db, organisation_id)

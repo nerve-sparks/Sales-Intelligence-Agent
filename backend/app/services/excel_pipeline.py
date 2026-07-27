@@ -1,29 +1,30 @@
 import io
+import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
 import openpyxl
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import async_session_maker
 from app.models import (
+    BuyingEvent,
     Company,
-    CompanyIntent,
-    CompanyNews,
-    CompanyScoop,
+    CompanyImportBatch,
     DecisionMaker,
     IcpImportBatch,
-    IcpProfile,
     LeadScore,
 )
+from app.services import evidence_scorer, search_signal_ingest
 from app.services import zoominfo_mapper as mapper
-from app.services.icp_filter import filter_companies, get_icp_by_organisation
-from app.services.lead_scorer import run_scoring
-from app.services.signal_extractor import extract_signals
+from app.services.offering_profile_service import ensure_offering_profile
 
 COMPANY_UPDATE_COLS = [c for c in mapper.COMPANY_COLUMNS if c not in ("zi_company_id", "company_id", "organisation_id")]
 DM_UPDATE_COLS = [c for c in mapper.DECISION_MAKER_COLUMNS if c not in ("zi_person_id", "organisation_id", "company_id")]
+
+logger = logging.getLogger(__name__)
 
 
 async def _upsert_companies(session: AsyncSession, company_rows: list[dict]) -> None:
@@ -44,39 +45,18 @@ async def _upsert_decision_makers(session: AsyncSession, dm_rows: list[dict]) ->
     await session.execute(stmt)
 
 
-async def _insert_intents(session: AsyncSession, intent_rows: list[dict]) -> None:
-    if not intent_rows:
-        return
-    stmt = pg_insert(CompanyIntent).values(intent_rows).on_conflict_do_nothing(index_elements=["intent_id"])
-    await session.execute(stmt)
-
-
-async def _insert_scoops(session: AsyncSession, scoop_rows: list[dict]) -> None:
-    if not scoop_rows:
-        return
-    stmt = pg_insert(CompanyScoop).values(scoop_rows).on_conflict_do_nothing(index_elements=["scoop_id"])
-    await session.execute(stmt)
-
-
-async def _insert_news(session: AsyncSession, news_rows: list[dict]) -> None:
-    if not news_rows:
-        return
-    stmt = pg_insert(CompanyNews).values(news_rows).on_conflict_do_nothing(index_elements=["news_id"])
-    await session.execute(stmt)
-
-
 async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: list[dict]) -> dict[int, UUID]:
-    """Parses raw ZoomInfo rows and upserts company/decision_maker/intent/scoop/news.
+    """Parses prospect rows and upserts ONLY identity + firmographic + contact
+    data (brief item 14). External buying evidence (news/scoops/intent) no
+    longer comes from spreadsheet columns - it all originates through Serper
+    research into buying_event, so build_intent_row/build_scoop_row/
+    build_news_row are deliberately not called here.
 
-    Returns a {zi_company_id: company_id} map for every company referenced,
-    so the caller can re-attach scores back onto the original uploaded rows.
+    Returns a {zi_company_id: company_id} map for every company referenced.
     """
     seen_companies: dict[int, dict] = {}
     seen_dms: dict[int, dict] = {}
     dm_rows_no_id: list[dict] = []
-    seen_intents: dict[str, dict] = {}
-    seen_scoops: dict[str, dict] = {}
-    seen_news: dict[str, dict] = {}
     zi_to_company_id: dict[int, UUID] = {}
 
     for row in raw_rows:
@@ -89,13 +69,11 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
             seen_companies[zi_company_id] = company_row
             zi_to_company_id[zi_company_id] = company_row["company_id"]
 
-        # Multiple uploaded files can legitimately contain the same contact
-        # (e.g. overlapping company lists) - a single bulk INSERT can't
-        # ON CONFLICT DO UPDATE the same (organisation_id, zi_person_id) row
-        # twice, so duplicates within this batch are collapsed here (last
-        # occurrence wins), same as seen_companies/seen_intents/etc below.
-        # Rows with no zi_person_id never conflict (NULL != NULL in a unique
-        # constraint), so those are kept as-is.
+        # Multiple uploaded files can legitimately contain the same contact -
+        # a single bulk INSERT can't ON CONFLICT DO UPDATE the same
+        # (organisation_id, zi_person_id) row twice, so duplicates within this
+        # batch are collapsed here (last occurrence wins). Rows with no
+        # zi_person_id never conflict (NULL != NULL in a unique constraint).
         dm_row = mapper.build_decision_maker_row(row, organisation_id)
         zi_person_id = dm_row["zi_person_id"]
         if zi_person_id is not None:
@@ -103,195 +81,270 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
         else:
             dm_rows_no_id.append(dm_row)
 
-        intent_row = mapper.build_intent_row(row, organisation_id)
-        if intent_row:
-            seen_intents[intent_row["intent_id"]] = intent_row
-
-        scoop_row = mapper.build_scoop_row(row, organisation_id)
-        if scoop_row:
-            seen_scoops[scoop_row["scoop_id"]] = scoop_row
-
-        news_row = mapper.build_news_row(row, organisation_id)
-        if news_row:
-            seen_news[news_row["news_id"]] = news_row
-
     await _upsert_companies(session, list(seen_companies.values()))
     await _upsert_decision_makers(session, list(seen_dms.values()) + dm_rows_no_id)
-    await _insert_intents(session, list(seen_intents.values()))
-    await _insert_scoops(session, list
-    (seen_scoops.values()))
-    await _insert_news(session, list(seen_news.values()))
     await session.commit()
 
     return zi_to_company_id
 
 
 async def run_pipeline(
-    session: AsyncSession, organisation_id: UUID, raw_rows: list[dict], icp: IcpProfile
-) -> tuple[dict[int, UUID], dict, set[UUID]]:
-    """The fast, synchronous half of the pipeline: upsert data, extract
-    signals (org-wide), and compute which companies match this upload's ICP.
-    Deliberately does NOT score - scoring hundreds of companies (each
-    potentially an LLM call) is the slow part, so it runs separately, after
-    the caller has already responded to the upload request (see
-    score_companies_in_background + controllers/icp_imports.py's
-    BackgroundTasks usage). That's what lets the upload endpoint return
-    quickly instead of the request hanging until every company is scored.
-
-    Returns (zi_to_company_id, signal_result, matching_ids) - signal_result
-    is {"inserted","skipped"} from extract_signals.
+    session: AsyncSession, organisation_id: UUID, raw_rows: list[dict]
+) -> dict[int, UUID]:
+    """The fast, synchronous half of a prospect upload: parse + upsert
+    company/contact identity data only (brief section 4). No ICP, no signals,
+    no scoring - external buying evidence (Serper research) and scoring are
+    the slow parts and run afterward in the background task, so the upload
+    endpoint returns immediately. Returns {zi_company_id: company_id}.
     """
-    zi_to_company_id = await upsert_rows(session, organisation_id, raw_rows)
-    signal_result = await extract_signals(session, organisation_id)
-    matches = await filter_companies(session, icp)
-    matching_ids = {c.company_id for c in matches}
-    return zi_to_company_id, signal_result, matching_ids
+    return await upsert_rows(session, organisation_id, raw_rows)
 
 
-async def score_companies_in_background(organisation_id: UUID, icp_id: UUID, import_batch_id: UUID) -> None:
-    """Runs as a FastAPI BackgroundTask, after the upload response has
-    already been sent - the request's DB session is closed by then, so this
-    opens its own (and re-fetches the ICP fresh in it, rather than reusing
-    an ORM object loaded in a different, now-closed session). Scores every
-    company in the org against this ICP (chunked/concurrent, progressively
-    committing - see lead_scorer.run_scoring), then flips the batch's
-    scoring_status to 'complete' with the real active/nurture counts, so the
-    Settings upload-history list and Enterprise List's per-upload filter can
-    tell "still scoring" apart from "done"."""
-    async with async_session_maker() as session:
-        icp = await get_icp_by_organisation(session, organisation_id, icp_id)
-        score_result = await run_scoring(session, organisation_id, company_ids=None, icp=icp)
-        await session.execute(
-            update(IcpImportBatch)
-            .where(IcpImportBatch.import_batch_id == import_batch_id)
-            .values(
-                active_count=score_result["active"],
-                nurture_count=score_result["nurture"],
-                scoring_status="complete",
+async def _company_ids_for_batch(session: AsyncSession, import_batch_id: UUID) -> list[UUID]:
+    """This batch's companies via the permanent membership table (item 5) -
+    never Company.import_batch_id, which a later re-upload overwrites."""
+    return list(
+        (
+            await session.execute(
+                select(CompanyImportBatch.company_id).where(
+                    CompanyImportBatch.import_batch_id == import_batch_id
+                )
             )
+        ).scalars().all()
+    )
+
+
+async def _cancel_requested(session: AsyncSession, import_batch_id: UUID) -> bool:
+    return (
+        await session.execute(
+            select(IcpImportBatch.cancel_requested_at).where(IcpImportBatch.import_batch_id == import_batch_id)
         )
-        await session.commit()
+    ).scalar() is not None
 
 
-async def matching_company_ids(session: AsyncSession, icp: IcpProfile) -> set[UUID]:
-    matches = await filter_companies(session, icp)
-    return {c.company_id for c in matches}
+async def score_companies_in_background(
+    organisation_id: UUID, workspace_id: UUID, import_batch_id: UUID
+) -> None:
+    """Runs as a FastAPI BackgroundTask after the upload response is sent (own
+    DB session). Scoped to THIS upload's companies via the membership table.
 
+    The entire pipeline is wrapped so the batch NEVER stays permanently
+    'pending' (brief item 6): on success it flips to 'complete' (or
+    'complete_with_warnings' if some companies' research failed), and on an
+    unhandled exception it flips to 'failed' with the error recorded. Per-stage
+    counts (researched / research-failures / llm-failures / scoring-failures)
+    and processing timestamps are persisted for observability.
 
-async def scores_for_companies(session: AsyncSession, company_ids: list[UUID]) -> dict[UUID, LeadScore]:
-    if not company_ids:
-        return {}
-    stmt = select(LeadScore).where(LeadScore.company_id.in_(company_ids))
-    rows = (await session.execute(stmt)).scalars().all()
-    return {row.company_id: row for row in rows}
-
-
-SCORE_COLUMNS = [
-    "Matches ICP",
-    "Gate Status",
-    "Gate 1 (AI Intent)",
-    "Gate 2 (Reachable)",
-    "Gate 3 (Economic Capacity)",
-    "Gate 4 (Active Signal)",
-    "Gate 5 (Recency)",
-    "Component Score",
-    "P(Convert)",
-    "Expected Deal Value (USD)",
-    "Lead Score",
-]
-
-
-def build_scored_workbook(
-    raw_rows: list[dict],
-    zi_to_company_id: dict[int, UUID],
-    scores: dict[UUID, LeadScore],
-    matching_ids: set[UUID],
-) -> bytes:
-    """Returns the uploaded rows with score columns appended, as raw .xlsx
-    bytes ready to stream back for download. Every row is still scored
-    regardless of ICP match (see run_scoring - scoring has no ICP
-    dependency), but the ICP is the actual target list a user is asking
-    for, so the output is ordered ICP matches first (ranked by lead_score
-    within that group), then non-matches after (also ranked by
-    lead_score) - not left in raw upload order.
+    Checks POST .../cancel's cancel_requested_at before each of the two major
+    stages (research, scoring) - cooperative/best-effort: a stage already in
+    flight runs to completion (its own per-company work is cheap relative to
+    a 1000-company batch), but the NEXT stage is skipped once cancellation is
+    seen, so a cancelled job stops making progress promptly without needing
+    per-company interruption plumbed through the concurrent research/scoring
+    gather calls.
     """
-    if not raw_rows:
-        header = []
-    else:
-        header = list(raw_rows[0].keys())
+    started = datetime.now(timezone.utc)
+    warnings: list[str] = []
+    research_summary: dict = {}
+    counts = {label: 0 for label in evidence_scorer.STATUS_TO_COUNT}
+    status = "failed"
+    error: str | None = None
+    log_ctx = {"job_id": str(import_batch_id), "stage": "job"}
+    logger.info("job started", extra=log_ctx)
 
-    scored_rows: list[tuple[bool, float | None, list]] = []
-    for row in raw_rows:
-        zi_company_id = mapper.parse_int(row.get("ZoomInfo Company ID"))
-        company_id = zi_to_company_id.get(zi_company_id)
-        score = scores.get(company_id) if company_id else None
-        matches_icp = company_id in matching_ids if company_id else False
+    try:
+        async with async_session_maker() as session:
+            company_id_list = await _company_ids_for_batch(session, import_batch_id)
 
-        base_values = [row.get(col) for col in header]
-        if score is None:
-            lead_score_value = None
-            score_values = [matches_icp, "not scored"] + [None] * 9
-        else:
-            lead_score_value = float(score.lead_score) if score.lead_score is not None else None
-            score_values = [
-                matches_icp,
-                score.gate_status,
-                score.gate_check_1,
-                score.gate_check_2,
-                score.gate_check_3,
-                score.gate_check_4,
-                score.gate_check_5,
-                float(score.component_score) if score.component_score is not None else None,
-                float(score.p_convert) if score.p_convert is not None else None,
-                float(score.expected_deal_value_usd) if score.expected_deal_value_usd is not None else None,
-                lead_score_value,
-            ]
-        scored_rows.append((matches_icp, lead_score_value, base_values + score_values))
+            if await _cancel_requested(session, import_batch_id):
+                await session.execute(
+                    update(IcpImportBatch)
+                    .where(IcpImportBatch.import_batch_id == import_batch_id)
+                    .values(
+                        scoring_status="complete",
+                        research_status="complete_with_warnings",
+                        processing_started_at=started,
+                        processing_completed_at=datetime.now(timezone.utc),
+                        processing_warnings=["Cancelled before processing started."],
+                    )
+                )
+                await session.commit()
+                return
 
-    # ICP matches first; unscored rows (lead_score_value None) sort to the
-    # bottom of their group instead of breaking the sort.
-    scored_rows.sort(key=lambda r: (not r[0], -(r[1] if r[1] is not None else float("-inf"))))
+            # Ensure a real Offering Profile (auto-sync if none/stale - item 11).
+            await ensure_offering_profile(session, organisation_id)
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Scored Companies"
-    ws.append(header + SCORE_COLUMNS)
-    for _, _, full_row in scored_rows:
-        ws.append(full_row)
+            research_summary = await search_signal_ingest.research_companies(
+                session, organisation_id, company_ids=company_id_list, import_batch_id=import_batch_id,
+            )
 
-    buffer = io.BytesIO()
-    wb.save(buffer)
-    return buffer.getvalue()
+            if await _cancel_requested(session, import_batch_id):
+                await session.execute(
+                    update(IcpImportBatch)
+                    .where(IcpImportBatch.import_batch_id == import_batch_id)
+                    .values(
+                        scoring_status="complete",
+                        research_status="complete_with_warnings",
+                        companies_researched=research_summary.get("successful", 0),
+                        research_failure_count=research_summary.get("research_failures", 0),
+                        llm_failure_count=research_summary.get("llm_failures", 0),
+                        processing_started_at=started,
+                        processing_completed_at=datetime.now(timezone.utc),
+                        processing_warnings=["Cancelled after research, before scoring."],
+                    )
+                )
+                await session.commit()
+                return
+
+            counts = await evidence_scorer.run_scoring(
+                session, organisation_id, company_ids=company_id_list, import_batch_id=import_batch_id,
+            )
+
+            signals_extracted = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(BuyingEvent)
+                    .join(CompanyImportBatch, CompanyImportBatch.company_id == BuyingEvent.company_id)
+                    .where(CompanyImportBatch.import_batch_id == import_batch_id)
+                )
+            ).scalar() or 0
+
+            failures = research_summary.get("failed", 0)
+            if failures:
+                warnings.append(f"{failures} company(ies) failed research (Serper/LLM unavailable)")
+            if research_summary.get("serper_not_configured"):
+                warnings.append("Serper not configured - no external evidence gathered")
+            status = "complete_with_warnings" if warnings else "complete"
+
+            await session.execute(
+                update(IcpImportBatch)
+                .where(IcpImportBatch.import_batch_id == import_batch_id)
+                .values(
+                    signals_extracted=signals_extracted,
+                    companies_researched=research_summary.get("successful", 0),
+                    research_failure_count=research_summary.get("research_failures", 0),
+                    llm_failure_count=research_summary.get("llm_failures", 0),
+                    scoring_failure_count=counts.get("_failures", 0),
+                    sales_ready_count=counts["Sales Ready"],
+                    high_priority_count=counts["High Priority"],
+                    warm_count=counts["Warm"],
+                    monitor_count=counts["Monitor"],
+                    low_priority_count=counts["Low Priority"],
+                    scoring_status="complete",
+                    research_status=status,
+                    processing_started_at=started,
+                    processing_completed_at=datetime.now(timezone.utc),
+                    processing_warnings=warnings or None,
+                )
+            )
+            await session.commit()
+        logger.info("job finished", extra={**log_ctx, "status": status})
+    except Exception as exc:  # never leave the batch permanently pending
+        error = f"{type(exc).__name__}: {exc}"[:1000]
+        logger.exception("job failed", extra=log_ctx)
+        try:
+            async with async_session_maker() as session:
+                await session.execute(
+                    update(IcpImportBatch)
+                    .where(IcpImportBatch.import_batch_id == import_batch_id)
+                    .values(
+                        scoring_status="complete",
+                        research_status="failed",
+                        processing_started_at=started,
+                        processing_completed_at=datetime.now(timezone.utc),
+                        processing_error=error,
+                        processing_warnings=warnings or None,
+                    )
+                )
+                await session.commit()
+        except Exception:
+            pass
+
+
+async def _refresh_batch_sales_status_counts(session: AsyncSession, import_batch_id: UUID) -> None:
+    """Re-tallies the WHOLE batch's sales-status counts from current
+    LeadScore state - used after a partial retry, since the retry only
+    reprocesses the failed subset but the batch's aggregate counts should
+    reflect all of its companies, not just the ones just retried."""
+    company_ids_subq = select(CompanyImportBatch.company_id).where(
+        CompanyImportBatch.import_batch_id == import_batch_id
+    )
+    rows = (
+        await session.execute(select(LeadScore.sales_status).where(LeadScore.company_id.in_(company_ids_subq)))
+    ).scalars().all()
+    counts = {label: 0 for label in evidence_scorer.STATUS_TO_COUNT}
+    for status in rows:
+        if status in counts:
+            counts[status] += 1
+    await session.execute(
+        update(IcpImportBatch)
+        .where(IcpImportBatch.import_batch_id == import_batch_id)
+        .values(
+            sales_ready_count=counts["Sales Ready"],
+            high_priority_count=counts["High Priority"],
+            warm_count=counts["Warm"],
+            monitor_count=counts["Monitor"],
+            low_priority_count=counts["Low Priority"],
+        )
+    )
+
+
+async def retry_failed_companies_in_background(
+    organisation_id: UUID, import_batch_id: UUID, company_ids: list[UUID]
+) -> None:
+    """POST .../retry-failed's background work: re-runs research+scoring for
+    exactly the given (previously-failed, non-permanent) companies, then
+    refreshes the whole batch's aggregate sales-status counts. Companies not
+    in `company_ids` are untouched - a retry never re-processes already-
+    completed work (brief: idempotent, no duplicate processing)."""
+    log_ctx = {"job_id": str(import_batch_id), "stage": "retry"}
+    logger.info("retry started, %d companies", len(company_ids), extra=log_ctx)
+    try:
+        async with async_session_maker() as session:
+            await ensure_offering_profile(session, organisation_id)
+            await search_signal_ingest.research_companies(
+                session, organisation_id, company_ids=company_ids, import_batch_id=import_batch_id,
+            )
+            await evidence_scorer.run_scoring(
+                session, organisation_id, company_ids=company_ids, import_batch_id=import_batch_id,
+            )
+            await _refresh_batch_sales_status_counts(session, import_batch_id)
+            await session.commit()
+        logger.info("retry finished", extra=log_ctx)
+    except Exception:
+        logger.exception("retry failed", extra=log_ctx)
 
 
 async def record_import_batch(
     session: AsyncSession,
-    icp_id: UUID,
+    workspace_id: UUID,
     file_names: list[str],
     total_rows: int,
     zi_to_company_id: dict[int, UUID],
-    signal_result: dict,
-    matching_ids: set[UUID],
 ) -> IcpImportBatch:
-    """Persists one upload event for the Settings > ICP Data page's history
-    list - a permanent audit record, separate from Company/Signal/LeadScore
-    which store the *result* of uploads, not that an upload happened.
+    """Persists one prospect-upload event for the Settings prospect-data
+    history (and Enterprise List's per-upload filter) - a permanent audit
+    record, workspace-scoped, with NO ICP (brief section 7).
 
-    Created with scoring_status='pending' and active/nurture at 0 - scoring
-    runs afterward as a background task (see score_companies_in_background),
-    which updates this same row with the real counts and flips the status to
-    'complete' once it finishes."""
+    Created with research_status='pending' and zero counts - research +
+    scoring run afterward as a background task (score_companies_in_background),
+    which fills the counts and flips the status. Records membership in
+    company_import_batch (the permanent M:N table - brief item 5) so a later
+    re-upload never erases this batch's membership, and also stamps the legacy
+    Company.import_batch_id for the "most recent upload" convenience view."""
     batch = IcpImportBatch(
-        icp_id=icp_id,
+        workspace_id=workspace_id,
+        icp_id=None,
         file_names=file_names,
         files_processed=len(file_names),
         total_rows=total_rows,
         companies_ingested=len(zi_to_company_id),
-        signals_extracted=signal_result["inserted"],
-        matched_icp_count=len(matching_ids),
+        signals_extracted=0,
+        matched_icp_count=0,  # legacy column, unused by the new pipeline
         active_count=0,
         nurture_count=0,
         scoring_status="pending",
+        research_status="pending",
     )
     session.add(batch)
     await session.commit()
@@ -299,6 +352,14 @@ async def record_import_batch(
 
     company_ids = list(zi_to_company_id.values())
     if company_ids:
+        # Permanent membership (item 5) - one row per (company, batch), never
+        # overwritten by a later upload.
+        await session.execute(
+            pg_insert(CompanyImportBatch)
+            .values([{"company_id": cid, "import_batch_id": batch.import_batch_id} for cid in company_ids])
+            .on_conflict_do_nothing(index_elements=["company_id", "import_batch_id"])
+        )
+        # Legacy "most recent upload" pointer, kept for convenience only.
         await session.execute(
             update(Company)
             .where(Company.company_id.in_(company_ids))
@@ -309,67 +370,60 @@ async def record_import_batch(
     return batch
 
 
-async def list_import_batches(session: AsyncSession, workspace_id: UUID) -> list[tuple[IcpImportBatch, str | None]]:
-    """Every upload ever made against any ICP in this workspace, newest
-    first, paired with that ICP's name (joined in, not a column on the
-    batch itself - an ICP can be renamed/reused after the fact)."""
+async def list_import_batches(session: AsyncSession, workspace_id: UUID) -> list[IcpImportBatch]:
+    """Every prospect upload in this workspace, newest first. Workspace-scoped
+    directly now (icp_import_batch.workspace_id) - no ICP join."""
     stmt = (
-        select(IcpImportBatch, IcpProfile.name)
-        .join(IcpProfile, IcpProfile.icp_id == IcpImportBatch.icp_id)
-        .where(IcpProfile.workspace_id == workspace_id)
+        select(IcpImportBatch)
+        .where(IcpImportBatch.workspace_id == workspace_id)
         .order_by(IcpImportBatch.created_at.desc())
     )
-    return (await session.execute(stmt)).all()
+    return (await session.execute(stmt)).scalars().all()
 
 
-EXPORT_COMPANY_COLUMNS = [
-    "Company Name",
-    "Domain",
-    "Industry",
-    "City",
-    "State",
-    "Country",
-    "Employees",
-    "Revenue (USD)",
+# Evidence-based export schema (brief section 23). No ICP/gate/D1-D7/component
+# columns - those are gone from the active product.
+EXPORT_COLUMNS = [
+    "Company Name", "Domain", "Industry", "Location", "Employees", "Revenue",
+    "Lead Score", "Sales Status", "Confidence", "Buying Evidence", "Contact Access",
+    "Negative Penalty", "Best XSparks Offering", "Why Now", "Recommended Action",
+    "Expected Deal Min", "Expected Deal Max", "Expected Deal Value", "Deal Value Basis",
+    "Last Scored",
 ]
 
 
+def _num(value) -> float | None:
+    return float(value) if value is not None else None
+
+
 def build_company_export_workbook(rows: list[tuple[Company, LeadScore | None]]) -> bytes:
-    """Company Directory export for the Enterprise List's "Export" button -
-    real company fields plus whatever scoring exists (score is None for a
-    company that hasn't been through run_scoring yet)."""
+    """Enterprise List "Export" - real company fields plus the evidence-based
+    score (None columns for a company not yet scored)."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Companies"
-    ws.append(EXPORT_COMPANY_COLUMNS + SCORE_COLUMNS[1:])  # drop "Matches ICP" - no ICP context on a bare row
+    ws.append(EXPORT_COLUMNS)
 
     for company, score in rows:
-        base_values = [
-            company.company_name,
-            company.company_domain,
-            (company.industries or [None])[0],
-            company.city,
-            company.state,
-            company.country,
-            company.employee_count,
-            company.revenue_usd,
+        location = ", ".join(p for p in [company.city, company.state, company.country] if p) or None
+        base = [
+            company.company_name, company.company_domain,
+            (company.industries or [None])[0] if company.industries else None,
+            location, company.employee_count, company.revenue_usd,
         ]
         if score is None:
-            score_values = ["not scored"] + [None] * 9
+            score_values = [None] * (len(EXPORT_COLUMNS) - len(base))
         else:
             score_values = [
-                score.gate_status,
-                score.gate_check_1,
-                score.gate_check_2,
-                score.gate_check_3,
-                score.gate_check_4,
-                score.gate_check_5,
-                float(score.component_score) if score.component_score is not None else None,
-                float(score.p_convert) if score.p_convert is not None else None,
-                float(score.expected_deal_value_usd) if score.expected_deal_value_usd is not None else None,
-                float(score.lead_score) if score.lead_score is not None else None,
+                _num(score.lead_score), score.sales_status, score.confidence_label,
+                _num(score.buying_evidence_score), _num(score.contact_access_score),
+                _num(score.negative_event_score), score.best_offering, score.why_now,
+                score.recommended_action, _num(score.expected_deal_min_usd),
+                _num(score.expected_deal_max_usd), _num(score.expected_deal_value_usd),
+                score.deal_value_basis,
+                score.scored_at.isoformat() if score.scored_at else None,
             ]
-        ws.append(base_values + score_values)
+        ws.append(base + score_values)
 
     buffer = io.BytesIO()
     wb.save(buffer)

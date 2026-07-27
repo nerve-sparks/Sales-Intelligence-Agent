@@ -139,7 +139,7 @@ function Header({
 
   const scored = isScored(score);
   const accountScore = scored && score.lead_score !== null ? Math.round(score.lead_score) : null;
-  const gateStatus = scored ? score.gate_status : null;
+  const salesStatus = scored ? score.sales_status : null;
   const reachable = members.filter((m) => m.email).length;
 
   const stats: { label: string; value: string; badge?: { label: string; tone: string } }[] = [
@@ -173,7 +173,7 @@ function Header({
           <div>
             <div className="flex flex-wrap items-center gap-[10px]">
               <h2 className="m-0 text-[20px] font-bold text-[#0f172a]">{name}</h2>
-              {gateStatus && <Badge label={gateStatus === "active" ? "Active" : "Nurture"} tone={gateStatus === "active" ? "green" : "orange"} />}
+              {salesStatus && <Badge label={salesStatus} tone={salesStatus === "Sales Ready" || salesStatus === "High Priority" ? "green" : "orange"} />}
             </div>
             <p className="m-0 mt-[5px] flex flex-wrap items-center gap-[8px] text-[13px] text-[#64748b]">
               <span>{industry}</span>

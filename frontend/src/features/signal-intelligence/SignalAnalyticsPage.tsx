@@ -48,7 +48,7 @@ function toKpis(data: SignalStatsOut): Kpi[] {
   const actionableRate = data.total > 0 ? Math.round((data.actionable_count / data.total) * 100) : 0;
   return [
     { icon: Activity, bg: "#f3e9ff", color: "#7c3aed", label: "Total Signals", value: data.total.toLocaleString() },
-    { icon: Target, bg: "#e7f8ef", color: "#16a34a", label: "High-Intent Signals", value: data.high_intent.toLocaleString() },
+    { icon: Target, bg: "#e7f8ef", color: "#16a34a", label: "High-Relevance Signals", value: data.high_relevance.toLocaleString() },
     { icon: Building2, bg: "#e6f0ff", color: "#2563eb", label: "Companies with Signals", value: data.company_count.toLocaleString() },
     { icon: Users, bg: "#fff1e3", color: "#f97316", label: "Decision-Makers Reached", value: data.executives_impacted.toLocaleString() },
     { icon: Gauge, bg: "#ffe9f0", color: "#e11d48", label: "Avg. Confidence", value: data.avg_confidence !== null ? `${Math.round(data.avg_confidence * 100)}%` : "—" },
@@ -213,7 +213,7 @@ type CategorySegment = { label: string; value: number; pct: string; color: strin
 function toCategorySegments(data: SignalStatsOut): CategorySegment[] {
   const total = data.by_category.reduce((sum, c) => sum + c.count, 0) || 1;
   return data.by_category.map((c, i) => ({
-    label: categoryLabel(c.signal_category),
+    label: categoryLabel(c.signal_category ?? ""),
     value: c.count,
     pct: `${((c.count / total) * 100).toFixed(1)}%`,
     color: CATEGORY_COLORS[i % CATEGORY_COLORS.length],
@@ -260,7 +260,7 @@ function CategoryCard({ segments, total }: { segments: CategorySegment[]; total:
 }
 
 /* ------------------------------------------------------------------ */
-/* Intent Score Distribution (bar chart)                               */
+/* Relevance Score Distribution (bar chart)                               */
 /* ------------------------------------------------------------------ */
 
 type HistogramBar = { label: string; value: number };
@@ -332,7 +332,7 @@ function DistributionChart({ bars }: { bars: HistogramBar[] }) {
 function DistributionCard({ bars }: { bars: HistogramBar[] }) {
   return (
     <section className="flex flex-col rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <CardHead title="Intent Score Distribution" />
+      <CardHead title="Relevance Score Distribution" />
       {bars.every((b) => b.value === 0) ? (
         <div className="flex flex-1 items-center justify-center py-[60px] text-center text-[13px] text-[#94a3b8]">No signals yet.</div>
       ) : (
@@ -345,29 +345,29 @@ function DistributionCard({ bars }: { bars: HistogramBar[] }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Signals by Intent Level (donut)                                     */
+/* Signals by Relevance Level (donut)                                     */
 /* ------------------------------------------------------------------ */
 
-type IntentSegment = { label: string; value: number; pct: string; color: string };
+type RelevanceSegment = { label: string; value: number; pct: string; color: string };
 
-/* Real tiers use the same 0.60/0.40 confidence thresholds as everywhere
- * else on the Signal Intelligence pages - 3 tiers, not 4, since the
- * backend doesn't distinguish a separate "Very Low" bucket. */
-function toIntentSegments(data: SignalStatsOut): IntentSegment[] {
+/* Real tiers use the same 0.65/0.40 xsparks_relevance thresholds as
+ * buying_event_directory.HIGH_RELEVANCE/MEDIUM_RELEVANCE - 3 tiers, not 4,
+ * since the backend doesn't distinguish a separate "Very Low" bucket. */
+function toRelevanceSegments(data: SignalStatsOut): RelevanceSegment[] {
   const total = data.total || 1;
   return [
-    { label: "High Intent", value: data.high_intent, pct: `${((data.high_intent / total) * 100).toFixed(1)}%`, color: "#7c3aed" },
-    { label: "Medium Intent", value: data.medium_intent, pct: `${((data.medium_intent / total) * 100).toFixed(1)}%`, color: "#f97316" },
-    { label: "Low Intent", value: data.low_intent, pct: `${((data.low_intent / total) * 100).toFixed(1)}%`, color: "#2563eb" },
+    { label: "High Relevance", value: data.high_relevance, pct: `${((data.high_relevance / total) * 100).toFixed(1)}%`, color: "#7c3aed" },
+    { label: "Medium Relevance", value: data.medium_relevance, pct: `${((data.medium_relevance / total) * 100).toFixed(1)}%`, color: "#f97316" },
+    { label: "Low Relevance", value: data.low_relevance, pct: `${((data.low_relevance / total) * 100).toFixed(1)}%`, color: "#2563eb" },
   ];
 }
 
-function IntentLevelCard({ segments, total }: { segments: IntentSegment[]; total: number }) {
+function RelevanceLevelCard({ segments, total }: { segments: RelevanceSegment[]; total: number }) {
   const highMediumPct = total > 0 ? (((segments[0]?.value ?? 0) + (segments[1]?.value ?? 0)) / total) * 100 : 0;
 
   return (
     <section className="flex flex-col rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <CardHead title="Signals by Intent Level" />
+      <CardHead title="Signals by Relevance Level" />
       <div className="mt-[16px] flex flex-1 flex-col items-center gap-[20px] sm:flex-row">
         <div className="relative size-[160px] shrink-0">
           <Donut
@@ -396,7 +396,7 @@ function IntentLevelCard({ segments, total }: { segments: IntentSegment[]; total
         </div>
       </div>
       <div className="mt-[16px] border-t border-[#f1f5f9] pt-[14px] text-center text-[13px] font-semibold text-[#16a34a]">
-        High &amp; Medium Intent {highMediumPct.toFixed(1)}%
+        High & Medium Relevance {highMediumPct.toFixed(1)}%
       </div>
     </section>
   );
@@ -513,7 +513,7 @@ function GeographicCard({ countries, geoData }: { countries: CountryRow[]; geoDa
 /* ------------------------------------------------------------------ */
 
 const ZERO_STATS: SignalStatsOut = {
-  total: 0, high_intent: 0, medium_intent: 0, low_intent: 0, company_count: 0, avg_confidence: 0,
+  total: 0, high_relevance: 0, medium_relevance: 0, low_relevance: 0, company_count: 0, avg_confidence: 0,
   executives_impacted: 0, actionable_count: 0, by_category: [], trend: [], top_signals: [], histogram: [], by_country: [], by_source: [],
 };
 
@@ -536,11 +536,11 @@ export function SignalAnalyticsPage() {
   const overTimeLabels = data.trend.map((p) => p.date);
   const overTimeSeries: TrendSeries[] = [
     { label: "Total Signals", color: "#7c3aed", values: data.trend.map((p) => p.total) },
-    { label: "High Intent Signals", color: "#16a34a", values: data.trend.map((p) => p.high) },
+    { label: "High Relevance Signals", color: "#16a34a", values: data.trend.map((p) => p.high) },
   ];
   const categorySegments = toCategorySegments(data);
   const distributionBars = toDistributionBars(data);
-  const intentSegments = toIntentSegments(data);
+  const relevanceSegments = toRelevanceSegments(data);
   const countries = toCountries(data);
   const geoData = toGeoData(countries);
 
@@ -565,7 +565,7 @@ export function SignalAnalyticsPage() {
           <div className="mt-[20px] grid grid-cols-1 gap-[20px] xl:grid-cols-3">
             <SignalsOverTimeCard hasData={hasTrend} labels={overTimeLabels} series={overTimeSeries} />
             <CategoryCard segments={categorySegments} total={data.total} />
-            <IntentLevelCard segments={intentSegments} total={data.total} />
+            <RelevanceLevelCard segments={relevanceSegments} total={data.total} />
           </div>
 
           <div className="mt-[20px] grid grid-cols-1 gap-[20px] lg:grid-cols-2">

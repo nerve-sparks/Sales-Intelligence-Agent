@@ -4,12 +4,16 @@ import countriesUrl from "../../assets/globe/countries-110m.json?url";
 import earthNight from "../../assets/globe/earth-night.jpg";
 import earthTopology from "../../assets/globe/earth-topology.png";
 
-/* Zone colors mirror the Lead Opportunity Map legend. */
+/* Zone colors + boundaries mirror the Lead Opportunity Map legend and the
+ * real sales_status bands (evidence_scorer.sales_status /
+ * cfg.SALES_STATUS_BANDS): Sales Ready 85+, High Priority 70-84, Warm 50-69,
+ * Monitor 30-49, Low Priority 0-29. */
 const ZONE = {
-  hot: "#ef4444",
+  sales_ready: "#16a34a",
+  high_priority: "#22c55e",
   warm: "#f97316",
-  emerging: "#3b82f6",
-  monitor: "#94a3b8",
+  monitor: "#eab308",
+  low_priority: "#94a3b8",
 } as const;
 type Zone = keyof typeof ZONE;
 
@@ -18,33 +22,33 @@ type Feature = { properties: Record<string, string | number> };
 export type CountryLeadScore = { country: string; avg_lead_score: number; company_count: number };
 
 const dummyPoints: LeadPoint[] = [
-  { lat: 37.77, lng: -122.42, zone: "hot", label: "San Francisco" },
-  { lat: 40.71, lng: -74.0, zone: "hot", label: "New York" },
-  { lat: 12.97, lng: 77.59, zone: "hot", label: "Bengaluru" },
-  { lat: 19.08, lng: 72.88, zone: "warm", label: "Mumbai" },
-  { lat: 51.51, lng: -0.13, zone: "warm", label: "London" },
-  { lat: 1.35, lng: 103.82, zone: "warm", label: "Singapore" },
+  { lat: 37.77, lng: -122.42, zone: "sales_ready", label: "San Francisco" },
+  { lat: 40.71, lng: -74.0, zone: "sales_ready", label: "New York" },
+  { lat: 12.97, lng: 77.59, zone: "sales_ready", label: "Bengaluru" },
+  { lat: 19.08, lng: 72.88, zone: "high_priority", label: "Mumbai" },
+  { lat: 51.51, lng: -0.13, zone: "high_priority", label: "London" },
+  { lat: 1.35, lng: 103.82, zone: "high_priority", label: "Singapore" },
   { lat: 32.08, lng: 34.78, zone: "warm", label: "Tel Aviv" },
-  { lat: 52.52, lng: 13.4, zone: "emerging", label: "Berlin" },
-  { lat: 43.65, lng: -79.38, zone: "emerging", label: "Toronto" },
-  { lat: 35.68, lng: 139.65, zone: "emerging", label: "Tokyo" },
-  { lat: -23.55, lng: -46.63, zone: "monitor", label: "São Paulo" },
-  { lat: -33.87, lng: 151.21, zone: "monitor", label: "Sydney" },
+  { lat: 52.52, lng: 13.4, zone: "warm", label: "Berlin" },
+  { lat: 43.65, lng: -79.38, zone: "monitor", label: "Toronto" },
+  { lat: 35.68, lng: 139.65, zone: "monitor", label: "Tokyo" },
+  { lat: -23.55, lng: -46.63, zone: "low_priority", label: "São Paulo" },
+  { lat: -33.87, lng: 151.21, zone: "low_priority", label: "Sydney" },
 ];
 
 /* Countries to shade, keyed by Natural Earth `ADMIN` name. Fallback shown
  * until real per-country signal data loads (see toRealPoints below). */
 const dummyHighlight: Record<string, Zone> = {
-  "United States of America": "hot",
-  India: "hot",
-  "United Kingdom": "warm",
-  Singapore: "warm",
+  "United States of America": "sales_ready",
+  India: "sales_ready",
+  "United Kingdom": "high_priority",
+  Singapore: "high_priority",
   Israel: "warm",
-  Germany: "emerging",
-  Canada: "emerging",
-  Japan: "emerging",
-  Brazil: "monitor",
-  Australia: "monitor",
+  Germany: "warm",
+  Canada: "monitor",
+  Japan: "monitor",
+  Brazil: "low_priority",
+  Australia: "low_priority",
 };
 
 /* Approximate geographic centroids for the country names that actually
@@ -71,14 +75,15 @@ const COUNTRY_CENTROID: Record<string, { lat: number; lng: number; admin: string
 };
 
 /* Real avg LeadScore.lead_score per country -> globe points + polygon
- * shading. 80/60 are the same real tier boundaries used everywhere else in
- * the app (company_directory.HIGH_SCORE/MEDIUM_SCORE, the Enterprise List
- * row badges) - 40 fills out the 4th zone the legend already has. */
+ * shading, using the same 5 sales-status thresholds as evidence_scorer.py's
+ * sales_status() / cfg.SALES_STATUS_BANDS - not the old 4-zone hot/warm/
+ * emerging/monitor split. */
 function zoneForScore(score: number): Zone {
-  if (score >= 80) return "hot";
-  if (score >= 60) return "warm";
-  if (score >= 40) return "emerging";
-  return "monitor";
+  if (score >= 85) return "sales_ready";
+  if (score >= 70) return "high_priority";
+  if (score >= 50) return "warm";
+  if (score >= 30) return "monitor";
+  return "low_priority";
 }
 
 type CountryInfo = { country: string; companyCount: number; avgScore: number };

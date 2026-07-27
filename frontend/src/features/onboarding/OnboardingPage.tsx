@@ -3,23 +3,16 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock3,
-  Code2,
   BarChart3,
   Building2,
   Database,
-  Factory,
   Filter,
-  GraduationCap,
-  HeartPulse,
-  Landmark,
   Mail,
   MoreVertical,
-  PlayCircle,
   RadioTower,
   RefreshCcw,
   Search,
   ShieldCheck,
-  ShoppingCart,
   Target,
   TrendingUp,
   Upload,
@@ -40,9 +33,10 @@ import {
   setOrganisationId as setSessionOrganisationId,
   setWorkspaceId as setSessionWorkspaceId,
 } from "../../lib/session";
-import { createIcp, listIcps, listImportBatches, type IcpOut, type ImportBatchOut } from "../../api/icp";
+import { listImportBatches, type ImportBatchOut } from "../../api/icp";
 import { createTrigger, listTriggers, type TriggerCreate, type TriggerOut } from "../../api/triggers";
-import { uploadExcel } from "../../api/icpImports";
+import { uploadProspects } from "../../api/prospectImports";
+import { OfferingProfileCard } from "../../components/OfferingProfileCard";
 import { useAuth } from "../../lib/useAuth";
 import { resolvePostLoginPath } from "../../lib/postLogin";
 import goLiveRocketImage from "../../assets/figma/onboarding/go-live-rocket.png";
@@ -144,11 +138,6 @@ const initialFormState: OnboardingFormState = {
   company_description: "",
 };
 
-// Still used by ICP Generation's Company Size/Annual Revenue fields further
-// below - Organization Setup no longer has its own Company Size/Annual
-// Revenue dropdowns.
-const COMPANY_SIZE_OPTIONS = ["1 - 10", "11 - 50", "51 - 200", "201 - 500", "501 - 1000", "1000+"];
-const ANNUAL_REVENUE_OPTIONS = ["<$1M", "$1M - $10M", "$10M - $50M", "$50M - $100M", "$100M - $250M", "$250M+"];
 // "Department" (Workspace Setup) maps to Workspace.purpose - a real column
 // the onboarding UI never collected before (workspace creation always sent
 // purpose: null). Options depend on the industry chosen in Organization
@@ -162,78 +151,9 @@ function getDepartmentOptions(industry: string): string[] {
   return DEPARTMENT_OPTIONS_BY_INDUSTRY[industry] ?? DEFAULT_DEPARTMENT_OPTIONS;
 }
 
-function formatMoney(value: number | null): string {
-  if (value === null) return "";
-  return value >= 1_000_000 ? `$${(value / 1_000_000).toFixed(1)}M` : `$${value.toLocaleString()}`;
-}
-
-function formatRange(min: number | null, max: number | null, formatter: (v: number | null) => string): string {
-  if (min === null && max === null) return "Any";
-  if (min !== null && max === null) return `${formatter(min)}+`;
-  if (min === null && max !== null) return `Up to ${formatter(max)}`;
-  return `${formatter(min)} – ${formatter(max)}`;
-}
-
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
-}
-
-/* ICP Generation step - maps to POST /workspaces/{workspace_id}/icp
- * (IcpProfile: name/industries/employee_min/max/revenue_min/max_usd/
- * countries/technologies/departments). Growth Stage, Business Model, Pain
- * Points, and Business Goals were removed entirely - none of them have a
- * backend column on IcpProfile, so they were either required-but-discarded
- * or silently discarded on submit. Buying Committee (buying_committee_
- * personas) is intentionally not collected here - still editable later from
- * Settings > ICP Data Management. */
-type IcpFormState = {
-  industry: string;
-  company_size: string;
-  annual_revenue: string;
-  headquarters_countries: string[];
-  technologies: string;
-  departments: string[];
-};
-
-const initialIcpFormState: IcpFormState = {
-  industry: "",
-  company_size: "",
-  annual_revenue: "",
-  headquarters_countries: [],
-  technologies: "",
-  departments: [],
-};
-
-// Real, distinct Company.country values pulled from actual uploaded data
-// (same sourcing approach as the industries list above) - the previous list
-// included "Brazil"/"Japan" (0 real companies in either) and was missing 7
-// countries that real data actually has (Russia, Belgium, Ireland, Denmark,
-// Singapore, Sweden, Finland, France).
-const ICP_COUNTRY_OPTIONS = [
-  "United States", "Canada", "United Kingdom", "India", "Australia",
-  "Germany", "Israel", "Russia", "Belgium", "Ireland", "Denmark",
-  "Singapore", "Sweden", "Finland", "France",
-];
-
-function parseEmployeeRange(band: string): { min: number | null; max: number | null } {
-  if (band === "1000+") {
-    return { min: 1000, max: null };
-  }
-  const match = band.match(/(\d+)\s*-\s*(\d+)/);
-  return match ? { min: Number(match[1]), max: Number(match[2]) } : { min: null, max: null };
-}
-
-function parseRevenueRange(band: string): { min: number | null; max: number | null } {
-  const toUsd = (v: string) => Number(v.replace(/[^0-9.]/g, "")) * 1_000_000;
-  if (band === "<$1M") {
-    return { min: 0, max: 1_000_000 };
-  }
-  if (band === "$250M+") {
-    return { min: 250_000_000, max: null };
-  }
-  const match = band.match(/\$([\d.]+)M\s*-\s*\$([\d.]+)M/);
-  return match ? { min: toUsd(match[1]), max: toUsd(match[2]) } : { min: null, max: null };
 }
 
 const steps = [
@@ -242,7 +162,7 @@ const steps = [
   ["Team", "Invitations"],
   ["Data Source", "Setup"],
   ["Trigger", "Generation"],
-  ["ICP", "Generation"],
+  ["Offering &", "Prospect Data"],
   ["Business", "Discovery"],
   ["Go", "Live"],
 ];
@@ -307,81 +227,6 @@ const invitedMembers = [
     status: "Not Sent",
     statusTone: "idle",
     avatarClassName: "bg-[#cffafe] text-[#0284c7]",
-  },
-];
-
-// title is the real, exact ZoomInfo "Primary Industry" string (used as-is
-// for the ICP dropdown below) - the earlier version of this list used
-// marketing labels like "Software & SaaS" that never matched any real
-// company (ZoomInfo's actual value is just "Software"), silently zeroing
-// out every ICP that used them.
-const industries = [
-  {
-    title: "Software",
-    text: "Software, SaaS, Cloud Services, AI/ML, and related platforms.",
-    icon: Code2,
-    selected: true,
-    iconClassName: "bg-[#dbeafe] text-[#005bff]",
-  },
-  {
-    title: "Finance",
-    text: "Banking, Insurance, FinTech, Investment, and Financial Services.",
-    icon: Landmark,
-    iconClassName: "bg-[#dcfce7] text-[#16a34a]",
-  },
-  {
-    title: "Hospitals & Physicians Clinics",
-    text: "Healthcare, Medical Devices, Pharma, Biotech, and HealthTech.",
-    icon: HeartPulse,
-    iconClassName: "bg-[#f3e8ff] text-[#7c3aed]",
-  },
-  {
-    title: "Manufacturing",
-    text: "Industrial, Automation, Machinery, and Manufacturing.",
-    icon: Factory,
-    iconClassName: "bg-[#fee2e2] text-[#f75317]",
-  },
-  {
-    title: "Retail",
-    text: "Retail, E-commerce, Marketplaces, and Consumer Goods.",
-    icon: ShoppingCart,
-    iconClassName: "bg-[#fce7f3] text-[#db2777]",
-  },
-  {
-    title: "Business Services",
-    text: "IT Services, Consulting, System Integrators, and Managed Services.",
-    icon: Code2,
-    iconClassName: "bg-[#cffafe] text-[#0891b2]",
-  },
-  {
-    title: "Education",
-    text: "E-learning, EdTech, Schools, Universities, and Training.",
-    icon: GraduationCap,
-    iconClassName: "bg-[#f3e8ff] text-[#9333ea]",
-  },
-  {
-    title: "Real Estate",
-    text: "Real Estate, Construction, PropTech, and Facility Management.",
-    icon: Landmark,
-    iconClassName: "bg-[#dbeafe] text-[#2563eb]",
-  },
-  {
-    title: "Media & Internet",
-    text: "Media, Entertainment, Publishing, Gaming, and Streaming.",
-    icon: PlayCircle,
-    iconClassName: "bg-[#fee2e2] text-[#f75317]",
-  },
-  {
-    title: "Telecommunications",
-    text: "Telecommunications, Networking, and Communication Services.",
-    icon: RadioTower,
-    iconClassName: "bg-[#cffafe] text-[#0891b2]",
-  },
-  {
-    title: "Energy, Utilities & Waste",
-    text: "Energy, Oil & Gas, Utilities, Renewable Energy, and Cleantech.",
-    icon: Zap,
-    iconClassName: "bg-[#fef3c7] text-[#f59e0b]",
   },
 ];
 
@@ -492,26 +337,26 @@ const DISCOVERY_STAGE_DEFS = [
     detail: (s: ImportBatchOut) => `${s.companies_ingested} companies saved`,
   },
   {
-    name: "Buying Signals Extracted",
-    description: "Classifying news and scoop rows into buying signals",
+    name: "Buying Evidence Researched",
+    description: "Live web research via Serper, classified into canonical buying events",
     icon: RadioTower,
     iconClassName: "bg-[#dbeafe] text-[#2563eb]",
-    detail: (s: ImportBatchOut) => `${s.signals_extracted} signals extracted`,
+    detail: (s: ImportBatchOut) => `${s.signals_extracted} buying events found`,
   },
   {
     name: "Lead Scores Computed",
-    description: "Scoring every company across the 7-dimension model",
+    description: "Scoring every company on buying evidence, contact access, and negative signals",
     icon: BarChart3,
     iconClassName: "bg-[#fef3c7] text-[#b45309]",
     isScoringStage: true,
-    detail: (s: ImportBatchOut) => `${s.active_count} active, ${s.nurture_count} nurture`,
+    detail: (s: ImportBatchOut) => `${s.sales_ready_count} sales ready, ${s.high_priority_count} high priority`,
   },
   {
-    name: "ICP Filtering Applied",
-    description: "Matching ingested companies against your ICP criteria in SQL",
+    name: "Prospects Ranked",
+    description: "Ranking every company by lead score - no ICP filtering, every company scored",
     icon: Target,
     iconClassName: "bg-[#eef2ff] text-[#4f46e5]",
-    detail: (s: ImportBatchOut) => `${s.matched_icp_count} companies matched your ICP`,
+    detail: (s: ImportBatchOut) => `${s.warm_count} warm, ${s.monitor_count} monitor, ${s.low_priority_count} low`,
   },
 ];
 
@@ -530,7 +375,7 @@ const goLiveFeatures = [
   },
   {
     title: "Smart Outreach",
-    text: "Personalized outreach sequences tailored to your ICP.",
+    text: "Personalized outreach sequences tailored to each prospect's buying evidence.",
     icon: Target,
     className: "bg-[#faf5ff] text-[#7c3aed]",
   },
@@ -560,7 +405,7 @@ const setupSummaryItems = [
   "Team Invitations",
   "Industry Selection",
   "Business Discovery",
-  "ICP Generation",
+  "Offering & Prospect Data",
   "Trigger Generation",
   "Data Source Setup",
   "Go Live",
@@ -684,95 +529,6 @@ function SelectField({ icon, label, required, value, onChange, options }: Select
                 {option}
               </button>
             ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function MultiSelectField({
-  icon,
-  label,
-  required,
-  values,
-  onChange,
-  options,
-  humanize,
-}: {
-  icon: string;
-  label: string;
-  required?: boolean;
-  values: string[];
-  onChange: (values: string[]) => void;
-  options: string[];
-  humanize?: (value: string) => string;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const display = humanize ?? ((v: string) => v);
-
-  useEffect(() => {
-    if (!open) return;
-    const onOutsideClick = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onOutsideClick);
-    return () => document.removeEventListener("mousedown", onOutsideClick);
-  }, [open]);
-
-  const toggle = (option: string) => {
-    onChange(values.includes(option) ? values.filter((v) => v !== option) : [...values, option]);
-  };
-
-  return (
-    <div className="flex flex-col gap-[8px]">
-      <FieldLabel required={required}>{label}</FieldLabel>
-      <div className="relative" ref={rootRef}>
-        <button
-          className="relative flex h-[42px] w-full items-center rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc] pl-[41px] pr-[36px] text-left font-['Inter'] text-[14px] leading-[20px] outline-none"
-          onClick={() => setOpen((o) => !o)}
-          type="button"
-        >
-          <img alt="" className="pointer-events-none absolute left-[12px] size-[20px]" src={icon} />
-          <span className={`truncate ${values.length ? "text-[#0f172a]" : "text-[#94a3b8]"}`}>
-            {values.length ? values.map(display).join(", ") : `Select ${label.toLowerCase()}`}
-          </span>
-          <ChevronDown
-            aria-hidden="true"
-            className="pointer-events-none absolute right-[12px] size-[17px] text-[#64748b]"
-            strokeWidth={2}
-          />
-        </button>
-
-        {open && (
-          <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-20 max-h-[220px] overflow-y-auto rounded-[8px] border border-[#e2e8f0] bg-white py-[4px] shadow-[0px_8px_20px_rgba(15,23,42,0.12)]">
-            {options.map((option) => {
-              const isSelected = values.includes(option);
-              return (
-                <button
-                  className={`flex w-full items-center gap-[8px] px-[14px] py-[9px] text-left font-['Inter'] text-[14px] leading-[20px] ${
-                    isSelected ? "bg-[#eef1ff] text-[#4f46e5]" : "text-[#0f172a] hover:bg-[#f8fafc]"
-                  }`}
-                  key={option}
-                  onClick={() => toggle(option)}
-                  type="button"
-                >
-                  <span
-                    className={`flex size-[14px] shrink-0 items-center justify-center rounded-[4px] border ${
-                      isSelected ? "border-[#4f46e5] bg-[#4f46e5]" : "border-[#cbd5e1]"
-                    }`}
-                  >
-                    {isSelected && (
-                      <Check aria-hidden="true" className="size-[10px] text-white" strokeWidth={3} />
-                    )}
-                  </span>
-                  {display(option)}
-                </button>
-              );
-            })}
           </div>
         )}
       </div>
@@ -1469,45 +1225,32 @@ function TriggerGenerationForm({ workspaceId }: { workspaceId: string | null }) 
   );
 }
 
-type IcpFormProps = {
-  form: IcpFormState;
-  onFieldChange: <K extends keyof IcpFormState>(field: K, value: IcpFormState[K]) => void;
-  icpId: string | null;
-  workspaceId: string | null;
-  // The exact IcpOut just returned by createIcp (see handlePrimaryAction's
-  // ICP step block) - appended to the library table immediately below
-  // instead of waiting on a second network round-trip to notice it.
-  createdIcp: IcpOut | null;
-  onUploadStart: () => void;
-  onUploadComplete: (batch: ImportBatchOut) => void;
-};
-
 type ExcelUploadButtonProps = {
-  icpId: string | null;
   workspaceId: string | null;
   onUploadStart: () => void;
   onUploadComplete: (batch: ImportBatchOut) => void;
 };
 
-function ExcelUploadButton({ icpId, workspaceId, onUploadStart, onUploadComplete }: ExcelUploadButtonProps) {
+function ExcelUploadButton({ workspaceId, onUploadStart, onUploadComplete }: ExcelUploadButtonProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadedLabel, setUploadedLabel] = useState<string | null>(null);
-  const ready = Boolean(icpId && workspaceId);
+  const ready = Boolean(workspaceId);
 
   const handleFiles = async (files: File[]) => {
-    if (!icpId || !workspaceId || files.length === 0) {
+    if (!workspaceId || files.length === 0) {
       return;
     }
     setUploading(true);
     setError(null);
     onUploadStart();
     try {
-      // Ingestion/signals/ICP-matching are done by the time this resolves;
-      // lead scoring keeps running in the background (batch.scoring_status
-      // === "pending") - see AiBusinessDiscoveryForm's polling below.
-      const batch = await uploadExcel(workspaceId, icpId, files);
+      // Ingestion is done by the time this resolves; live Serper research +
+      // evidence scoring keep running in the background (batch.scoring_status
+      // === "pending") - see AiBusinessDiscoveryForm's polling below. No ICP
+      // required (brief item 1).
+      const batch = await uploadProspects(workspaceId, files);
       setUploadedLabel(files.length === 1 ? files[0].name : `${files.length} files`);
       onUploadComplete(batch);
     } catch (err) {
@@ -1537,161 +1280,104 @@ function ExcelUploadButton({ icpId, workspaceId, onUploadStart, onUploadComplete
           className="flex h-[36px] items-center gap-[7px] rounded-[8px] border border-[#e2e8f0] bg-white px-[16px] font-['Inter'] text-[12px] font-bold text-[#0f1f6f] disabled:opacity-50"
           disabled={!ready || uploading}
           onClick={() => fileInputRef.current?.click()}
-          title={ready ? "Upload one or more ZoomInfo exports to score against this ICP" : "Click Continue below to create your ICP first"}
+          title="Upload one or more prospect CSV/XLSX files"
           type="button"
         >
           <img alt="" className="size-[14px]" src={icons.upload} />
-          {uploading ? "Uploading..." : "Upload Excel"}
+          {uploading ? "Uploading..." : "Upload Prospects"}
         </button>
       </div>
       {error && <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#ef4444]">{error}</p>}
       {!error && uploadedLabel && (
         <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#16a34a]">
-          Scored {uploadedLabel}
+          Uploaded {uploadedLabel} — research &amp; scoring in the background
         </p>
       )}
     </div>
   );
 }
 
-function IcpGenerationForm({
-  form,
-  onFieldChange,
-  icpId,
-  workspaceId,
-  createdIcp,
-  onUploadStart,
-  onUploadComplete,
-}: IcpFormProps) {
-  const [icps, setIcps] = useState<IcpOut[]>([]);
+type OfferingAndProspectDataFormProps = {
+  workspaceId: string | null;
+  onUploadStart: () => void;
+  onUploadComplete: (batch: ImportBatchOut) => void;
+};
+
+/* Replaces the old ICP-creation step (brief item 1): no target-criteria
+ * form, no ICP library, no requirement to create anything before uploading.
+ * Shows the real XSparks Offering Profile and lets prospect data be uploaded
+ * directly - research + scoring run automatically, scoped to whichever
+ * companies were just uploaded. */
+function OfferingAndProspectDataForm({ workspaceId, onUploadStart, onUploadComplete }: OfferingAndProspectDataFormProps) {
+  const [batches, setBatches] = useState<ImportBatchOut[]>([]);
 
   useEffect(() => {
     if (!workspaceId) return;
     let cancelled = false;
-    listIcps(workspaceId).then((rows) => {
-      if (!cancelled) setIcps(rows);
+    listImportBatches(workspaceId).then((rows) => {
+      if (!cancelled) setBatches(rows);
     });
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, icpId]);
+  }, [workspaceId]);
 
-  // Belt-and-suspenders: reflects a newly-created ICP in the table the
-  // instant createIcp resolves, rather than depending on the fetch above
-  // (keyed on icpId) to have re-run first.
-  useEffect(() => {
-    if (!createdIcp) return;
-    setIcps((prev) => (prev.some((i) => i.icp_id === createdIcp.icp_id) ? prev : [...prev, createdIcp]));
-  }, [createdIcp]);
+  const handleUploadComplete = (batch: ImportBatchOut) => {
+    setBatches((prev) => [batch, ...prev]);
+    onUploadComplete(batch);
+  };
 
   return (
     <div className="flex flex-col gap-[14px]">
-      <div className="grid grid-cols-1 gap-[12px] md:grid-cols-2 xl:grid-cols-3">
-        <SelectField
-          icon={icons.workspace}
-          label="Primary Industry"
-          onChange={(v) => onFieldChange("industry", v)}
-          options={industries.map((i) => i.title)}
-          required
-          value={form.industry}
-        />
-        <SelectField
-          icon={icons.workspace}
-          label="Company Size (Employees)"
-          onChange={(v) => onFieldChange("company_size", v)}
-          options={COMPANY_SIZE_OPTIONS}
-          required
-          value={form.company_size}
-        />
-        <SelectField
-          icon={icons.currency}
-          label="Annual Revenue"
-          onChange={(v) => onFieldChange("annual_revenue", v)}
-          options={ANNUAL_REVENUE_OPTIONS}
-          required
-          value={form.annual_revenue}
-        />
-        <MultiSelectField
-          icon={icons.globe}
-          label="Headquarters Location"
-          onChange={(v) => onFieldChange("headquarters_countries", v)}
-          options={ICP_COUNTRY_OPTIONS}
-          required
-          values={form.headquarters_countries}
-        />
-        <div className="md:col-span-2">
-          <TextField
-            icon={icons.workspace}
-            label="Technologies Used"
-            onChange={(v) => onFieldChange("technologies", v)}
-            placeholder="e.g. AWS, Salesforce, HubSpot"
-            value={form.technologies}
-          />
-        </div>
-        <MultiSelectField
-          icon={icons.workspace}
-          label="Target Departments"
-          onChange={(v) => onFieldChange("departments", v)}
-          options={getDepartmentOptions(form.industry)}
-          values={form.departments}
-        />
-      </div>
+      <OfferingProfileCard />
 
       <div className="rounded-[12px] border border-[#e2e8f0] bg-white p-[14px]">
         <div className="mb-[10px] flex items-center justify-between gap-3">
           <div>
             <h3 className="m-0 font-['Inter'] text-[17px] font-bold leading-[23px] text-[#0f1f6f]">
-              Your ICP Library
+              Prospect Data
             </h3>
             <p className="m-0 mt-[2px] font-['Inter'] text-[11px] font-medium leading-[17px] text-[#0f1f6f]">
-              {icpId
-                ? "ICP created - you can now upload your Excel export below."
-                : "Fill in the fields above, then click \"Create ICP\" below to enable Excel upload."}
+              Upload a CSV/XLSX of prospect companies - no ICP needed, research and scoring start automatically.
             </p>
           </div>
           <div className="flex items-center gap-[8px]">
             <ExcelUploadButton
-              icpId={icpId}
-              onUploadComplete={onUploadComplete}
+              onUploadComplete={handleUploadComplete}
               onUploadStart={onUploadStart}
               workspaceId={workspaceId}
             />
           </div>
         </div>
-        {icps.length === 0 ? (
+        {batches.length === 0 ? (
           <p className="m-0 px-[4px] py-[16px] font-['Inter'] text-[11px] font-medium text-[#64748b]">
-            No ICPs yet for this workspace.
+            No uploads yet for this workspace.
           </p>
         ) : (
           <table className="w-full border-collapse">
             <thead>
               <tr className="text-left">
-                {["ICP Name", "Primary Industry", "Company Size", "Annual Revenue", "Created"].map(
-                  (heading) => (
-                    <th
-                      className="px-[4px] py-[8px] font-['Inter'] text-[10px] font-bold text-[#0f1f6f]"
-                      key={heading}
-                    >
-                      {heading}
-                    </th>
-                  ),
-                )}
+                {["Files", "Rows", "Companies", "Status", "Uploaded"].map((heading) => (
+                  <th className="px-[4px] py-[8px] font-['Inter'] text-[10px] font-bold text-[#0f1f6f]" key={heading}>
+                    {heading}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {icps.map((row) => (
-                <tr className="border-t border-[#f1f5f9]" key={row.icp_id}>
+              {batches.map((row) => (
+                <tr className="border-t border-[#f1f5f9]" key={row.import_batch_id}>
                   <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-bold text-[#0f1f6f]">
-                    {row.name || "Untitled ICP"}
+                    {row.files_processed}
                   </td>
                   <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-medium text-[#0f1f6f]">
-                    {row.industries?.length ? row.industries.join(", ") : "Any"}
+                    {row.total_rows}
                   </td>
                   <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-medium text-[#0f1f6f]">
-                    {formatRange(row.employee_min, row.employee_max, (v) => String(v))}
+                    {row.companies_ingested}
                   </td>
                   <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-medium text-[#0f1f6f]">
-                    {formatRange(row.revenue_min_usd, row.revenue_max_usd, formatMoney)}
+                    {row.scoring_status === "pending" ? "Researching…" : "Complete"}
                   </td>
                   <td className="px-[4px] py-[8px] font-['Inter'] text-[11px] font-medium text-[#0f1f6f]">
                     {formatDate(row.created_at)}
@@ -1745,7 +1431,7 @@ function DiscoveryStatus({ status }: { status: string }) {
 function AiBusinessDiscoveryForm({ uploadStats }: { uploadStats: "idle" | "uploading" | ImportBatchOut }) {
   const isUploading = uploadStats === "uploading";
   const batch = uploadStats === "idle" || uploadStats === "uploading" ? null : uploadStats;
-  // Ingestion/signals/ICP-matching finish synchronously; scoring now runs as
+  // Ingestion + evidence research finish synchronously; scoring now runs as
   // a background task afterward (see excel_pipeline.py), so `batch` can be
   // real and non-null while scoring is still going - that's a genuinely
   // different state from "everything, including scoring, is done".
@@ -1759,10 +1445,10 @@ function AiBusinessDiscoveryForm({ uploadStats }: { uploadStats: "idle" | "uploa
       ? "Processing Your Data"
       : "No Data Uploaded Yet";
   const subtext = batch
-    ? `${batch.companies_ingested} companies ingested from ${batch.total_rows} rows${batch.files_processed > 1 ? ` across ${batch.files_processed} files` : ""} - ${batch.matched_icp_count} matched your ICP${scoringDone ? `, ${batch.active_count} scored active` : ""}.${scoringDone ? "" : " Lead scoring is still running in the background and will finish shortly - check the Enterprise List after you go live."}`
+    ? `${batch.companies_ingested} companies ingested from ${batch.total_rows} rows${batch.files_processed > 1 ? ` across ${batch.files_processed} files` : ""} - ${batch.signals_extracted} buying events found${scoringDone ? `, ${batch.sales_ready_count} sales ready` : ""}.${scoringDone ? "" : " Lead scoring is still running in the background and will finish shortly - check the Enterprise List after you go live."}`
     : isUploading
-      ? "Ingesting companies, extracting buying signals, and filtering by your ICP - lead scoring then continues in the background."
-      : "Go back to the ICP Generation step and upload a ZoomInfo export to see real ingestion results here.";
+      ? "Ingesting companies and researching buying evidence - lead scoring then continues in the background."
+      : "Go back to the Offering & Prospect Data step and upload a file to see real ingestion results here.";
   const progressPct = batch ? (scoringDone ? 100 : 80) : isUploading ? 50 : 0;
 
   return (
@@ -2053,15 +1739,12 @@ function OnboardingCard() {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [icpForm, setIcpForm] = useState<IcpFormState>(initialIcpFormState);
-  const [icpId, setIcpId] = useState<string | null>(null);
-  const [createdIcp, setCreatedIcp] = useState<IcpOut | null>(null);
   // Business Discovery (step 8) shows the REAL result of the Excel upload
-  // pipeline triggered from the ICP step, not fake "AI is analyzing"
-  // content - "idle" (nothing uploaded yet), "uploading" (ingestion/signals/
-  // ICP-matching running server-side), or the real batch once that
-  // finishes (still scoring_status: "pending" until the background scoring
-  // task catches up - see the polling effect below).
+  // pipeline triggered from the Offering & Prospect Data step, not fake "AI
+  // is analyzing" content - "idle" (nothing uploaded yet), "uploading"
+  // (ingestion + buying-evidence research running server-side), or the real
+  // batch once that finishes (still scoring_status: "pending" until the
+  // background scoring task catches up - see the polling effect below).
   const [uploadStats, setUploadStats] = useState<"idle" | "uploading" | ImportBatchOut>("idle");
 
   // Scoring runs in the background after the upload responds - poll until
@@ -2111,7 +1794,7 @@ function OnboardingCard() {
   const isTeamStep = activeStep === 2;
   const isDataSourceStep = activeStep === 3;
   const isTriggerStep = activeStep === 4;
-  const isIcpStep = activeStep === 5;
+  const isOfferingStep = activeStep === 5;
   const isAiBusinessStep = activeStep === 6;
   const isGoLiveStep = activeStep === 7;
   const stepperStep = activeStep;
@@ -2136,10 +1819,6 @@ function OnboardingCard() {
 
   const handleFieldChange = <K extends keyof OnboardingFormState>(field: K, value: OnboardingFormState[K]) => {
     setForm((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleIcpFieldChange = <K extends keyof IcpFormState>(field: K, value: IcpFormState[K]) => {
-    setIcpForm((prev) => ({ ...prev, [field]: value }));
   };
 
   const handlePrimaryAction = async () => {
@@ -2237,44 +1916,9 @@ function OnboardingCard() {
       setSubmitting(false);
     }
 
-    if (isIcpStep && icpId === null) {
-      if (workspaceId) {
-        setSubmitting(true);
-        setSubmitError(null);
-        const employees = parseEmployeeRange(icpForm.company_size);
-        const revenue = parseRevenueRange(icpForm.annual_revenue);
-        try {
-          const icp = await createIcp(workspaceId, {
-            name: icpForm.industry ? `${icpForm.industry} ICP` : "Onboarding ICP",
-            industries: icpForm.industry ? [icpForm.industry] : null,
-            employee_min: employees.min,
-            employee_max: employees.max,
-            revenue_min_usd: revenue.min,
-            revenue_max_usd: revenue.max,
-            countries: icpForm.headquarters_countries.length ? icpForm.headquarters_countries : null,
-            technologies: icpForm.technologies
-              ? icpForm.technologies.split(",").map((t) => t.trim()).filter(Boolean)
-              : null,
-            departments: icpForm.departments.length ? icpForm.departments : null,
-          });
-          setIcpId(icp.icp_id);
-          setCreatedIcp(icp);
-        } catch (err) {
-          setSubmitError(
-            err instanceof ApiError ? String(err.detail) : "Something went wrong. Please try again.",
-          );
-          setSubmitting(false);
-          return;
-        }
-        setSubmitting(false);
-        // Stay on this step - the Upload Excel button only enables once
-        // icpId is set, so advancing immediately would mean it never
-        // renders in a clickable state. A second click on Continue (now
-        // that icpId !== null) falls through to the normal advance below.
-        return;
-      }
-    }
-
+    // No ICP-creation gate (brief item 1) - the Offering & Prospect Data
+    // step's upload button is always usable once a workspace exists, so
+    // Continue just advances normally.
     setActiveStep((step) => Math.min(step + 1, 7));
   };
 
@@ -2302,8 +1946,8 @@ function OnboardingCard() {
             ? "Go Live"
             : isAiBusinessStep
             ? "Analysis in Progress"
-            : isIcpStep
-              ? "Define Your Ideal Customer Profile (Manual Input)"
+            : isOfferingStep
+              ? "Offering & Prospect Data"
               : isTriggerStep
                 ? "Your Triggers"
                 : isDataSourceStep
@@ -2319,8 +1963,8 @@ function OnboardingCard() {
             ? "Congratulations! Your XSparks AI platform is ready to drive outcomes."
             : isAiBusinessStep
             ? "We're analyzing your business to build a powerful foundation for personalized insights."
-            : isIcpStep
-              ? "Provide the key details about your ideal customer. This will help AI generate accurate insights."
+            : isOfferingStep
+              ? "Review what XSparks sells, then upload your prospect data - no ICP required."
               : isTriggerStep
                 ? "Triggers matched against your signal data to flag high-intent moments."
                 : isDataSourceStep
@@ -2355,11 +1999,7 @@ function OnboardingCard() {
             <TriggerGenerationForm workspaceId={workspaceId} />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <IcpGenerationForm
-              createdIcp={createdIcp}
-              form={icpForm}
-              icpId={icpId}
-              onFieldChange={handleIcpFieldChange}
+            <OfferingAndProspectDataForm
               onUploadComplete={setUploadStats}
               onUploadStart={() => setUploadStats("uploading")}
               workspaceId={workspaceId}
@@ -2416,11 +2056,9 @@ function OnboardingCard() {
                     ? "Start Using XSparks"
                     : isAiBusinessStep
                       ? "Continue"
-                      : isIcpStep && icpId === null
-                        ? "Create ICP"
-                        : isIcpStep
-                          ? "Continue"
-                          : activeStep > 0
+                      : isOfferingStep
+                        ? "Continue"
+                        : activeStep > 0
                             ? "Save & Continue"
                               : "Continue"}
               </span>

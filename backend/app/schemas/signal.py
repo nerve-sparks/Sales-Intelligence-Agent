@@ -1,50 +1,31 @@
-from datetime import datetime
+"""Signal Intelligence schemas - backed by BuyingEvent (brief item 15), the
+active evidence pipeline. The legacy Signal-table schemas below (SignalOut/
+SignalExtractResult/SignalRescoreResult) back only the now-inert /extract
+/rescore endpoints - nothing populates CompanyNews/CompanyScoop anymore
+(brief item 14) - kept so historical Signal rows stay queryable, not part of
+the active feed.
+"""
+
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
+
+from app.schemas.score import BuyingEventOut
 
 
-class SignalOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class SignalOut(BuyingEventOut):
+    """One BuyingEvent for a company already known from the request path (no
+    company_name needed) - GET /signals/{company_id}."""
 
-    signal_id: UUID
     company_id: UUID
-    source: str | None = None
-    original_source: str | None = None
-    signal_type: str
-    signal_category: str
-    core_fact: str | None = None
-    dollar_value_usd: float | None = None
-    extraction_method: str | None = None
-    extraction_confidence: float | None = None
-    is_action: bool | None = None
-    m2_corroboration: float | None = None
-    m3_recency: float | None = None
-    m4_resourcing: float | None = None
-    signal_confidence: float | None = None
-    ingested_at: datetime | None = None
-    scored_at: datetime | None = None
 
 
-class SignalWithCompanyOut(BaseModel):
-    signal_id: UUID
+class SignalWithCompanyOut(BuyingEventOut):
+    """One BuyingEvent plus its company name - the active Signal Feed/Detail
+    item shape."""
+
     company_id: UUID
     company_name: str
-    source: str | None = None
-    original_source: str | None = None
-    signal_type: str
-    signal_category: str
-    core_fact: str | None = None
-    dollar_value_usd: float | None = None
-    extraction_method: str | None = None
-    extraction_confidence: float | None = None
-    is_action: bool | None = None
-    m2_corroboration: float | None = None
-    m3_recency: float | None = None
-    m4_resourcing: float | None = None
-    signal_confidence: float | None = None
-    ingested_at: datetime | None = None
-    scored_at: datetime | None = None
 
 
 class SignalListOut(BaseModel):
@@ -55,7 +36,7 @@ class SignalListOut(BaseModel):
 
 
 class SignalCategoryCount(BaseModel):
-    signal_category: str
+    signal_category: str | None = None
     count: int
     company_count: int
     avg_confidence: float | None = None
@@ -85,10 +66,13 @@ class SourceCount(BaseModel):
 
 
 class SignalStatsOut(BaseModel):
+    """Signal Intelligence dashboard rollup over BuyingEvent (brief items 15,
+    24) - relevance tiers (from xsparks_relevance), not "intent" tiers."""
+
     total: int
-    high_intent: int
-    medium_intent: int
-    low_intent: int
+    high_relevance: int
+    medium_relevance: int
+    low_relevance: int
     company_count: int
     avg_confidence: float | None = None
     executives_impacted: int
@@ -101,6 +85,10 @@ class SignalStatsOut(BaseModel):
     by_source: list[SourceCount]
 
 
+# --------------------------------------------------------------------------
+# Legacy Signal-table result schemas - the /extract /rescore endpoints are now
+# inert (brief item 14 removed their only data source) but retained.
+# --------------------------------------------------------------------------
 class SignalExtractResult(BaseModel):
     inserted: int
     skipped: int

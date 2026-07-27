@@ -4,39 +4,91 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 
+class BuyingEventOut(BaseModel):
+    """One canonical buying event with its scoring factors and evidence
+    sources (brief section 21). Evidence carries the source URLs that back
+    every claim."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    buying_event_id: UUID
+    event_type: str
+    category: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    published_at: datetime | None = None
+    base_strength: float | None = None
+    relevance: float | None = None
+    freshness: float | None = None
+    source_quality: float | None = None
+    extraction_confidence: float | None = None
+    status_factor: float | None = None
+    event_score: float | None = None
+    is_negative: bool = False
+    penalty_value: float | None = None
+    best_offering: str | None = None
+    reasoning: str | None = None
+    # Explicit public AI/procurement budget tied to this event (brief item 18).
+    public_budget_usd: float | None = None
+    budget_currency: str | None = None
+    budget_confidence: str | None = None
+    evidence: list | dict | None = None
+
+
 class LeadScoreOut(BaseModel):
+    """Evidence-based score for one company (brief section 21). No gate/D1-D7
+    fields - those are gone from the active product."""
+
     model_config = ConfigDict(from_attributes=True)
 
     lead_score_id: UUID
     company_id: UUID
-    gate_check_1: bool | None = None
-    gate_check_2: bool | None = None
-    gate_check_3: bool | None = None
-    gate_check_4: bool | None = None
-    gate_check_5: bool | None = None
-    gate_passed: bool | None = None
-    gate_status: str | None = None
-    d1_pain_acuity: float | None = None
-    d2_ai_intent: float | None = None
-    d3_economic_capacity: float | None = None
-    d4_authority: float | None = None
-    d5_timing_catalyst: float | None = None
-    d6_solution_fit: float | None = None
-    d7_competitive: float | None = None
-    component_score: float | None = None
-    p_convert: float | None = None
-    expected_deal_value_usd: float | None = None
     lead_score: float | None = None
+    sales_status: str | None = None
+    buying_evidence_score: float | None = None
+    contact_access_score: float | None = None
+    negative_event_score: float | None = None
+    evidence_confidence: float | None = None
+    confidence_label: str | None = None
+    best_offering: str | None = None
+    why_now: str | None = None
+    recommended_action: str | None = None
+    expected_deal_min_usd: float | None = None
+    expected_deal_max_usd: float | None = None
+    expected_deal_value_usd: float | None = None
+    expected_revenue_usd: float | None = None
+    deal_value_basis: str | None = None
+    deal_value_confidence: str | None = None
+    commercially_viable: bool | None = None
+    evidence_summary: list | dict | None = None
+    scoring_warnings: list | dict | None = None
     scored_at: datetime | None = None
 
 
-class RankedLeadScoreOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class ScoreDetailOut(LeadScoreOut):
+    """Full company score plus its underlying canonical events (brief 21)."""
 
+    events: list[BuyingEventOut] = []
+
+
+class RankedLeadScoreOut(BaseModel):
+    """One row of the ranked list - every scored company, not just gated ones
+    (brief section 22)."""
+
+    company_id: UUID
     company_name: str
     lead_score: float | None = None
-    component_score: float | None = None
-    gate_status: str | None = None
+    sales_status: str | None = None
+    confidence_label: str | None = None
+    buying_evidence_score: float | None = None
+    contact_access_score: float | None = None
+    negative_event_score: float | None = None
+    best_offering: str | None = None
+    why_now: str | None = None
+    expected_deal_min_usd: float | None = None
+    expected_deal_max_usd: float | None = None
+    expected_deal_value_usd: float | None = None
+    scored_at: datetime | None = None
 
 
 class NotScoredOut(BaseModel):
@@ -44,5 +96,10 @@ class NotScoredOut(BaseModel):
 
 
 class ScoreRunResult(BaseModel):
-    active: int
-    nurture: int
+    """Per-sales-status counts from a scoring run (brief section 17)."""
+
+    sales_ready: int = 0
+    high_priority: int = 0
+    warm: int = 0
+    monitor: int = 0
+    low_priority: int = 0

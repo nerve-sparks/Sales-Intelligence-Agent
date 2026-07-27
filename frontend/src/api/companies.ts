@@ -16,7 +16,14 @@ export type CompanyListItemOut = {
   industries: string[] | null;
   logo_url: string | null;
   lead_score: number | null;
-  gate_status: string | null;
+  sales_status: string | null;
+  confidence_label: string | null;
+  buying_evidence_score: number | null;
+  contact_access_score: number | null;
+  negative_event_score: number | null;
+  best_offering: string | null;
+  why_now: string | null;
+  expected_deal_value_usd: number | null;
 };
 
 export type CompanyListOut = {
@@ -47,9 +54,15 @@ export type CountryLeadScoreOut = {
 
 export type CompanyStatsOut = {
   total: number;
-  high_intent: number;
-  medium_intent: number;
-  low_intent: number;
+  scored: number;
+  unscored: number;
+  sales_ready: number;
+  high_priority: number;
+  warm: number;
+  monitor: number;
+  low_priority: number;
+  high_confidence: number;
+  provisional_pipeline_value: number;
   by_country: CountryLeadScoreOut[];
 };
 
@@ -64,23 +77,6 @@ export type CompanyInsightOut = {
   summary: string;
 };
 
-export type IcpThresholdsOut = {
-  employee_min: number | null;
-  employee_max: number | null;
-  revenue_min_usd: number | null;
-  revenue_max_usd: number | null;
-  industries: string[];
-  countries: string[];
-  company_count: number;
-};
-
-/* Data-driven ICP range suggestions from the org's uploaded companies (10th-
- * 90th percentile employee/revenue + most common industries/countries) - so a
- * new ICP fits the real data instead of guessed numbers that match nothing. */
-export function getIcpThresholds(organisationId: string): Promise<IcpThresholdsOut> {
-  return apiGet<IcpThresholdsOut>(`/organisations/${organisationId}/companies/icp-thresholds`);
-}
-
 /* LLM-generated (BridgeLLM, gemini/gemini-2.5-pro) - see
  * backend/app/services/llm_client.py. Falls back to a plain real-numbers
  * sentence server-side if LLM_API_KEY isn't configured, so this never
@@ -89,11 +85,11 @@ export function getCompanyInsight(organisationId: string): Promise<CompanyInsigh
   return apiGet<CompanyInsightOut>(`/organisations/${organisationId}/companies/insight`);
 }
 
-/* Company Directory + real LeadScore columns as an .xlsx download - icpId
- * narrows the export to that ICP's matching companies (same filter the
- * Enterprise List's dropdown applies), omit it to export every company. */
-export async function exportCompanies(organisationId: string, icpId?: string): Promise<Blob> {
-  const qs = icpId ? `?icp_id=${icpId}` : "";
+/* Company Directory + evidence-based score columns as an .xlsx download -
+ * importBatchId narrows the export to one uploaded batch's companies, omit it
+ * to export every company. */
+export async function exportCompanies(organisationId: string, importBatchId?: string): Promise<Blob> {
+  const qs = importBatchId ? `?import_batch_id=${importBatchId}` : "";
   const { blob } = await apiGetForBlob(`/organisations/${organisationId}/companies/export${qs}`);
   return blob;
 }

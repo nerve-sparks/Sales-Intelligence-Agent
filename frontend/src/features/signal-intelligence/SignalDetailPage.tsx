@@ -24,6 +24,12 @@ import type { CompanyOut } from "../../api/icp";
 import { getOrganisationId } from "../../lib/session";
 import { CATEGORY_DESCRIPTIONS, categoryLabel, categoryStyle } from "../../lib/signalCategories";
 
+/* Signal Detail for the evidence-based pipeline (brief item 15) - backed by
+ * BuyingEvent, not the legacy Signal table. "Intent"/"confidence-tier"
+ * language is replaced by xsparks_relevance-based "Relevance" tiers (brief
+ * item 24), and the confidence breakdown now shows the real event_score
+ * multipliers (freshness/source quality/status), not the old m2/m3/m4. */
+
 function getSignalIdFromUrl(): string | null {
   if (typeof window === "undefined") {
     return null;
@@ -52,30 +58,23 @@ function titleCase(s: string): string {
     .join(" ");
 }
 
-/* Same 0.60/0.40 confidence tiers used on the Signal Intelligence dashboard
- * (signal_directory.HIGH_CONFIDENCE/MEDIUM_CONFIDENCE) - kept consistent
- * across every page that shows a signal's confidence tier. */
-function confidenceTier(confidence: number): { label: string; tone: string; color: string } {
-  if (confidence >= 0.6) return { label: "High Intent", tone: "purple", color: "#7c3aed" };
-  if (confidence >= 0.4) return { label: "Medium Intent", tone: "orange", color: "#f97316" };
-  return { label: "Low Intent", tone: "gray", color: "#64748b" };
+function formatUsd(n: number | null): string {
+  if (n === null) return "—";
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${Math.round(n / 1_000)}K`;
+  return `$${Math.round(n)}`;
 }
 
-/* original_source is "news:{news_id}" or "scoop:{scoop_id}" (see
- * signal_extractor.py); for news-derived signals the news_id itself embeds
- * the source URL, so pulling out any http(s) substring recovers a real,
- * clickable link back to the source article. */
-function extractUrl(originalSource: string | null): string | null {
-  if (!originalSource) return null;
-  const match = originalSource.match(/https?:\/\/\S+/);
-  return match ? match[0] : null;
+/* Same 0.65/0.40 relevance tiers used on the Signal Intelligence dashboard
+ * (buying_event_directory.HIGH_RELEVANCE/MEDIUM_RELEVANCE). */
+function relevanceTier(relevance: number): { label: string; tone: string; color: string } {
+  if (relevance >= 0.65) return { label: "High Relevance", tone: "purple", color: "#7c3aed" };
+  if (relevance >= 0.4) return { label: "Medium Relevance", tone: "orange", color: "#f97316" };
+  return { label: "Low Relevance", tone: "gray", color: "#64748b" };
 }
 
-function sourceTypeLabel(originalSource: string | null): string {
-  if (!originalSource) return "ZoomInfo Data";
-  if (originalSource.startsWith("news:")) return "News Article";
-  if (originalSource.startsWith("scoop:")) return "Deal Intelligence";
-  return "ZoomInfo Data";
+function isActionable(signal: { status_factor: number | null }): boolean {
+  return (signal.status_factor ?? 0) >= 0.9;
 }
 
 function hostnameOf(url: string): string {
@@ -162,11 +161,10 @@ function DetailHeader({ signal }: { signal: SignalWithCompanyOut | null }) {
     );
   }
 
-  const title = titleCase(signal.signal_type);
-  const detected = `${new Date(signal.ingested_at ?? "").toLocaleString()} (${relativeTime(signal.ingested_at)})`;
-  const category = categoryLabel(signal.signal_category);
-  const confidence = signal.signal_confidence ?? 0;
-  const tier = confidenceTier(confidence);
+  const title = signal.title || titleCase(signal.event_type);
+  const detected = `${new Date(signal.published_at ?? "").toLocaleString()} (${relativeTime(signal.published_at)})`;
+  const category = categoryLabel(signal.category ?? "");
+  const tier = relevanceTier(signal.relevance ?? 0);
 
   return (
     <div className="flex items-start gap-[18px]">
@@ -188,9 +186,9 @@ function DetailHeader({ signal }: { signal: SignalWithCompanyOut | null }) {
           • Detected on {detected}
         </p>
         <div className="mt-[12px] flex flex-wrap gap-[8px]">
-          <Tag label={category} tone="purple" />
-          <Tag label={titleCase(signal.extraction_method ?? "rule_based")} tone="gray" />
-          {signal.is_action && <Tag label="Actionable" tone="green" />}
+          {signal.category && <Tag label={category} tone="purple" />}
+          {isActionable(signal) && <Tag label="Actionable" tone="green" />}
+          {(signal.evidence?.length ?? 0) > 1 && <Tag label={`${signal.evidence?.length} sources`} tone="gray" />}
         </div>
       </div>
     </div>
@@ -198,17 +196,16 @@ function DetailHeader({ signal }: { signal: SignalWithCompanyOut | null }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Intent score + confidence breakdown                                 */
+/* Score card                                                          */
 /* ------------------------------------------------------------------ */
 
-function IntentScoreCard({ signal }: { signal: SignalWithCompanyOut | null }) {
-  const confidence = signal?.signal_confidence ?? 0;
-  const score = Math.round(confidence * 100);
-  const tier = confidenceTier(confidence);
+function ScoreCard({ signal }: { signal: SignalWithCompanyOut | null }) {
+  const score = Math.round(signal?.event_score ?? 0);
+  const tier = relevanceTier(signal?.relevance ?? 0);
 
   return (
     <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <p className="m-0 text-[14px] font-semibold text-[#475569]">Intent Score</p>
+      <p className="m-0 text-[14px] font-semibold text-[#475569]">Event Score</p>
       <div className="mt-[10px] flex items-center gap-[12px]">
         <span className="text-[30px] font-bold leading-none text-[#0f172a]">
           {score} <span className="text-[18px] font-semibold text-[#94a3b8]">/ 100</span>
@@ -218,39 +215,31 @@ function IntentScoreCard({ signal }: { signal: SignalWithCompanyOut | null }) {
         </span>
       </div>
       <p className="m-0 mt-[10px] text-[13px] text-[#94a3b8]">
-        {signal?.scored_at
-          ? `Confidence computed ${new Date(signal.scored_at).toLocaleString()}`
-          : "Confidence score for this signal"}
+        Base strength × relevance × freshness × source quality × extraction confidence × status
       </p>
       <div className="mt-[12px] h-[6px] w-full rounded-full bg-[#e5e7eb]">
-        <div className="h-full rounded-full bg-[#22c55e]" style={{ width: `${score}%` }} />
+        <div className="h-full rounded-full bg-[#22c55e]" style={{ width: `${Math.min(100, score)}%` }} />
       </div>
     </div>
   );
 }
 
-/* IntentScoreOverTime (a fake 7-day line chart) had no backing data -
- * signals don't have a score history, just one ingested_at/scored_at pair -
- * so this shows the real fields that actually explain how the signal was
- * extracted and classified. */
 function ExtractionDetailsCard({ signal }: { signal: SignalWithCompanyOut | null }) {
   if (!signal) return null;
 
   const rows = (
     [
-      { label: "Extraction Method", value: titleCase(signal.extraction_method ?? "rule_based") },
+      { label: "Event Type", value: titleCase(signal.event_type) },
+      { label: "Category", value: categoryLabel(signal.category ?? "") },
       {
         label: "Extraction Confidence",
         value: signal.extraction_confidence !== null ? `${Math.round(signal.extraction_confidence * 100)}%` : "—",
       },
-      { label: "Source Type", value: sourceTypeLabel(signal.original_source) },
-      { label: "Signal Type", value: titleCase(signal.signal_type) },
-      {
-        label: "Action Signal",
-        value: signal.is_action ? "Yes — direct action detected" : "No — contextual/informational",
-      },
-      signal.dollar_value_usd
-        ? { label: "Deal Value", value: `$${signal.dollar_value_usd.toLocaleString()}` }
+      { label: "XSparks Relevance", value: signal.relevance !== null ? `${Math.round(signal.relevance * 100)}%` : "—" },
+      { label: "Best Offering", value: signal.best_offering ?? "—" },
+      { label: "Actionable", value: isActionable(signal) ? "Yes — active/announced" : "No — exploratory/speculative" },
+      signal.public_budget_usd
+        ? { label: "Public Budget", value: `${formatUsd(signal.public_budget_usd)}${signal.budget_currency ? ` ${signal.budget_currency}` : ""}` }
         : null,
     ] as ({ label: string; value: string } | null)[]
   ).filter((r): r is { label: string; value: string } => r !== null);
@@ -261,7 +250,7 @@ function ExtractionDetailsCard({ signal }: { signal: SignalWithCompanyOut | null
         Extraction Details
         <Info className="size-[15px] text-[#94a3b8]" />
       </h2>
-      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">How this signal was identified and classified.</p>
+      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">How this event was identified and classified.</p>
 
       <dl className="mt-[16px] flex flex-col gap-[13px]">
         {rows.map((row) => (
@@ -275,33 +264,31 @@ function ExtractionDetailsCard({ signal }: { signal: SignalWithCompanyOut | null
   );
 }
 
-/* Real confidence formula (signal_extractor.compute_signal_confidence):
- * confidence = m2_corroboration x m3_recency x m4_resourcing, clamped to
- * [0,1]. The model's actual component multipliers, not a fake "Event
- * Significance/Source Credibility" breakdown. */
-function ConfidenceBreakdownCard({ signal }: { signal: SignalWithCompanyOut | null }) {
+/* Real event_score components (backend/app/core/scoring_config.py): the
+ * multipliers that combine into event_score, not the old m2/m3/m4 blend. */
+function ScoreBreakdownCard({ signal }: { signal: SignalWithCompanyOut | null }) {
   if (!signal) return null;
 
-  const confidence = signal.signal_confidence ?? 0;
-  const score = Math.round(confidence * 100);
-  const tier = confidenceTier(confidence);
+  const score = Math.round(signal.event_score ?? 0);
+  const tier = relevanceTier(signal.relevance ?? 0);
 
   const components = [
-    { label: "Corroboration", value: signal.m2_corroboration ?? 1, color: "#7c3aed" },
-    { label: "Recency", value: signal.m3_recency ?? 1, color: "#16a34a" },
-    { label: "Directness", value: signal.m4_resourcing ?? 1, color: "#f59e0b" },
+    { label: "Relevance", value: signal.relevance ?? 0, color: "#7c3aed" },
+    { label: "Freshness", value: signal.freshness ?? 0, color: "#16a34a" },
+    { label: "Source Quality", value: signal.source_quality ?? 0, color: "#f59e0b" },
+    { label: "Status", value: signal.status_factor ?? 0, color: "#2563eb" },
   ];
 
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Confidence Breakdown</h2>
+      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Score Breakdown</h2>
       <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">
-        Confidence = Corroboration × Recency × Directness.
+        Event Score = Base Strength × Relevance × Freshness × Source Quality × Extraction Confidence × Status.
       </p>
 
       <div className="mt-[16px] flex flex-col items-center gap-[22px] sm:flex-row">
         <div className="relative size-[170px] shrink-0">
-          <Donut segments={components.map((c) => ({ value: c.value, color: c.color }))} size={170} thickness={24} />
+          <Donut segments={components.map((c) => ({ value: c.value || 0.01, color: c.color }))} size={170} thickness={24} />
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="text-[22px] font-bold leading-none text-[#0f172a]">
               {score} <span className="text-[14px] text-[#94a3b8]">/ 100</span>
@@ -331,7 +318,7 @@ function ConfidenceBreakdownCard({ signal }: { signal: SignalWithCompanyOut | nu
 }
 
 /* ------------------------------------------------------------------ */
-/* Details / Source / Related companies                                */
+/* Details / Sources / Related companies                               */
 /* ------------------------------------------------------------------ */
 
 function SignalDetailsCard({ signal, company }: { signal: SignalWithCompanyOut | null; company: CompanyOut | null }) {
@@ -340,22 +327,21 @@ function SignalDetailsCard({ signal, company }: { signal: SignalWithCompanyOut |
   const rows = [
     {
       label: "Detected",
-      value: `${new Date(signal.ingested_at ?? "").toLocaleString()} (${relativeTime(signal.ingested_at)})`,
+      value: `${new Date(signal.published_at ?? "").toLocaleString()} (${relativeTime(signal.published_at)})`,
     },
-    { label: "Source", value: titleCase(signal.source ?? "ZoomInfo") },
-    { label: "Source Type", value: sourceTypeLabel(signal.original_source) },
+    { label: "Sources", value: `${signal.evidence?.length ?? 0}` },
     { label: "Location", value: company ? [company.city, company.country].filter(Boolean).join(", ") || "—" : "—" },
     { label: "Employees", value: company?.employee_range ?? "—" },
     { label: "Revenue", value: company?.revenue_range ?? "—" },
     { label: "Industry", value: company?.industries?.[0] ?? "—" },
   ];
 
-  const tags = [categoryLabel(signal.signal_category), ...(signal.is_action ? ["Actionable"] : [])];
-  const description = signal.core_fact ?? "No summary was extracted for this signal.";
+  const tags = [categoryLabel(signal.category ?? ""), ...(isActionable(signal) ? ["Actionable"] : [])];
+  const description = signal.summary ?? "No summary was extracted for this event.";
 
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Signal Details</h2>
+      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Event Details</h2>
 
       <dl className="mt-[16px] flex flex-col gap-[12px]">
         {rows.map((row) => (
@@ -383,38 +369,49 @@ function SignalDetailsCard({ signal, company }: { signal: SignalWithCompanyOut |
   );
 }
 
+/* Every corroborating source, not just one - "Corroborated by N sources" is
+ * the whole point of the canonical-dedup design (brief item 11 / 21). */
 function SourceSnippetCard({ signal }: { signal: SignalWithCompanyOut | null }) {
   if (!signal) return null;
 
-  const url = extractUrl(signal.original_source);
-  const sourceName = url ? hostnameOf(url) : titleCase(signal.source ?? "ZoomInfo");
-  const detected = signal.ingested_at ? new Date(signal.ingested_at).toLocaleString() : "—";
-  const snippet = signal.core_fact ?? "No source text was captured for this signal.";
+  const sources = signal.evidence ?? [];
 
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Source Snippet</h2>
+      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">
+        {sources.length > 1 ? `Sources (${sources.length})` : "Source"}
+      </h2>
 
-      <div className="mt-[16px] flex items-center gap-[10px]">
-        <LogoSquare bg="#dcfce7" color="#16a34a" icon={Database} radius={6} size={26} />
-        <div className="leading-tight">
-          <p className="m-0 text-[13px] font-semibold text-[#0f172a]">{sourceName}</p>
-          <p className="m-0 text-[12px] text-[#94a3b8]">{detected}</p>
+      {sources.length === 0 ? (
+        <p className="m-0 mt-[16px] text-[13px] text-[#94a3b8]">No source captured for this event.</p>
+      ) : (
+        <div className="mt-[16px] flex flex-col gap-[16px]">
+          {sources.slice(0, 5).map((src, i) => (
+            <div key={i}>
+              <div className="flex items-center gap-[10px]">
+                <LogoSquare bg="#dcfce7" color="#16a34a" icon={Database} radius={6} size={26} />
+                <div className="min-w-0 leading-tight">
+                  <p className="m-0 truncate text-[13px] font-semibold text-[#0f172a]">
+                    {src.domain ?? (src.url ? hostnameOf(src.url) : "Unknown source")}
+                  </p>
+                  <p className="m-0 text-[12px] text-[#94a3b8]">{src.published_date ?? "Date unknown"}</p>
+                </div>
+              </div>
+              {src.snippet && <p className="m-0 mt-[8px] text-[13px] leading-[20px] text-[#64748b]">{src.snippet}</p>}
+              {src.url && (
+                <a
+                  className="mt-[8px] flex w-fit items-center gap-[7px] text-[13px] font-semibold text-[#5b3df5] no-underline"
+                  href={src.url}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  Read full article
+                  <ExternalLink className="size-[14px]" />
+                </a>
+              )}
+            </div>
+          ))}
         </div>
-      </div>
-
-      <p className="m-0 mt-[16px] text-[13px] leading-[20px] text-[#64748b]">{snippet}</p>
-
-      {url && (
-        <a
-          className="mt-[16px] flex w-fit items-center gap-[7px] text-[13px] font-semibold text-[#5b3df5] no-underline"
-          href={url}
-          rel="noreferrer"
-          target="_blank"
-        >
-          Read full article
-          <ExternalLink className="size-[14px]" />
-        </a>
       )}
     </section>
   );
@@ -422,18 +419,17 @@ function SourceSnippetCard({ signal }: { signal: SignalWithCompanyOut | null }) 
 
 type RelatedCompany = { companyId: string; name: string; score: number };
 
-/* Other real companies that have a signal in the same signal_category
- * (there's no similarity model in the backend, so "similar" = same
- * category). Empty state when this is the only company with the category. */
+/* Other real companies that have an event in the same category (there's no
+ * similarity model in the backend, so "similar" = same category). */
 function SimilarCompaniesCard({ related, categoryName }: { related: RelatedCompany[]; categoryName: string }) {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Companies with Similar Signals</h2>
-      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Other companies with a {categoryName} signal.</p>
+      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Companies with Similar Events</h2>
+      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Other companies with a {categoryName} event.</p>
 
       {related.length === 0 ? (
         <p className="m-0 mt-[16px] text-[13px] text-[#94a3b8]">
-          No other companies have a {categoryName} signal yet.
+          No other companies have a {categoryName} event yet.
         </p>
       ) : (
         <div className="mt-[16px] flex flex-col gap-[16px]">
@@ -467,19 +463,15 @@ function SimilarCompaniesCard({ related, categoryName }: { related: RelatedCompa
 /* Right rail                                                          */
 /* ------------------------------------------------------------------ */
 
-/* Renamed from "AI Summary" - nothing here is LLM-generated (extraction is
- * rule-based, see extraction_method), so the "AI"/"Beta" badge implied a
- * capability that doesn't exist. Body is the real core_fact plus the same
- * category description shown on the Trigger Library. */
 function SummaryCard({ signal, categoryName }: { signal: SignalWithCompanyOut | null; categoryName: string }) {
   if (!signal) return null;
 
-  const categoryDesc = CATEGORY_DESCRIPTIONS[signal.signal_category];
-  const text = signal.core_fact
-    ? `${signal.core_fact}${categoryDesc ? ` This is a ${categoryName} signal: ${categoryDesc}` : ""}`
+  const categoryDesc = signal.category ? CATEGORY_DESCRIPTIONS[signal.category] : undefined;
+  const text = signal.summary
+    ? `${signal.summary}${categoryDesc ? ` This is a ${categoryName} event: ${categoryDesc}` : ""}`
     : categoryDesc
-      ? `${categoryName} signal: ${categoryDesc}`
-      : "No summary was extracted for this signal.";
+      ? `${categoryName} event: ${categoryDesc}`
+      : "No summary was extracted for this event.";
 
   const copy = () => {
     if (typeof navigator !== "undefined" && navigator.clipboard) {
@@ -489,7 +481,7 @@ function SummaryCard({ signal, categoryName }: { signal: SignalWithCompanyOut | 
 
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Signal Summary</h2>
+      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Event Summary</h2>
       <p className="m-0 mt-[12px] text-[13px] leading-[20px] text-[#475569]">{text}</p>
       <button
         className="mt-[16px] flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] py-[9px] text-[13px] font-semibold text-[#334155]"
@@ -505,16 +497,15 @@ function SummaryCard({ signal, categoryName }: { signal: SignalWithCompanyOut | 
 
 type CompanySignalRow = { signalId: string; title: string; category: string; date: string; score: number };
 
-/* Other real signals extracted for this same company, sorted by confidence
- * (see controllers.signals.get_signals). Empty state when this is the only
- * signal on file for the company. */
+/* Other real events extracted for this same company, sorted by event_score
+ * (see controllers.signals.get_signals). */
 function MoreCompanySignalsCard({ rows, companyName }: { rows: CompanySignalRow[]; companyName: string }) {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">More Signals from {companyName}</h2>
+      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">More Events from {companyName}</h2>
 
       {rows.length === 0 ? (
-        <p className="m-0 mt-[16px] text-[13px] text-[#94a3b8]">No other signals on file for {companyName} yet.</p>
+        <p className="m-0 mt-[16px] text-[13px] text-[#94a3b8]">No other events on file for {companyName} yet.</p>
       ) : (
         <div className="mt-[16px] flex flex-col gap-[16px]">
           {rows.map((s) => {
@@ -537,7 +528,7 @@ function MoreCompanySignalsCard({ rows, companyName }: { rows: CompanySignalRow[
                   <p className="m-0 text-[12px] text-[#94a3b8]">{s.date}</p>
                 </div>
                 <div className="text-right">
-                  <p className="m-0 text-[11px] text-[#94a3b8]">Intent Score</p>
+                  <p className="m-0 text-[11px] text-[#94a3b8]">Score</p>
                   <p className="m-0 text-[15px] font-bold text-[#0f172a]">{s.score}</p>
                 </div>
               </div>
@@ -576,37 +567,39 @@ export function SignalDetailPage() {
           .catch(() => setCompany(null));
 
         getSignals(organisationId, s.company_id)
-          .then((rows) => setCompanySignals(rows.filter((r) => r.signal_id !== s.signal_id)))
+          .then((rows) => setCompanySignals(rows.filter((r) => r.buying_event_id !== s.buying_event_id)))
           .catch(() => setCompanySignals([]));
 
-        listSignals(organisationId, { category: s.signal_category, page_size: 12 })
-          .then((res) => setCategorySignals(res.items.filter((r) => r.company_id !== s.company_id)))
-          .catch(() => setCategorySignals([]));
+        if (s.category) {
+          listSignals(organisationId, { category: s.category, page_size: 12 })
+            .then((res) => setCategorySignals(res.items.filter((r) => r.company_id !== s.company_id)))
+            .catch(() => setCategorySignals([]));
+        }
       })
       .catch(() => setNotFound(true));
   }, []);
 
-  const categoryName = signal ? categoryLabel(signal.signal_category) : "this category";
+  const categoryName = signal ? categoryLabel(signal.category ?? "") : "this category";
 
   const relatedCompanies: RelatedCompany[] = (() => {
     const seen = new Set<string>();
     const rows: RelatedCompany[] = [];
-    const sorted = [...categorySignals].sort((a, b) => (b.signal_confidence ?? 0) - (a.signal_confidence ?? 0));
+    const sorted = [...categorySignals].sort((a, b) => (b.event_score ?? 0) - (a.event_score ?? 0));
     for (const s of sorted) {
       if (seen.has(s.company_id)) continue;
       seen.add(s.company_id);
-      rows.push({ companyId: s.company_id, name: s.company_name, score: Math.round((s.signal_confidence ?? 0) * 100) });
+      rows.push({ companyId: s.company_id, name: s.company_name, score: Math.round(s.event_score ?? 0) });
       if (rows.length >= 4) break;
     }
     return rows;
   })();
 
   const otherSignals: CompanySignalRow[] = companySignals.slice(0, 4).map((s) => ({
-    signalId: s.signal_id,
-    title: titleCase(s.signal_type),
-    category: s.signal_category,
-    date: s.ingested_at ? new Date(s.ingested_at).toLocaleDateString() : "—",
-    score: Math.round((s.signal_confidence ?? 0) * 100),
+    signalId: s.buying_event_id,
+    title: s.title || titleCase(s.event_type),
+    category: s.category ?? "",
+    date: s.published_at ? new Date(s.published_at).toLocaleDateString() : "—",
+    score: Math.round(s.event_score ?? 0),
   }));
 
   return (
@@ -640,7 +633,7 @@ export function SignalDetailPage() {
               <div className="flex flex-col gap-[24px]">
                 <div className="grid grid-cols-1 gap-[24px] lg:grid-cols-[1.45fr_1fr]">
                   <ExtractionDetailsCard signal={signal} />
-                  <ConfidenceBreakdownCard signal={signal} />
+                  <ScoreBreakdownCard signal={signal} />
                 </div>
 
                 <div className="grid grid-cols-1 gap-[24px] lg:grid-cols-3">
@@ -651,7 +644,7 @@ export function SignalDetailPage() {
               </div>
 
               <div className="flex flex-col gap-[24px]">
-                <IntentScoreCard signal={signal} />
+                <ScoreCard signal={signal} />
                 <SummaryCard categoryName={categoryName} signal={signal} />
                 <MoreCompanySignalsCard companyName={signal?.company_name ?? "this company"} rows={otherSignals} />
               </div>

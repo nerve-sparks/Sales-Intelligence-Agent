@@ -1,4 +1,6 @@
+from app.models.buying_event import BuyingEvent
 from app.models.company import Company
+from app.models.company_import_batch import CompanyImportBatch
 from app.models.company_intent import CompanyIntent
 from app.models.company_news import CompanyNews
 from app.models.company_scoop import CompanyScoop
@@ -16,7 +18,9 @@ from app.models.workspace import Workspace
 from app.models.workspace_member import WorkspaceMember
 
 __all__ = [
+    "BuyingEvent",
     "Company",
+    "CompanyImportBatch",
     "CompanyIntent",
     "CompanyNews",
     "CompanyScoop",

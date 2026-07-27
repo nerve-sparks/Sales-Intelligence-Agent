@@ -304,13 +304,15 @@ def _news_text(news) -> str:
     return f"{news.title or ''}. {news.description or ''}".strip()[:600]
 
 
-async def _extract_news_signals(session: AsyncSession, organisation_id) -> tuple[int, int]:
+async def _extract_news_signals(session: AsyncSession, organisation_id, company_ids=None) -> tuple[int, int]:
     inserted = skipped = 0
     stmt = (
         select(CompanyNews, Company.company_name, Company.industries)
         .join(Company, Company.company_id == CompanyNews.company_id)
         .where(Company.organisation_id == organisation_id)
     )
+    if company_ids is not None:
+        stmt = stmt.where(Company.company_id.in_(company_ids))
     all_rows = (await session.execute(stmt)).all()
 
     # Skip news already checked in a previous run (see _already_checked_sources)
@@ -442,13 +444,15 @@ def _scoop_text(scoop) -> str:
     return f"{topic}. {scoop.description or ''}".strip()[:600]
 
 
-async def _extract_scoop_signals(session: AsyncSession, organisation_id) -> tuple[int, int]:
+async def _extract_scoop_signals(session: AsyncSession, organisation_id, company_ids=None) -> tuple[int, int]:
     inserted = skipped = 0
     stmt = (
         select(CompanyScoop, Company.company_name, Company.industries)
         .join(Company, Company.company_id == CompanyScoop.company_id)
         .where(Company.organisation_id == organisation_id)
     )
+    if company_ids is not None:
+        stmt = stmt.where(Company.company_id.in_(company_ids))
     all_rows = (await session.execute(stmt)).all()
 
     # Skip scoops already checked in a previous run - see the matching
@@ -553,9 +557,9 @@ async def _extract_scoop_signals(session: AsyncSession, organisation_id) -> tupl
     return inserted, skipped
 
 
-async def extract_signals(session: AsyncSession, organisation_id) -> dict:
-    news_inserted, news_skipped = await _extract_news_signals(session, organisation_id)
-    scoop_inserted, scoop_skipped = await _extract_scoop_signals(session, organisation_id)
+async def extract_signals(session: AsyncSession, organisation_id, company_ids=None) -> dict:
+    news_inserted, news_skipped = await _extract_news_signals(session, organisation_id, company_ids)
+    scoop_inserted, scoop_skipped = await _extract_scoop_signals(session, organisation_id, company_ids)
     await session.commit()
     return {
         "inserted": news_inserted + scoop_inserted,

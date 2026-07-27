@@ -1,34 +1,11 @@
-/* Mirrors backend/app/routes/icp.py */
-import { apiDelete, apiGet, apiPost, apiPut } from "./client";
-
-export type IcpOut = {
-  icp_id: string;
-  name: string | null;
-  industries: string[] | null;
-  employee_min: number | null;
-  employee_max: number | null;
-  revenue_min_usd: number | null;
-  revenue_max_usd: number | null;
-  countries: string[] | null;
-  technologies: string[] | null;
-  buying_committee_personas: string[] | null;
-  departments: string[] | null;
-  created_at: string | null;
-  updated_at: string | null;
-};
-
-export type IcpCreate = {
-  name?: string | null;
-  industries?: string[] | null;
-  employee_min?: number | null;
-  employee_max?: number | null;
-  revenue_min_usd?: number | null;
-  revenue_max_usd?: number | null;
-  countries?: string[] | null;
-  technologies?: string[] | null;
-  buying_committee_personas?: string[] | null;
-  departments?: string[] | null;
-};
+/* Historical module name (kept, like ImportBatchOut's own icp_id/icp_name
+ * fields, so callers don't churn over a rename) - the ICP CRUD API this file
+ * used to mirror (backend/app/routes/icp.py) has been deleted entirely (no
+ * ICP anywhere in the active product). CompanyOut/DecisionMakerOut are
+ * general-purpose types several pages still import from here;
+ * listImportBatches/ImportBatchOut back Onboarding/Settings' upload history,
+ * which has no ICP dependency and hits backend/app/routes/icp_imports.py. */
+import { apiGet, apiPost } from "./client";
 
 export type DecisionMakerOut = {
   decision_maker_id: string;
@@ -83,56 +60,113 @@ export type CompanyOut = {
   decision_makers?: DecisionMakerOut[];
 };
 
-export type IcpCompaniesOut = {
-  icp: IcpOut;
-  match_count: number;
-  companies: CompanyOut[];
-};
-
 export type ImportBatchOut = {
   import_batch_id: string;
-  icp_id: string;
-  icp_name: string | null;
+  workspace_id: string | null;
+  icp_id: string | null; // legacy, null for new prospect uploads
+  icp_name: string | null; // legacy
   file_names: string[] | null;
   files_processed: number;
   total_rows: number;
   companies_ingested: number;
   signals_extracted: number;
+  // New pipeline sales-status counts.
+  sales_ready_count: number;
+  high_priority_count: number;
+  warm_count: number;
+  monitor_count: number;
+  low_priority_count: number;
+  // Legacy read-only counters.
   matched_icp_count: number;
   active_count: number;
   nurture_count: number;
-  // "pending" while scoring is still running in the background - active_count/
-  // nurture_count are 0 until this flips to "complete".
+  // "pending" while research + scoring is still running in the background -
+  // counts are 0 until this flips to "complete".
   scoring_status: "pending" | "complete";
+  // Operational status of the background task (brief items 21, 23).
+  research_status: "pending" | "complete" | "complete_with_warnings" | "failed";
+  companies_researched: number;
+  research_failure_count: number;
+  llm_failure_count: number;
+  scoring_failure_count: number;
+  processing_started_at: string | null;
+  processing_completed_at: string | null;
+  processing_error: string | null;
+  processing_warnings: string[] | null;
   created_at: string | null;
 };
 
-export function createIcp(workspaceId: string, payload: IcpCreate): Promise<IcpOut> {
-  return apiPost<IcpOut>(`/workspaces/${workspaceId}/icp`, payload);
-}
-
-/* Full-replace update (PUT) - the Settings edit form submits every field, so
- * an omitted field means "clear it", not "leave unchanged". */
-export function updateIcp(workspaceId: string, icpId: string, payload: IcpCreate): Promise<IcpOut> {
-  return apiPut<IcpOut>(`/workspaces/${workspaceId}/icp/${icpId}`, payload);
-}
-
-/* Deletes the ICP and (via the FK's ON DELETE CASCADE) its upload-history
- * rows. Companies/signals/scores are organisation-scoped and untouched. */
-export function deleteIcp(workspaceId: string, icpId: string): Promise<void> {
-  return apiDelete<void>(`/workspaces/${workspaceId}/icp/${icpId}`);
-}
-
-export function listIcps(workspaceId: string): Promise<IcpOut[]> {
-  return apiGet<IcpOut[]>(`/workspaces/${workspaceId}/icp`);
-}
-
-export function getIcpCompanies(workspaceId: string, icpId: string): Promise<IcpCompaniesOut> {
-  return apiGet<IcpCompaniesOut>(`/workspaces/${workspaceId}/icp/${icpId}/companies`);
-}
-
-/* Every upload ever made against any ICP in this workspace, newest first -
- * the persisted audit trail for the Settings > ICP Data page. */
+/* Every prospect upload in this workspace, newest first - the persisted audit
+ * trail for the Settings prospect-data page and Enterprise List's per-upload
+ * filter. Workspace-scoped, no ICP (brief section 7). */
 export function listImportBatches(workspaceId: string): Promise<ImportBatchOut[]> {
-  return apiGet<ImportBatchOut[]>(`/workspaces/${workspaceId}/icp/imports`);
+  return apiGet<ImportBatchOut[]>(`/workspaces/${workspaceId}/imports`);
+}
+
+/* Per-company job monitoring for one upload (mirrors backend/app/schemas/job.py) -
+ * "job" here is exactly this same ImportBatchOut/import_batch_id, just a
+ * live per-company-status read view on top of it. Polled from the frontend
+ * instead of keeping the upload request open. */
+
+export type JobStatus = "queued" | "processing" | "partially_completed" | "completed" | "failed" | "cancelled";
+
+export type CompanyJobStatus = "queued" | "researching" | "scoring" | "completed" | "retrying" | "failed" | "needs_review";
+
+export type JobStatusOut = {
+  job_id: string;
+  status: JobStatus;
+  total: number;
+  queued: number;
+  processing: number;
+  completed: number;
+  failed: number;
+  needs_review: number;
+  progress_percentage: number;
+};
+
+export type JobItemOut = {
+  company_id: string;
+  company_name: string;
+  status: CompanyJobStatus;
+  error_message: string | null;
+  retry_count: number;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+export type JobItemsOut = {
+  items: JobItemOut[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type RetryFailedOut = {
+  retried_count: number;
+  status: JobStatusOut;
+};
+
+export function getJobStatus(workspaceId: string, importBatchId: string): Promise<JobStatusOut> {
+  return apiGet<JobStatusOut>(`/workspaces/${workspaceId}/imports/${importBatchId}`);
+}
+
+export function getJobItems(
+  workspaceId: string,
+  importBatchId: string,
+  params: { page?: number; page_size?: number; status?: CompanyJobStatus } = {},
+): Promise<JobItemsOut> {
+  const query = new URLSearchParams();
+  if (params.page) query.set("page", String(params.page));
+  if (params.page_size) query.set("page_size", String(params.page_size));
+  if (params.status) query.set("status", params.status);
+  const qs = query.toString();
+  return apiGet<JobItemsOut>(`/workspaces/${workspaceId}/imports/${importBatchId}/items${qs ? `?${qs}` : ""}`);
+}
+
+export function retryFailedJobItems(workspaceId: string, importBatchId: string): Promise<RetryFailedOut> {
+  return apiPost<RetryFailedOut>(`/workspaces/${workspaceId}/imports/${importBatchId}/retry-failed`);
+}
+
+export function cancelJob(workspaceId: string, importBatchId: string): Promise<JobStatusOut> {
+  return apiPost<JobStatusOut>(`/workspaces/${workspaceId}/imports/${importBatchId}/cancel`);
 }

@@ -1,11 +1,9 @@
 import {
-  ArrowUpRight,
   Bell,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
-  Flame,
   Search,
   Settings,
   ShieldCheck,
@@ -18,8 +16,7 @@ import { FLAT_LINE, Sparkline } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { exportCompanies, getCompanyStats, listCompanies, type CompanyStatsOut } from "../../api/companies";
 import { ApiError } from "../../api/client";
-import { getIcpCompanies, listIcps, listImportBatches, type IcpOut, type ImportBatchOut } from "../../api/icp";
-import { getRankedScores } from "../../api/scores";
+import { listImportBatches, type ImportBatchOut } from "../../api/icp";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
 
 /* Enterprise List shows ONLY real data: company counts (stat cards), and per
@@ -53,18 +50,20 @@ type StatCard = {
  * renders a flat line rather than a fabricated trend. */
 function toStatCards(data: CompanyStatsOut): StatCard[] {
   return [
-    { icon: ShieldCheck, bg: "#f3e9ff", color: "#7c3aed", label: "Total Enterprises", value: data.total.toLocaleString(), spark: "#7c3aed", values: FLAT_LINE },
-    { icon: Settings, bg: "#e7f8ef", color: "#16a34a", label: "High Intent Enterprises", value: data.high_intent.toLocaleString(), spark: "#16a34a", values: FLAT_LINE },
-    { icon: Users, bg: "#fff1e3", color: "#f97316", label: "Medium Intent Enterprises", value: data.medium_intent.toLocaleString(), spark: "#f97316", values: FLAT_LINE },
-    { icon: Bell, bg: "#fdecec", color: "#ef4444", label: "Low Intent Enterprises", value: data.low_intent.toLocaleString(), spark: "#2563eb", values: FLAT_LINE },
+    { icon: ShieldCheck, bg: "#f3e9ff", color: "#7c3aed", label: "Total Companies", value: data.total.toLocaleString(), spark: "#7c3aed", values: FLAT_LINE },
+    { icon: Settings, bg: "#e7f8ef", color: "#16a34a", label: "Sales Ready", value: data.sales_ready.toLocaleString(), spark: "#16a34a", values: FLAT_LINE },
+    { icon: Users, bg: "#fff1e3", color: "#22c55e", label: "High Priority", value: data.high_priority.toLocaleString(), spark: "#22c55e", values: FLAT_LINE },
+    { icon: Bell, bg: "#fff1e3", color: "#f97316", label: "Warm", value: data.warm.toLocaleString(), spark: "#f97316", values: FLAT_LINE },
+    { icon: Bell, bg: "#fef9e7", color: "#eab308", label: "Monitor", value: data.monitor.toLocaleString(), spark: "#eab308", values: FLAT_LINE },
+    { icon: Bell, bg: "#f1f5f9", color: "#94a3b8", label: "Low Priority", value: data.low_priority.toLocaleString(), spark: "#94a3b8", values: FLAT_LINE },
   ];
 }
 
-const emptyStats = toStatCards({ total: 0, high_intent: 0, medium_intent: 0, low_intent: 0, by_country: [] });
+const emptyStats = toStatCards({ total: 0, scored: 0, unscored: 0, sales_ready: 0, high_priority: 0, warm: 0, monitor: 0, low_priority: 0, high_confidence: 0, provisional_pipeline_value: 0, by_country: [] });
 
 function StatCards({ stats }: { stats: StatCard[] }) {
   return (
-    <div className="grid grid-cols-1 gap-[16px] sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-2 gap-[16px] sm:grid-cols-3 xl:grid-cols-6">
       {stats.map((s) => {
         const Icon = s.icon;
         return (
@@ -111,49 +110,18 @@ function EnterpriseTabs() {
   );
 }
 
-function IcpFilterSelect({
-  icps,
-  selectedIcpId,
-  onChange,
-}: {
-  icps: IcpOut[];
-  selectedIcpId: string;
-  onChange: (icpId: string) => void;
-}) {
-  return (
-    <div className="relative flex h-[42px] items-center rounded-[10px] border border-[#e9edf5] bg-white px-[14px]">
-      <select
-        className="h-full appearance-none bg-transparent pr-[24px] text-[14px] font-medium text-[#334155] outline-none"
-        onChange={(e) => onChange(e.target.value)}
-        value={selectedIcpId}
-      >
-        <option value="all">All Companies</option>
-        {icps.map((icp) => (
-          <option key={icp.icp_id} value={icp.icp_id}>
-            {icp.name || "Untitled ICP"}
-          </option>
-        ))}
-      </select>
-      <ChevronDown className="pointer-events-none absolute right-[14px] size-[15px] text-[#94a3b8]" />
-    </div>
-  );
-}
-
 function formatBatchLabel(batch: ImportBatchOut): string {
   const when = batch.created_at
     ? new Date(batch.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })
     : "Unknown date";
   const suffix = batch.scoring_status === "pending" ? " (Scoring…)" : "";
-  return `${when} · ${batch.icp_name || "Untitled ICP"} · ${batch.companies_ingested} companies${suffix}`;
+  const label = batch.file_names?.[0] || "Upload";
+  return `${when} · ${label} · ${batch.companies_ingested} companies${suffix}`;
 }
 
-/* Filters to one specific Excel upload (Company.import_batch_id) - separate
- * axis from the ICP dropdown above (ICP fit vs. "which upload did this
- * company come from"). Selecting a batch here and an ICP there don't
- * currently compose (getIcpCompanies has no batch param) - picking one
- * resets the other back to "all", so it's always unambiguous which single
- * filter is active. Batches still mid-scoring show a "Scoring…" suffix so
- * it's clear the numbers you'd see for that upload aren't final yet. */
+/* Filters the list to one specific prospect upload (Company.import_batch_id).
+ * Batches still mid-scoring show a "Scoring…" suffix so it's clear that
+ * upload's numbers aren't final yet. */
 function UploadFilterSelect({
   batches,
   selectedBatchId,
@@ -183,18 +151,12 @@ function UploadFilterSelect({
 }
 
 function Toolbar({
-  icps,
-  selectedIcpId,
-  onIcpChange,
   batches,
   selectedBatchId,
   onBatchChange,
   search,
   onSearchChange,
 }: {
-  icps: IcpOut[];
-  selectedIcpId: string;
-  onIcpChange: (icpId: string) => void;
   batches: ImportBatchOut[];
   selectedBatchId: string;
   onBatchChange: (batchId: string) => void;
@@ -213,7 +175,6 @@ function Toolbar({
           value={search}
         />
       </div>
-      <IcpFilterSelect icps={icps} onChange={onIcpChange} selectedIcpId={selectedIcpId} />
       <UploadFilterSelect batches={batches} onChange={onBatchChange} selectedBatchId={selectedBatchId} />
     </div>
   );
@@ -232,10 +193,12 @@ type Enterprise = {
   location: string;
   score: number;
   scored: boolean;
-  intent: string;
-  tier: "high" | "medium" | "low";
-  status: string;
+  salesStatus: string;
   statusColor: string;
+  confidence: string;
+  whyNow: string;
+  bestOffering: string;
+  dealValue: string;
   revenue: string;
   employees: string;
 };
@@ -258,24 +221,36 @@ type CompanyLike = {
   industries: string[] | null;
   revenue_range: string | null;
   employee_range: string | null;
+  lead_score: number | null;
+  sales_status: string | null;
+  confidence_label: string | null;
+  best_offering: string | null;
+  why_now: string | null;
+  expected_deal_value_usd: number | null;
 };
 
-/* CompanyListItemOut has no intent/status - those are derived from the real
- * lead_score / gate_status. leadScore/gateStatus are passed explicitly: the
- * "all companies" path reads them off CompanyListItemOut, but the ICP-
- * filtered path (getIcpCompanies) returns plain CompanyOut with no score, so
- * that caller looks scores up via getRankedScores() first. */
-function toEnterprise(company: CompanyLike, leadScore: number | null, gateStatus: string | null): Enterprise {
+// Sales-status band -> dot colour (brief section 17).
+const SALES_STATUS_COLOR: Record<string, string> = {
+  "Sales Ready": "#16a34a",
+  "High Priority": "#22c55e",
+  Warm: "#f97316",
+  Monitor: "#eab308",
+  "Low Priority": "#94a3b8",
+};
+
+function formatDealValue(value: number | null): string {
+  if (value === null) return "—";
+  if (value >= 1000) return `$${Math.round(value / 1000)}k`;
+  return `$${Math.round(value)}`;
+}
+
+/* Every field is the evidence-based score straight off CompanyListItemOut - no
+ * ICP, no gates. */
+function toEnterprise(company: CompanyLike): Enterprise {
+  const leadScore = company.lead_score;
   const scored = leadScore !== null;
-  const rawScore = leadScore ?? 0;
-  // lead_score is a 0-100 float; round for display (matches every other CRM
-  // page — EnterpriseDetail/ScoreBreakdown/etc all Math.round it) but keep the
-  // raw value for the tier thresholds.
-  const score = Math.round(rawScore);
-  const tier: Enterprise["tier"] = rawScore >= 80 ? "high" : rawScore >= 60 ? "medium" : "low";
-  const intent = !scored ? "—" : tier === "high" ? "High" : tier === "medium" ? "Medium" : "Low";
-  const status = gateStatus === "active" ? "Active" : gateStatus === "nurture" ? "Nurture" : "Unscored";
-  const statusColor = gateStatus === "active" ? "#16a34a" : gateStatus === "nurture" ? "#f97316" : "#94a3b8";
+  const score = Math.round(leadScore ?? 0);
+  const salesStatus = company.sales_status ?? (scored ? "Low Priority" : "Unscored");
   const initials = company.company_name
     .split(/\s+/)
     .map((w) => w[0])
@@ -293,55 +268,36 @@ function toEnterprise(company: CompanyLike, leadScore: number | null, gateStatus
     location: [company.city, company.country].filter(Boolean).join(", ") || "—",
     score,
     scored,
-    intent,
-    tier,
-    status,
-    statusColor,
+    salesStatus,
+    statusColor: SALES_STATUS_COLOR[salesStatus] ?? "#94a3b8",
+    confidence: company.confidence_label ?? "—",
+    whyNow: company.why_now ?? "—",
+    bestOffering: company.best_offering ?? "—",
+    dealValue: formatDealValue(company.expected_deal_value_usd),
     revenue: company.revenue_range ?? "—",
     employees: company.employee_range ?? "—",
   };
 }
 
-const intentTones: Record<string, string> = {
-  high: "text-[#16a34a]",
-  medium: "text-[#f97316]",
-  low: "text-[#2563eb]",
-};
-
-function IntentTag({ intent, tier }: { intent: string; tier: string }) {
-  if (intent === "—") {
-    return <span className="text-[13px] text-[#94a3b8]">—</span>;
-  }
-  const Icon = tier === "medium" ? Flame : ArrowUpRight;
-  return (
-    <span className={cn("inline-flex items-center gap-[6px] text-[13px] font-semibold", intentTones[tier])}>
-      <Icon className="size-[15px]" />
-      {intent}
-    </span>
-  );
-}
-
 const cols =
-  "grid-cols-[minmax(0,1.7fr)_0.9fr_1.2fr_1.2fr_1fr_1fr_1.1fr_0.95fr]";
+  "grid-cols-[minmax(0,1.6fr)_1.1fr_1fr_0.9fr_minmax(0,1.6fr)_1fr]";
 
 function EnterpriseTable({ enterprises }: { enterprises: Enterprise[] }) {
   return (
     <div className="overflow-x-auto">
       <div className="min-w-[960px]">
         <div className={cn("grid items-center gap-[12px] border-b border-[#eef1f6] px-[8px] pb-[12px] text-[12px] font-semibold text-[#94a3b8]", cols)}>
-          <span>Enterprise Name</span>
-          <span>Industry</span>
-          <span>Location</span>
-          <span className="flex items-center gap-[4px]">Enterprise Score <ChevronDown className="size-[13px]" /></span>
-          <span>Intent Level</span>
-          <span>Status</span>
-          <span>Revenue</span>
-          <span>Employees</span>
+          <span>Company</span>
+          <span className="flex items-center gap-[4px]">Lead Score <ChevronDown className="size-[13px]" /></span>
+          <span>Sales Status</span>
+          <span>Confidence</span>
+          <span>Best XSparks Offering</span>
+          <span>Expected Deal</span>
         </div>
 
         {enterprises.length === 0 ? (
           <div className="px-[8px] py-[48px] text-center text-[13px] text-[#94a3b8]">
-            No companies found. Upload a ZoomInfo export from Settings to populate this list.
+            No companies found. Upload prospect data from Settings to populate this list.
           </div>
         ) : (
           <div className="divide-y divide-[#f1f5f9]">
@@ -359,12 +315,11 @@ function EnterpriseTable({ enterprises }: { enterprises: Enterprise[] }) {
                   <span className="flex size-[34px] shrink-0 items-center justify-center rounded-[9px] text-[11px] font-bold text-white" style={{ backgroundColor: e.bg }}>
                     {e.logo}
                   </span>
-                  <span className="truncate text-[14px] font-semibold text-[#0f172a]">{e.name}</span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-[14px] font-semibold text-[#0f172a]">{e.name}</span>
+                    <span className="block truncate text-[12px] text-[#94a3b8]">{e.industry} · {e.location}</span>
+                  </span>
                 </div>
-
-                <span className="truncate text-[13px] text-[#475569]">{e.industry}</span>
-
-                <span className="truncate text-[13px] text-[#475569]">{e.location}</span>
 
                 <div className="flex items-center gap-[10px]">
                   <span className="w-[30px] text-[14px] font-bold text-[#0f172a]">{e.scored ? e.score : "—"}</span>
@@ -373,15 +328,16 @@ function EnterpriseTable({ enterprises }: { enterprises: Enterprise[] }) {
                   </span>
                 </div>
 
-                <IntentTag intent={e.intent} tier={e.tier} />
-
                 <span className="flex items-center gap-[6px] text-[13px] font-medium text-[#334155]">
                   <span className="size-[7px] rounded-full" style={{ backgroundColor: e.statusColor }} />
-                  {e.status}
+                  {e.salesStatus}
                 </span>
 
-                <span className="text-[13px] text-[#475569]">{e.revenue}</span>
-                <span className="text-[13px] text-[#475569]">{e.employees}</span>
+                <span className="text-[13px] text-[#475569]">{e.confidence}</span>
+
+                <span className="truncate text-[13px] text-[#475569]" title={e.whyNow}>{e.bestOffering}</span>
+
+                <span className="text-[13px] font-medium text-[#334155]">{e.dealValue}</span>
               </div>
             ))}
           </div>
@@ -496,15 +452,8 @@ function Pagination({
 /* Page                                                                */
 /* ------------------------------------------------------------------ */
 
-// Top lead score first - the backend already orders "all companies" this way
-// (LeadScore.lead_score desc nulls last); the ICP-filtered branch merges
-// scores in JS after two fetches, so it needs its own explicit sort.
-const byScoreDesc = (a: Enterprise, b: Enterprise) => b.score - a.score;
-
 export function EnterpriseListPage() {
   const [enterprises, setEnterprises] = useState<Enterprise[]>([]);
-  const [icps, setIcps] = useState<IcpOut[]>([]);
-  const [selectedIcpId, setSelectedIcpId] = useState("all");
   const [batches, setBatches] = useState<ImportBatchOut[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState("all");
   const [statCards, setStatCards] = useState<StatCard[]>(emptyStats);
@@ -512,21 +461,10 @@ export function EnterpriseListPage() {
   const [exportError, setExportError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  const [icpMatches, setIcpMatches] = useState<Enterprise[] | null>(null);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
 
-  // The ICP filter and the per-upload filter are separate axes that don't
-  // currently compose (see UploadFilterSelect's comment) - picking one
-  // resets the other, so exactly one is ever active.
-  const handleIcpChange = (icpId: string) => {
-    setSelectedIcpId(icpId);
-    setSelectedBatchId("all");
-  };
-  const handleBatchChange = (batchId: string) => {
-    setSelectedBatchId(batchId);
-    setSelectedIcpId("all");
-  };
+  const handleBatchChange = (batchId: string) => setSelectedBatchId(batchId);
 
   // Debounce the search box so a keystroke doesn't fire a request each time.
   useEffect(() => {
@@ -534,24 +472,10 @@ export function EnterpriseListPage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  // Populate the ICP filter dropdown once.
-  useEffect(() => {
-    const workspaceId = getWorkspaceId();
-    if (!workspaceId) {
-      return;
-    }
-    listIcps(workspaceId)
-      .then(setIcps)
-      .catch(() => {
-        // No backend/workspace yet - dropdown just shows "All Companies".
-      });
-  }, []);
-
   // Populate the per-upload filter dropdown, then keep polling while any
-  // upload is still scoring - so a batch's "(Scoring…)" label (and the
-  // company list, if that batch happens to be selected) picks up newly-
-  // scored companies as the background scoring task progresses, without
-  // requiring a manual page reload.
+  // upload is still scoring - so a batch's "(Scoring…)" label and the
+  // company list pick up newly-scored companies as the background task
+  // progresses, without a manual reload.
   useEffect(() => {
     const workspaceId = getWorkspaceId();
     if (!workspaceId) {
@@ -579,15 +503,12 @@ export function EnterpriseListPage() {
   // Reset to page 1 whenever the filter or search changes.
   useEffect(() => {
     setPage(1);
-  }, [selectedIcpId, selectedBatchId, search]);
+  }, [selectedBatchId, search]);
 
-  // "All Companies" is paginated + searched server-side. selectedBatchId
-  // narrows it to one upload's companies; the "all"/"all" guard stays
-  // correct because handleBatchChange always resets selectedIcpId to "all".
+  // Every scored company, paginated + searched server-side, ordered by lead
+  // score. selectedBatchId narrows to one upload's companies. No ICP filter -
+  // every company appears (brief section 26).
   useEffect(() => {
-    if (selectedIcpId !== "all") {
-      return;
-    }
     const organisationId = getOrganisationId();
     if (!organisationId) {
       return;
@@ -600,48 +521,12 @@ export function EnterpriseListPage() {
     })
       .then((res) => {
         setTotal(res.total);
-        setEnterprises(res.items.map((c) => toEnterprise(c, c.lead_score, c.gate_status)).sort(byScoreDesc));
+        setEnterprises(res.items.map(toEnterprise));
       })
       .catch(() => setEnterprises([]));
-  }, [selectedIcpId, selectedBatchId, page, search]);
+  }, [selectedBatchId, page, search]);
 
-  // ICP-filtered: fetch the full match set once per filter/refresh.
-  useEffect(() => {
-    const organisationId = getOrganisationId();
-    const workspaceId = getWorkspaceId();
-    if (selectedIcpId === "all" || !organisationId || !workspaceId) {
-      setIcpMatches(null);
-      return;
-    }
-    Promise.all([getIcpCompanies(workspaceId, selectedIcpId), getRankedScores(organisationId)])
-      .then(([icpResult, ranked]) => {
-        const scoreByName = new Map(ranked.map((r) => [r.company_name, r]));
-        setIcpMatches(
-          icpResult.companies
-            .map((c) => {
-              const matched = scoreByName.get(c.company_name);
-              return toEnterprise(c, matched?.lead_score ?? null, matched?.gate_status ?? null);
-            })
-            .sort(byScoreDesc),
-        );
-      })
-      .catch(() => setIcpMatches([]));
-  }, [selectedIcpId]);
-
-  // Slice the full ICP match list into the current page (with client-side
-  // name search, since getIcpCompanies isn't paginated/searched server-side).
-  useEffect(() => {
-    if (icpMatches === null) {
-      return;
-    }
-    const filtered = search
-      ? icpMatches.filter((e) => e.name.toLowerCase().includes(search.toLowerCase()))
-      : icpMatches;
-    setTotal(filtered.length);
-    setEnterprises(filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
-  }, [icpMatches, page, search]);
-
-  // Exports the companies currently shown, with real LeadScore columns.
+  // Exports the companies currently shown, with evidence-based score columns.
   const handleExport = async () => {
     const organisationId = getOrganisationId();
     if (!organisationId) {
@@ -650,7 +535,7 @@ export function EnterpriseListPage() {
     setExporting(true);
     setExportError(null);
     try {
-      const blob = await exportCompanies(organisationId, selectedIcpId === "all" ? undefined : selectedIcpId);
+      const blob = await exportCompanies(organisationId, selectedBatchId === "all" ? undefined : selectedBatchId);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -708,13 +593,10 @@ export function EnterpriseListPage() {
             <div className="mt-[18px]">
               <Toolbar
                 batches={batches}
-                icps={icps}
                 onBatchChange={handleBatchChange}
-                onIcpChange={handleIcpChange}
                 onSearchChange={setSearchInput}
                 search={searchInput}
                 selectedBatchId={selectedBatchId}
-                selectedIcpId={selectedIcpId}
               />
             </div>
 

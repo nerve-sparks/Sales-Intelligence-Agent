@@ -11,3 +11,8 @@ python-multipart==0.0.20
 httpx==0.28.1
 openai==2.46.0
 firebase-admin==7.5.0
+
+# Dev/test tooling (brief item 26). The standalone tests/ scripts also run
+# with plain `python` and no pytest, but these enable `python -m pytest`.
+pytest==8.3.4
+pytest-asyncio==0.25.2

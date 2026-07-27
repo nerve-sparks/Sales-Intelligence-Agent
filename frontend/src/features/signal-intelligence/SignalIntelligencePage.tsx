@@ -71,14 +71,14 @@ function toStatCards(data: SignalStatsOut): StatCard[] {
 
   return [
     { icon: Target, iconBg: "bg-[#e8f0ff]", iconColor: "text-[#2563eb]", label: "Total Signals", value: data.total.toLocaleString(), delta: deltaFor((p) => p.total), color: "#2563eb", values: seriesFor((p) => p.total) },
-    { icon: Crosshair, iconBg: "bg-[#f3e8ff]", iconColor: "text-[#7c3aed]", label: "High-Intent Signals", value: data.high_intent.toLocaleString(), delta: deltaFor((p) => p.high), color: "#7c3aed", values: seriesFor((p) => p.high) },
-    { icon: Activity, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Medium-Intent Signals", value: data.medium_intent.toLocaleString(), delta: deltaFor((p) => p.medium), color: "#f97316", values: seriesFor((p) => p.medium) },
-    { icon: DollarSign, iconBg: "bg-[#e7f8ef]", iconColor: "text-[#16a34a]", label: "Low-Intent Signals", value: data.low_intent.toLocaleString(), delta: deltaFor((p) => p.low), color: "#16a34a", values: seriesFor((p) => p.low) },
+    { icon: Crosshair, iconBg: "bg-[#f3e8ff]", iconColor: "text-[#7c3aed]", label: "High-Relevance Signals", value: data.high_relevance.toLocaleString(), delta: deltaFor((p) => p.high), color: "#7c3aed", values: seriesFor((p) => p.high) },
+    { icon: Activity, iconBg: "bg-[#fff1e8]", iconColor: "text-[#f97316]", label: "Medium-Relevance Signals", value: data.medium_relevance.toLocaleString(), delta: deltaFor((p) => p.medium), color: "#f97316", values: seriesFor((p) => p.medium) },
+    { icon: DollarSign, iconBg: "bg-[#e7f8ef]", iconColor: "text-[#16a34a]", label: "Low-Relevance Signals", value: data.low_relevance.toLocaleString(), delta: deltaFor((p) => p.low), color: "#16a34a", values: seriesFor((p) => p.low) },
   ];
 }
 
 const ZERO_STATS: SignalStatsOut = {
-  total: 0, high_intent: 0, medium_intent: 0, low_intent: 0, company_count: 0, avg_confidence: 0,
+  total: 0, high_relevance: 0, medium_relevance: 0, low_relevance: 0, company_count: 0, avg_confidence: 0,
   executives_impacted: 0, actionable_count: 0, by_category: [], trend: [], top_signals: [], histogram: [], by_country: [], by_source: [],
 };
 
@@ -220,7 +220,7 @@ type CategorySegment = { label: string; color: string; pct: string; count: strin
 function toCategorySegments(data: SignalStatsOut): CategorySegment[] {
   const total = data.by_category.reduce((sum, c) => sum + c.count, 0) || 1;
   return data.by_category.map((c, i) => ({
-    label: CATEGORY_LABELS[c.signal_category] ?? c.signal_category.replace(/_/g, " "),
+    label: c.signal_category ? (CATEGORY_LABELS[c.signal_category] ?? c.signal_category.replace(/_/g, " ")) : "Uncategorized",
     color: CATEGORY_COLORS[i % CATEGORY_COLORS.length],
     pct: `${Math.round((c.count / total) * 100)}%`,
     count: c.count.toLocaleString(),
@@ -309,7 +309,7 @@ function SourceTypeCard({ segments, total }: { segments: CategorySegment[]; tota
 }
 
 /* ------------------------------------------------------------------ */
-/* Top High-Intent Signals (table)                                     */
+/* Top High-Relevance Signals (table)                                     */
 /* ------------------------------------------------------------------ */
 
 type Brand = { label: string; bg: string; color: string; icon?: IconType };
@@ -356,34 +356,35 @@ function titleCase(s: string): string {
   return s.replace(/_/g, " ").split(" ").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
 }
 
-function impactFor(confidence: number): string {
-  if (confidence >= 0.85) return "Very High";
-  if (confidence >= 0.6) return "High";
-  if (confidence >= 0.4) return "Medium";
+function impactFor(relevance: number): string {
+  if (relevance >= 0.85) return "Very High";
+  if (relevance >= 0.65) return "High";
+  if (relevance >= 0.4) return "Medium";
   return "Low";
 }
 
 function toSignalRow(s: SignalWithCompanyOut): SignalRow {
-  const confidence = s.signal_confidence ?? 0;
-  const cat = categoryStyle(s.signal_category);
+  const relevance = s.relevance ?? 0;
+  const cat = categoryStyle(s.category ?? "");
+  const sourceCount = s.evidence?.length ?? 0;
   return {
-    signalId: s.signal_id,
+    signalId: s.buying_event_id,
     icon: cat.icon,
     iconBg: cat.bg,
     iconColor: cat.color,
-    title: titleCase(s.signal_type),
-    subtitle: s.core_fact ? s.core_fact.slice(0, 60) : CATEGORY_LABELS[s.signal_category] ?? titleCase(s.signal_category),
+    title: s.title || titleCase(s.event_type),
+    subtitle: s.summary ? s.summary.slice(0, 60) : (s.category ? (CATEGORY_LABELS[s.category] ?? titleCase(s.category)) : "—"),
     account: { label: s.company_name, bg: "#eef1ff", color: "#4f46e5", icon: Building2 },
-    source: { label: titleCase(s.source ?? "ZoomInfo"), bg: "#f1f5f9", color: "#64748b", icon: Database },
-    score: Math.round(confidence * 100),
-    detected: relativeTime(s.ingested_at),
-    impact: impactFor(confidence),
+    source: { label: sourceCount > 1 ? `${sourceCount} sources` : "1 source", bg: "#f1f5f9", color: "#64748b", icon: Database },
+    score: Math.round(s.event_score ?? 0),
+    detected: relativeTime(s.published_at),
+    impact: impactFor(relevance),
   };
 }
 
 const tableColumns = "grid-cols-[minmax(0,2fr)_minmax(0,1.1fr)_minmax(0,1.1fr)_0.9fr_1fr_0.8fr]";
 
-function TopHighIntentSignals({ rows }: { rows: SignalRow[] }) {
+function TopHighRelevanceSignals({ rows }: { rows: SignalRow[] }) {
   return (
     <section className="rounded-[18px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex items-start justify-between gap-[16px]">
@@ -406,7 +407,7 @@ function TopHighIntentSignals({ rows }: { rows: SignalRow[] }) {
               <span>Signal</span>
               <span>Account</span>
               <span>Source</span>
-              <span>Intent Score</span>
+              <span>Relevance Score</span>
               <span>Detected At</span>
               <span>Impact</span>
             </div>
@@ -480,9 +481,9 @@ export function SignalIntelligencePage() {
   const trendLabels = data.trend.map((p) => p.date);
   const trendSeries: TrendSeries[] = [
     { label: "Total Signals", color: TREND_COLORS.total, values: data.trend.map((p) => p.total) },
-    { label: "High-Intent Signals", color: TREND_COLORS.high, values: data.trend.map((p) => p.high) },
-    { label: "Medium-Intent Signals", color: TREND_COLORS.medium, values: data.trend.map((p) => p.medium) },
-    { label: "Low-Intent Signals", color: TREND_COLORS.low, values: data.trend.map((p) => p.low) },
+    { label: "High-Relevance Signals", color: TREND_COLORS.high, values: data.trend.map((p) => p.high) },
+    { label: "Medium-Relevance Signals", color: TREND_COLORS.medium, values: data.trend.map((p) => p.medium) },
+    { label: "Low-Relevance Signals", color: TREND_COLORS.low, values: data.trend.map((p) => p.low) },
   ];
   const categorySegments = toCategorySegments(data);
   const topRows = data.top_signals.map(toSignalRow);
@@ -522,7 +523,7 @@ export function SignalIntelligencePage() {
           </div>
 
           <div className="mt-[22px]">
-            <TopHighIntentSignals rows={topRows} />
+            <TopHighRelevanceSignals rows={topRows} />
           </div>
         </main>
       </div>

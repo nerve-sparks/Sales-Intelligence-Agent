@@ -60,15 +60,15 @@ function Tag({ label, tone }: { label: string; tone: string }) {
   );
 }
 
-const intentTones: Record<string, string> = {
+const relevanceTones: Record<string, string> = {
   High: "bg-[#f3e9ff] text-[#7c3aed]",
   Medium: "bg-[#fff1e3] text-[#f97316]",
   Low: "bg-[#eff6ff] text-[#2563eb]",
 };
 
-function IntentBadge({ level }: { level: string }) {
+function RelevanceBadge({ level }: { level: string }) {
   return (
-    <span className={cn("inline-flex items-center rounded-[8px] px-[12px] py-[5px] text-[13px] font-semibold", intentTones[level])}>
+    <span className={cn("inline-flex items-center rounded-[8px] px-[12px] py-[5px] text-[13px] font-semibold", relevanceTones[level])}>
       {level}
     </span>
   );
@@ -102,26 +102,26 @@ type Signal = {
   title: string;
   description: string;
   tags: { label: string; tone: string }[];
-  intent: string;
+  relevance: string;
   score: number;
   detected: string;
 };
 
 function toSignal(s: SignalWithCompanyOut): Signal {
-  const confidence = s.signal_confidence ?? 0;
-  const intent = confidence >= 0.6 ? "High" : confidence >= 0.4 ? "Medium" : "Low";
+  const relevanceValue = s.relevance ?? 0;
+  const relevance = relevanceValue >= 0.65 ? "High" : relevanceValue >= 0.4 ? "Medium" : "Low";
   return {
-    signalId: s.signal_id,
+    signalId: s.buying_event_id,
     company: s.company_name,
-    title: titleize(s.signal_type),
-    description: s.core_fact ?? "—",
+    title: s.title || titleize(s.event_type),
+    description: s.summary ?? "—",
     tags: [
-      { label: categoryLabel(s.signal_category), tone: "purple" },
-      ...(s.is_action ? [{ label: "Action", tone: "gray" }] : []),
+      ...(s.category ? [{ label: categoryLabel(s.category), tone: "purple" }] : []),
+      ...((s.evidence?.length ?? 0) > 1 ? [{ label: `${s.evidence?.length} sources`, tone: "gray" }] : []),
     ],
-    intent,
-    score: Math.round(confidence * 100),
-    detected: relativeTime(s.ingested_at),
+    relevance,
+    score: Math.round((s.event_score ?? 0)),
+    detected: relativeTime(s.published_at),
   };
 }
 
@@ -135,14 +135,14 @@ function SignalTable({ signals }: { signals: Signal[] }) {
           <div className={cn("grid items-center gap-[16px] border-b border-[#eef1f6] px-[24px] py-[15px] text-[13px] font-medium text-[#94a3b8]", tableColumns)}>
             <span>Signal</span>
             <span>Company</span>
-            <span>Intent</span>
-            <span>Intent Score</span>
+            <span>Relevance</span>
+            <span>Score</span>
             <span>Detected</span>
           </div>
 
           {signals.length === 0 ? (
             <div className="px-[24px] py-[48px] text-center text-[13px] text-[#94a3b8]">
-              No signals yet. Upload a ZoomInfo export to extract signals.
+              No buying events yet. Upload prospect data to start research.
             </div>
           ) : (
             <div className="divide-y divide-[#eef1f6]">
@@ -179,7 +179,7 @@ function SignalTable({ signals }: { signals: Signal[] }) {
                   </div>
 
                   <div>
-                    <IntentBadge level={signal.intent} />
+                    <RelevanceBadge level={signal.relevance} />
                   </div>
 
                   <div className="flex items-center gap-[8px]">
@@ -322,7 +322,7 @@ export function SignalFeedPage() {
             </span>
           </div>
           <p className="m-0 mt-[6px] text-[15px] text-[#64748b]">
-            Buying signals extracted from your uploaded company data.
+            Canonical buying events researched live via Serper for your uploaded companies.
           </p>
 
           <div className="mt-[22px]">
