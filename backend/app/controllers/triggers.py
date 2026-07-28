@@ -55,7 +55,7 @@ async def insight(workspace_id: UUID, db: AsyncSession = Depends(get_db)):
     try:
         summary = await llm_client.complete(
             [{"role": "user", "content": prompt}],
-            generation_name="trigger-library-insight",
+            generation_name="generate-trigger-insight",
             trace_user_id=str(workspace_id),
         )
     except llm_client.LLMNotConfiguredError:

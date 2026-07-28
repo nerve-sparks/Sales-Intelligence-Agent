@@ -174,7 +174,7 @@ def _parse_profile(raw: str) -> dict | None:
     return parsed
 
 
-async def _scrape_and_extract() -> dict | None:
+async def _scrape_and_extract(organisation_id=None) -> dict | None:
     """Returns a freshly-scraped + LLM-structured profile, or None if either
     the scraper or the LLM is unavailable / returns unusable output."""
     if not nexus_scraper.is_configured() or not llm_client.is_configured():
@@ -188,7 +188,8 @@ async def _scrape_and_extract() -> dict | None:
     try:
         raw = await llm_client.complete(
             [{"role": "user", "content": _build_extraction_prompt(content)}],
-            generation_name="offering-profile-sync",
+            generation_name="sync-offering-profile",
+            trace_user_id=str(organisation_id) if organisation_id else None,
         )
     except Exception:
         return None
@@ -201,7 +202,7 @@ async def sync_offering_profile(session: AsyncSession, organisation_id) -> dict:
     instead, so onboarding is never blocked by xsparks.ai being unavailable
     (brief section 6). Returns {status, profile}."""
     now = datetime.now(timezone.utc)
-    extracted = await _scrape_and_extract()
+    extracted = await _scrape_and_extract(organisation_id)
 
     if extracted is not None:
         extracted["source_url"] = XSPARKS_SOURCE_URL

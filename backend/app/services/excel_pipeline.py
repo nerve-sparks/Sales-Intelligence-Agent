@@ -48,7 +48,7 @@ async def _upsert_decision_makers(session: AsyncSession, dm_rows: list[dict]) ->
 async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: list[dict]) -> dict[int, UUID]:
     """Parses prospect rows and upserts ONLY identity + firmographic + contact
     data (brief item 14). External buying evidence (news/scoops/intent) no
-    longer comes from spreadsheet columns - it all originates through Serper
+    longer comes from spreadsheet columns - it all originates through Tavily
     research into buying_event, so build_intent_row/build_scoop_row/
     build_news_row are deliberately not called here.
 
@@ -93,7 +93,7 @@ async def run_pipeline(
 ) -> dict[int, UUID]:
     """The fast, synchronous half of a prospect upload: parse + upsert
     company/contact identity data only (brief section 4). No ICP, no signals,
-    no scoring - external buying evidence (Serper research) and scoring are
+    no scoring - external buying evidence (Tavily research) and scoring are
     the slow parts and run afterward in the background task, so the upload
     endpoint returns immediately. Returns {zi_company_id: company_id}.
     """
@@ -211,9 +211,9 @@ async def score_companies_in_background(
 
             failures = research_summary.get("failed", 0)
             if failures:
-                warnings.append(f"{failures} company(ies) failed research (Serper/LLM unavailable)")
-            if research_summary.get("serper_not_configured"):
-                warnings.append("Serper not configured - no external evidence gathered")
+                warnings.append(f"{failures} company(ies) failed research (Tavily/LLM unavailable)")
+            if research_summary.get("tavily_not_configured"):
+                warnings.append("Tavily not configured - no external evidence gathered")
             status = "complete_with_warnings" if warnings else "complete"
 
             await session.execute(

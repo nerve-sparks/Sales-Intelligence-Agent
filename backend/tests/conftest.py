@@ -2,7 +2,7 @@
 
 Runs against the REAL Postgres DB pointed at by DATABASE_URL (same
 convention as this project's manual verification passes) - nothing here
-mocks the database layer. Only external network calls (Serper, LLM,
+mocks the database layer. Only external network calls (Tavily, LLM,
 Nexus scraper) are ever monkeypatched, and only within the specific tests
 that need to simulate those services being unavailable.
 

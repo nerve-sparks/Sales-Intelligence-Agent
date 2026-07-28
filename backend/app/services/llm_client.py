@@ -1,27 +1,82 @@
-"""LLM client with two providers: a self-hosted Ollama server (primary -
-OLLAMA_BASE_URL/OLLAMA_MODEL in .env, no per-request cost) and BridgeLLM, an
-OpenAI-compatible proxy routed to gemini/gemini-2.5-flash (fallback - auth via
-LLM_API_KEY in .env).
+"""LLM client with three providers, tried in order until one succeeds:
 
-Ollama is tried first on every call; BridgeLLM is only used when Ollama fails
-(unreachable, timeout, bad response) and a bridge key is actually configured.
-Ollama is noticeably slower (~27s for a 12-item batch vs BridgeLLM's cloud
-latency) since it's a local model over a network link rather than a hosted
-API, but requires no external key/budget - the tradeoff favours it as the
-default path, with BridgeLLM as a paid safety net rather than the other way
-around."""
+1. BridgeLLM (primary) - an OpenAI-compatible proxy routed to
+   gemini/gemini-2.5-flash-lite (the only model LLM_API_KEY has access to -
+   gemini-2.5-flash itself 403s on this key), auth via LLM_API_KEY. Measured
+   ~21s/call avg and noticeably less selective at rejecting non-events than
+   DeepSeek was (see conversation history: an extraction-quality comparison
+   found it accepted ~100% of evidence items vs DeepSeek being selective,
+   which drove a real dedup double-counting bug - since fixed in
+   buying_event_service._merge_similar_groups/_stem, which now stems verb
+   tense/plural variance so a less-consistent model's paraphrasing of the SAME
+   real event ("acquired" vs "acquires") still merges instead of being
+   counted twice). Made primary per explicit instruction despite the slower/
+   less-selective tradeoffs vs DeepSeek.
+2. DeepSeek (fallback) - deepseek-chat (currently resolves to
+   deepseek-v4-flash server-side), auth via DEEPSEEK_API_KEY. Fast, cheap, and
+   genuinely serves concurrent requests - measured at ~3.5s/call, versus
+   Ollama's ~68-214s/call on this deployment.
+3. Ollama (last-resort fallback) - a self-hosted server, OLLAMA_BASE_URL/
+   OLLAMA_MODEL in .env. No per-request cost, but slow and effectively
+   single-threaded on this deployment - kept only as a free safety net if
+   BOTH paid providers are ever unavailable, not because it's fast.
+
+Each tier is attempted only if it's actually configured, and only after the
+previous tier has raised. If every configured tier fails, the FIRST failure
+(from the primary/BridgeLLM, if it was attempted) is what propagates, since
+that's the most diagnostically useful one - a fallback failing too is
+expected noise, not new information. LLMNotConfiguredError is raised up
+front only when NONE of the three are configured at all.
+
+Every call is traced in Langfuse (LANGFUSE_PUBLIC_KEY/SECRET_KEY/BASE_URL in
+.env) via the `langfuse.openai` drop-in client wrapper - this is why
+`AsyncOpenAI` is imported from `langfuse.openai` below instead of `openai`
+directly (see app.core.config's load_dotenv() ordering note). The wrapper
+auto-captures model name, token usage (and DeepSeek's cache-hit/miss token
+split), and full input/output on every call with no extra code at the
+`.create()` site beyond the `name=`/`metadata=` kwargs added here - callers
+just keep passing generation_name/trace_id/trace_user_id as before, and this
+module maps them onto Langfuse's session_id/user_id/tags. See
+.claude/skills/langfuse/references/instrumentation.md for the instrumentation
+best practices this follows.
+"""
 
 import uuid
 
-from openai import AsyncOpenAI
+# Config must be imported (and load_dotenv() must have already run, which it
+# does at app.core.config import time) BEFORE langfuse.openai, or Langfuse
+# initializes with missing/wrong credentials (common mistake per the
+# instrumentation skill).
+from app.core.config import get_settings  # noqa: E402  (import-order matters, see above)
+from langfuse.openai import AsyncOpenAI  # noqa: E402
 
-from app.core.config import get_settings
-
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL = "deepseek-chat"
 BRIDGE_BASE_URL = "https://llm.bridgellm.nervesparks.com"
-BRIDGE_MODEL = "gemini/gemini-2.5-flash"
+# LLM_API_KEY is scoped to flash-lite only - confirmed live: a direct call
+# with "gemini/gemini-2.5-flash" 403s ("key not allowed to access model. This
+# key can only access models=['gemini/gemini-2.5-flash-lite']"). That meant
+# this whole fallback tier was silently dead - any time DeepSeek failed,
+# BridgeLLM would 403 too instead of actually catching the failure.
+BRIDGE_MODEL = "gemini/gemini-2.5-flash-lite"
 
-_ollama_client: AsyncOpenAI | None = None
+# The SDK's own default (read=600s, i.e. 10 minutes, with its own 2 hidden
+# retries) turns one stalled call into a slot held for up to ~30 minutes -
+# with only research_concurrency slots total, a handful of stalled DeepSeek/
+# BridgeLLM calls can stall an entire batch (confirmed live: 7/493 companies
+# progressed in 20 minutes, none yet in 'retrying' or 'failed', meaning they
+# were still hung on their first attempt). Fast providers get a short timeout
+# so a stall fails over quickly instead of silently eating a slot; Ollama
+# keeps a long one since it's genuinely slow (68-214s/call measured). Each
+# client's max_retries=0 disables the SDK's own hidden retry loop - our own
+# outer retry/backoff in search_signal_ingest._process_company is the only
+# retry layer, so the two don't compound.
+FAST_PROVIDER_TIMEOUT_SECONDS = 45.0
+OLLAMA_TIMEOUT_SECONDS = 240.0
+
+_deepseek_client: AsyncOpenAI | None = None
 _bridge_client: AsyncOpenAI | None = None
+_ollama_client: AsyncOpenAI | None = None
 
 
 class LLMNotConfiguredError(Exception):
@@ -29,13 +84,43 @@ class LLMNotConfiguredError(Exception):
 
 
 def is_configured() -> bool:
-    """Whether SOME LLM provider is usable - Ollama (OLLAMA_BASE_URL always
-    has a working default, so this is normally True) or BridgeLLM
-    (LLM_API_KEY). Lets callers (e.g. signal_llm) fail fast and fall back to
-    non-LLM behaviour instead of firing a request that's certain to raise
-    LLMNotConfiguredError."""
+    """Whether ANY provider is usable - lets callers (e.g. signal_llm) fail
+    fast and fall back to non-LLM behaviour instead of firing a request
+    that's certain to raise LLMNotConfiguredError."""
     settings = get_settings()
-    return bool(settings.ollama_base_url or settings.llm_api_key)
+    return bool(settings.deepseek_api_key or settings.llm_api_key or settings.ollama_base_url)
+
+
+def _get_deepseek_client() -> AsyncOpenAI:
+    global _deepseek_client
+    if _deepseek_client is not None:
+        return _deepseek_client
+    settings = get_settings()
+    if not settings.deepseek_api_key:
+        raise LLMNotConfiguredError("DEEPSEEK_API_KEY is not set in the environment")
+    _deepseek_client = AsyncOpenAI(
+        api_key=settings.deepseek_api_key,
+        base_url=DEEPSEEK_BASE_URL,
+        timeout=FAST_PROVIDER_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
+    return _deepseek_client
+
+
+def _get_bridge_client() -> AsyncOpenAI:
+    global _bridge_client
+    if _bridge_client is not None:
+        return _bridge_client
+    settings = get_settings()
+    if not settings.llm_api_key:
+        raise LLMNotConfiguredError("LLM_API_KEY is not set in the environment")
+    _bridge_client = AsyncOpenAI(
+        api_key=settings.llm_api_key,
+        base_url=BRIDGE_BASE_URL,
+        timeout=FAST_PROVIDER_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
+    return _bridge_client
 
 
 def _get_ollama_client() -> AsyncOpenAI:
@@ -45,21 +130,29 @@ def _get_ollama_client() -> AsyncOpenAI:
     # Ollama's OpenAI-compatible endpoint doesn't check the API key - any
     # non-empty string satisfies the SDK's requirement that one be set.
     settings = get_settings()
-    _ollama_client = AsyncOpenAI(api_key="ollama", base_url=settings.ollama_base_url)
+    _ollama_client = AsyncOpenAI(
+        api_key="ollama",
+        base_url=settings.ollama_base_url,
+        timeout=OLLAMA_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
     return _ollama_client
 
 
-def _get_bridge_client() -> AsyncOpenAI:
-    global _bridge_client
-    if _bridge_client is not None:
-        return _bridge_client
-
-    settings = get_settings()
-    if not settings.llm_api_key:
-        raise LLMNotConfiguredError("LLM_API_KEY is not set in the environment")
-
-    _bridge_client = AsyncOpenAI(api_key=settings.llm_api_key, base_url=BRIDGE_BASE_URL)
-    return _bridge_client
+def _langfuse_metadata(trace_id: str | None, trace_user_id: str | None, generation_name: str) -> dict:
+    """Maps this module's existing trace_id/trace_user_id params onto
+    Langfuse's session_id/user_id, plus an auto-derived tag from
+    generation_name (satisfies the instrumentation skill's "feature tag"
+    guidance with zero extra params needed at call sites). Only non-None
+    values are included - Langfuse ignores absent keys rather than treating
+    them as "no session"/"no user" the same way an explicit None would in
+    some SDKs, so we omit rather than pass None."""
+    metadata: dict = {"langfuse_tags": [generation_name]}
+    if trace_id:
+        metadata["langfuse_session_id"] = trace_id
+    if trace_user_id:
+        metadata["langfuse_user_id"] = trace_user_id
+    return metadata
 
 
 async def complete(
@@ -73,62 +166,93 @@ async def complete(
 ) -> str:
     """Sends a chat completion request and returns the assistant's reply text.
 
-    generation_name/id/trace_id/trace_user_id are BridgeLLM's own
-    observability metadata (see extra_body.metadata), only attached to the
-    BridgeLLM call - generation_name is the only one worth always setting
-    explicitly per call site; the rest default to a random id if not given.
+    generation_name becomes both this call's Langfuse observation name (also
+    forwarded to BridgeLLM's own metadata) - name it as a verb-first action
+    ("extract-buying-events", not "buying-event-extraction") per Langfuse's
+    naming guidance, since it's a stable identifier evaluators/dashboards key
+    on. trace_id/trace_user_id become Langfuse's session_id/user_id when
+    given - callers pass their own natural grouping (e.g. a research_run_id
+    as the session covering every classification call made in one research
+    pass, an organisation_id as the user for per-tenant cost attribution).
+    generation_id/trace_id/trace_user_id are ALSO still attached to
+    BridgeLLM's own proprietary metadata (extra_body.metadata), separate from
+    the Langfuse wrapper.
 
     temperature, when given, is forwarded to the model - callers that need
     reproducible output (e.g. the lead-scoring judge) pass 0.
 
-    Tries Ollama first (primary); if that raises for any reason and
-    LLM_API_KEY is configured, retries once against BridgeLLM (fallback)
-    before giving up - raising Ollama's own error, not BridgeLLM's, since
-    that's the more useful one for debugging the primary path. Raises
-    LLMNotConfiguredError up front only when NEITHER provider is set up at
-    all. Callers (buying_event_service, signal_llm) already catch a failed
-    complete() and degrade to rule-based logic, so this only improves the
-    odds of getting a real judgment without changing what happens if both
-    providers are unavailable.
+    Tries DeepSeek, then BridgeLLM, then Ollama - see module docstring for
+    why this order. Callers (buying_event_service, signal_llm) already catch
+    a failed complete() and degrade to rule-based logic, so this only
+    improves the odds of getting a real judgment without changing what
+    happens if every provider is unavailable.
     """
     kwargs: dict = {}
     if temperature is not None:
         kwargs["temperature"] = temperature
 
-    settings = get_settings()
-    if not settings.ollama_base_url and not settings.llm_api_key:
-        raise LLMNotConfiguredError("Neither OLLAMA_BASE_URL nor LLM_API_KEY is configured")
+    langfuse_metadata = _langfuse_metadata(trace_id, trace_user_id, generation_name)
 
-    ollama_error: Exception | None = None
+    settings = get_settings()
+    if not settings.deepseek_api_key and not settings.llm_api_key and not settings.ollama_base_url:
+        raise LLMNotConfiguredError(
+            "No LLM provider is configured (DEEPSEEK_API_KEY / LLM_API_KEY / OLLAMA_BASE_URL)"
+        )
+
+    first_error: Exception | None = None
+
+    if settings.llm_api_key:
+        try:
+            client = _get_bridge_client()
+            response = await client.chat.completions.create(
+                model=BRIDGE_MODEL,
+                messages=messages,
+                name=generation_name,
+                metadata=langfuse_metadata,
+                extra_body={
+                    "metadata": {
+                        "generation_name": generation_name,
+                        "generation_id": generation_id or str(uuid.uuid4()),
+                        "trace_id": trace_id or str(uuid.uuid4()),
+                        "trace_user_id": trace_user_id or "signal-backend",
+                    }
+                },
+                **kwargs,
+            )
+            return response.choices[0].message.content or ""
+        except Exception as exc:
+            first_error = exc
+
+    if settings.deepseek_api_key:
+        try:
+            client = _get_deepseek_client()
+            response = await client.chat.completions.create(
+                model=DEEPSEEK_MODEL,
+                messages=messages,
+                name=generation_name,
+                metadata=langfuse_metadata,
+                **kwargs,
+            )
+            return response.choices[0].message.content or ""
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+
     if settings.ollama_base_url:
         try:
             client = _get_ollama_client()
             response = await client.chat.completions.create(
                 model=settings.ollama_model,
                 messages=messages,
+                name=generation_name,
+                metadata=langfuse_metadata,
                 **kwargs,
             )
             return response.choices[0].message.content or ""
         except Exception as exc:
-            ollama_error = exc
+            if first_error is None:
+                first_error = exc
 
-    if settings.llm_api_key:
-        client = _get_bridge_client()
-        response = await client.chat.completions.create(
-            model=BRIDGE_MODEL,
-            messages=messages,
-            extra_body={
-                "metadata": {
-                    "generation_name": generation_name,
-                    "generation_id": generation_id or str(uuid.uuid4()),
-                    "trace_id": trace_id or str(uuid.uuid4()),
-                    "trace_user_id": trace_user_id or "signal-backend",
-                }
-            },
-            **kwargs,
-        )
-        return response.choices[0].message.content or ""
-
-    # No bridge key to fall back to - surface Ollama's own failure, which is
-    # the actually-relevant error here (BridgeLLM was never attempted).
-    raise ollama_error
+    # Every configured provider failed - surface the primary's own failure,
+    # the most diagnostically relevant one (see module docstring).
+    raise first_error

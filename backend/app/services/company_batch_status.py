@@ -101,7 +101,7 @@ async def mark_failed(
 ) -> None:
     """permanent=True (e.g. no domain to research at all) lands on
     'needs_review' and is excluded from retry-failed; permanent=False
-    ('failed', a transient Serper/LLM/scoring error) is retryable."""
+    ('failed', a transient Tavily/LLM/scoring error) is retryable."""
     if import_batch_id is None:
         return
     await session.execute(

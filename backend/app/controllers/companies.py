@@ -140,7 +140,7 @@ async def insight(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
     try:
         summary = await llm_client.complete(
             [{"role": "user", "content": prompt}],
-            generation_name="dashboard-company-overview",
+            generation_name="generate-dashboard-overview",
             trace_user_id=str(organisation_id),
         )
     except llm_client.LLMNotConfiguredError:

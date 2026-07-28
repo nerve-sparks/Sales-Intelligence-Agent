@@ -25,7 +25,7 @@ async def extract(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
     """Legacy - inert. Nothing populates CompanyNews/CompanyScoop anymore
     (brief item 14), so this always returns {inserted: 0, skipped: 0}.
     Retained for backward compatibility only; the active pipeline researches
-    via Serper straight into BuyingEvent (search_signal_ingest)."""
+    via Tavily straight into BuyingEvent (search_signal_ingest)."""
     return await extract_signals(db, organisation_id)
 
 

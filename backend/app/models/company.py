@@ -107,7 +107,7 @@ class Company(Base):
     technologies: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     products: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
 
-    # When search_signal_ingest last ran Serper queries for this company -
+    # When search_signal_ingest last ran Tavily queries for this company -
     # null means never searched yet. Set regardless of whether any results
     # came back, so a company with genuinely no news doesn't get re-searched
     # (and re-billed) on every scoring re-run - same "checked vs found"

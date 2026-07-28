@@ -1,4 +1,4 @@
-"""Turns raw Serper web results into canonical BuyingEvents (brief sections
+"""Turns raw Tavily web results into canonical BuyingEvents (brief sections
 10, 11, 12).
 
 Pipeline per company:
@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scoring_config as cfg
 from app.models import BuyingEvent
-from app.services import llm_client, serper_client
+from app.services import llm_client, tavily_client
 
 CHUNK_SIZE = 8
 MAX_CONCURRENCY = 6
@@ -63,7 +63,7 @@ def compute_event_score(base_strength, relevance, freshness, source_quality, ext
 
 
 # --------------------------------------------------------------------------
-# Date parsing (Serper "date" strings: "Jan 21, 2026" or "3 days ago")
+# Date parsing (Tavily "date" strings: "Jan 21, 2026" or "3 days ago")
 # --------------------------------------------------------------------------
 _RELATIVE_RE = re.compile(r"^(\d+)\s+(day|week|month|year)s?\s+ago$", re.IGNORECASE)
 _RELATIVE_DAYS = {"day": 1, "week": 7, "month": 30, "year": 365}
@@ -89,11 +89,26 @@ def parse_event_date(raw: str | None, now: datetime) -> datetime | None:
 # --------------------------------------------------------------------------
 # Canonicalisation (brief section 11)
 # --------------------------------------------------------------------------
+def _stem(word: str) -> str:
+    """Crude suffix-stripping so token-jaccard dedup isn't fooled by verb
+    form/plural variance a less-consistent LLM (e.g. a smaller model)
+    introduces across articles about the SAME real event - "acquired" vs
+    "acquires" vs "acquisition" never share a raw token, which was
+    empirically confirmed to let real duplicates (e.g. 4+ separate articles
+    on one acquisition) slip past the 0.6 jaccard merge threshold. Not a real
+    stemmer (no dictionary, no exceptions) - just enough to collapse the
+    common English suffixes that show up in this specific comparison."""
+    for suffix in ("ations", "ation", "ing", "ed", "es", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[: -len(suffix)]
+    return word
+
+
 def _normalise(text: str | None) -> str:
     if not text:
         return ""
     words = _WORD_RE.sub("", text.lower()).split()
-    return " ".join(w for w in words if w not in _STOPWORDS)
+    return " ".join(_stem(w) for w in words if w not in _STOPWORDS)
 
 
 def canonical_key(company_id, event: dict, event_date: datetime | None) -> str:
@@ -158,16 +173,24 @@ def _build_prompt(company: dict, offering_profile: dict, items: list[dict], now:
         f"Company under analysis: {company.get('company_name')} "
         f"(domain: {company.get('company_domain')}, industry: {company.get('industry')}).\n\n"
         f"What XSparks sells:\n{offerings}\n\n"
-        "For EACH web result below, decide whether it describes a REAL, CURRENT buying-relevant "
-        "event for THIS specific company. Reject: same-name different companies, generic industry "
-        "articles, search-result/aggregator listing pages, job-board noise, events older than ~18 "
-        "months, pure marketing with no action, and funding with no buying relevance.\n\n"
+        "For EACH web result below, decide whether it describes a REAL, CURRENT event for THIS "
+        "specific company that a B2B sales team could act on. Reject ONLY: same-name different "
+        "companies, generic industry articles not about this company, search-result/aggregator "
+        "listing pages, job-board noise, and events clearly older than ~18 months. A funding round, "
+        "new senior leader, acquisition/merger, expansion, or significant hiring IS an acceptable "
+        "event - classify it and score its relevance per the anchors below; do NOT reject it just "
+        "for lacking an explicit AI mention (these are legitimate prospecting triggers).\n\n"
         f"Allowed event_type values (choose the closest): {event_types}.\n"
         "event_category is one of: buying_stage, ai_seriousness, ai_pain_points, budget_and_capital, "
         "urgency_and_catalysts, competitive_context, company_identity, reachability.\n"
         "event_status: active | announced | exploring | speculative | completed_follow_on | completed_irrelevant.\n"
-        "xsparks_relevance is 0.0-1.0 (1.0 direct XSparks-solution match, 0.65 operational pain "
-        "addressable by XSparks, 0.2 funding/expansion with no AI need, 0.0 irrelevant).\n"
+        "xsparks_relevance is 0.0-1.0. Anchors: 1.0 direct XSparks-solution match (active AI/data/"
+        "automation need); 0.65 operational pain addressable by XSparks (inefficiency, quality, "
+        "compliance, labour) OR a clear growth/change TRIGGER a solutions partner should act on - "
+        "fresh funding, a new senior leader (CEO/CTO/CIO/CDO), an acquisition/merger, a major "
+        "expansion, or significant hiring; 0.35 weak/indirect relevance; 0.0 truly irrelevant. Do "
+        "NOT mark a real funding round, leadership change, acquisition, or expansion as 0.0/0.2 - "
+        "these are legitimate prospecting triggers even without an explicit AI mention.\n"
         "is_negative=true for events that REDUCE buying likelihood; negative_type is one of: "
         "vendor_selected | relevant_project_completed | project_cancelled | severe_financial_distress "
         "| strong_contradictory_signal (else null).\n"
@@ -221,7 +244,9 @@ def _clamp_budget(value) -> float | None:
     return float(value) if value > 0 else None
 
 
-async def _classify_chunk(company: dict, offering_profile: dict, items: list[dict], now: datetime) -> tuple[dict[int, dict], bool]:
+async def _classify_chunk(
+    company: dict, offering_profile: dict, items: list[dict], now: datetime, research_run_id=None,
+) -> tuple[dict[int, dict], bool]:
     """Returns (classifications, ok). ok=False means the LLM was unavailable or
     returned an unparseable response - the caller must NOT treat that as
     'zero events' (brief item 7), since silently doing so would permanently
@@ -230,8 +255,17 @@ async def _classify_chunk(company: dict, offering_profile: dict, items: list[dic
     try:
         raw = await llm_client.complete(
             [{"role": "user", "content": _build_prompt(company, offering_profile, items, now)}],
-            generation_name="buying-event-extraction",
+            generation_name="extract-buying-events",
             temperature=0,
+            # Langfuse session_id: every classification call made during ONE
+            # research run (across however many companies/chunks) groups
+            # together, mirroring how a chat session groups conversation
+            # turns - lets you see one upload's full LLM activity as a unit.
+            trace_id=str(research_run_id) if research_run_id else None,
+            # Langfuse user_id: per-organisation cost/usage attribution -
+            # this is the highest-volume call site in the app, so this is
+            # where per-tenant DeepSeek cost tracking actually matters.
+            trace_user_id=str(company["organisation_id"]) if company.get("organisation_id") else None,
         )
     except Exception:
         return {}, False  # LLM unavailable
@@ -241,7 +275,9 @@ async def _classify_chunk(company: dict, offering_profile: dict, items: list[dic
     return parsed, True
 
 
-async def extract_events(company: dict, offering_profile: dict, evidence_items: list[dict], now: datetime) -> tuple[list[dict], dict]:
+async def extract_events(
+    company: dict, offering_profile: dict, evidence_items: list[dict], now: datetime, research_run_id=None,
+) -> tuple[list[dict], dict]:
     """Classifies each evidence item. Returns (accepted, stats) where accepted
     is the XSparks-relevant events (each carrying its source evidence) and
     stats = {chunks_total, chunks_failed}. A successful classification that
@@ -254,7 +290,7 @@ async def extract_events(company: dict, offering_profile: dict, evidence_items: 
 
     async def run(chunk):
         async with semaphore:
-            classes, ok = await _classify_chunk(company, offering_profile, chunk, now)
+            classes, ok = await _classify_chunk(company, offering_profile, chunk, now, research_run_id)
             return classes, ok, chunk
 
     accepted: list[dict] = []
@@ -421,23 +457,47 @@ def _match_existing_event(candidate: dict, existing_rows: list) -> "BuyingEvent 
     return None
 
 
+def _evidence_domains(ev: dict) -> set[str]:
+    return {e.get("domain") for e in ev.get("evidence", []) if e.get("domain")}
+
+
 def _merge_similar_groups(groups: dict[str, dict]) -> dict[str, dict]:
     """Second-pass hybrid merge (item 9): collapse groups that are the same
     real event under synonymous wording / adjacent dates - same event_type,
     high subject+action+object token similarity, and compatible dates - even
-    when their exact canonical_key differed."""
+    when their exact canonical_key differed.
+
+    Two merge paths, either sufficient: (a) the original subject+action+object
+    similarity >=0.6, for near-identical phrasing; or (b) same event_type +
+    same source domain + real ACTION/OBJECT overlap ((act+obj)/2 >=0.34), for
+    the case an LLM (esp. a smaller/less consistent one) describes ONE real
+    announcement differently across several pages of the SAME site - e.g. one
+    product launch covered on a company's homepage, its video page, and its
+    product-updates page, each phrased just differently enough to miss the 0.6
+    bar. Path (b) keys on action+object, NOT subject: the subject is almost
+    always just the company name (it overlaps for EVERY pair on that company),
+    so keying on it would collapse genuinely distinct same-type announcements
+    from a company's own press room (its acquisition AND its funding AND its
+    launch) into one. Action+object ("acquired Aisera" vs "raised $200M" vs
+    "launched IT solutions") is what actually distinguishes separate events, so
+    requiring overlap there merges true duplicates while keeping distinct
+    events distinct."""
     items = list(groups.items())
     merged: list[tuple[str, dict]] = []
     for key, ev in items:
         target = None
+        ev_domains = _evidence_domains(ev)
         for _mkey, mev in merged:
             if mev["event_type"] != ev["event_type"] or mev["is_negative"] != ev["is_negative"]:
+                continue
+            if not _dates_compatible(mev["_date"], ev["_date"]):
                 continue
             subj = _token_jaccard(mev["_subject"], ev["_subject"])
             act = _token_jaccard(mev["_action"], ev["_action"])
             obj = _token_jaccard(mev["_object"], ev["_object"])
             combined = (subj + act + obj) / 3
-            if combined >= 0.6 and _dates_compatible(mev["_date"], ev["_date"]):
+            same_domain = bool(ev_domains & _evidence_domains(mev))
+            if combined >= 0.6 or (same_domain and (act + obj) / 2 >= 0.34):
                 target = mev
                 break
         if target is None:
@@ -456,7 +516,7 @@ async def persist_company_events(
     kept, and last_seen_at/research_run_id refreshed (un-staled). Events NOT
     rediscovered this run are marked stale afterward (item 10) - but ONLY when
     mark_missing_stale is True, i.e. this run's research was fully successful
-    (no Serper failure, no failed LLM chunks). A partial/total LLM or Serper
+    (no Tavily failure, no failed LLM chunks). A partial/total LLM or Tavily
     failure means events genuinely still there may simply not have been
     re-classified this run; staling them on an incomplete run would be a false
     negative, so the caller (research_company) passes mark_missing_stale=False
@@ -557,64 +617,60 @@ async def research_company(
 ) -> dict:
     """Full per-company research->extract->canonicalise->score->persist. The
     caller owns the session/transaction. Returns a rich summary (item 7):
-    distinguishes 'researched, zero events' from 'LLM/Serper unavailable'."""
+    distinguishes 'researched, zero events' from 'LLM/Tavily unavailable'."""
     domain = company["company_domain"]
     company_id = company["company_id"]
     retrieved_at = now.isoformat()
 
-    # News + site searches go out as ONE Serper API call (search_news_and_site
-    # batches both query shapes into a single HTTP request) instead of two
-    # separate calls - one Serper round trip per company in the common case,
-    # not two, which matters multiplied by however many companies run
-    # concurrently in search_signal_ingest.py.
-    serper_failed = False
-    raw_news: list[dict] = []
-    raw_site: list[dict] = []
+    # ONE Tavily Advanced Search call per company - a single broad query
+    # covers both third-party coverage and the company's own site content
+    # (see tavily_client module docstring), so this is one round trip per
+    # company, not two, which matters multiplied by however many companies
+    # run concurrently in search_signal_ingest.py.
+    research_failed = False
+    raw_results: list[dict] = []
     try:
-        raw_news, raw_site = await serper_client.search_news_and_site(domain)
+        raw_results = await tavily_client.search(domain, company.get("company_name"))
     except Exception:
-        serper_failed = True
+        research_failed = True
 
+    query = tavily_client.build_query(domain, company.get("company_name"))
     evidence_items = []
     seen_urls = set()
-    for raw, qtype, query in (
-        (raw_news, "news", serper_client.build_news_query(domain)),
-        (raw_site, "site", serper_client.build_site_query(domain)),
-    ):
-        for item in raw:
-            link = item.get("link")
-            if not link or link in seen_urls:
-                continue
-            if not serper_client.is_relevant(domain, company.get("company_name"), item):
-                continue
-            seen_urls.add(link)
-            ev = serper_client.to_evidence(item, query, qtype, retrieved_at, company_domain=domain)
-            ev["company_match"] = serper_client.match_confidence(domain, company.get("company_name"), item)
-            evidence_items.append(ev)
+    for item in raw_results:
+        link = item.get("link")
+        if not link or link in seen_urls:
+            continue
+        if not tavily_client.is_relevant(domain, company.get("company_name"), item):
+            continue
+        seen_urls.add(link)
+        ev = tavily_client.to_evidence(item, query, "web", retrieved_at, company_domain=domain)
+        ev["company_match"] = tavily_client.match_confidence(domain, company.get("company_name"), item)
+        evidence_items.append(ev)
 
-    accepted, stats = await extract_events(company, offering_profile, evidence_items, now)
+    accepted, stats = await extract_events(company, offering_profile, evidence_items, now, research_run_id)
     llm_failed = stats["chunks_failed"] > 0 and stats["chunks_failed"] == stats["chunks_total"]
     canonical_events = _build_canonical_events(company_id, accepted, now)
-    # Only a run with NO Serper failure and NO failed LLM chunks (partial or
+    # Only a run with NO Tavily failure and NO failed LLM chunks (partial or
     # total) is trustworthy enough to stale events this run didn't rediscover -
     # a partial/total failure means some still-current events may simply not
     # have been re-classified, not that they genuinely vanished.
-    fully_successful = not serper_failed and stats["chunks_failed"] == 0
+    fully_successful = not research_failed and stats["chunks_failed"] == 0
     stored = await persist_company_events(
         session, company_id, canonical_events, now, research_run_id,
         mark_missing_stale=fully_successful,
     )
     # A company is "successfully researched" (safe to stamp fetched_at) only if
-    # neither Serper nor the LLM outright failed - otherwise it should be
+    # neither Tavily nor the LLM outright failed - otherwise it should be
     # retried, not permanently recorded as having no evidence (item 7).
-    ok = not serper_failed and not llm_failed
+    ok = not research_failed and not llm_failed
     return {
         "results_found": len(evidence_items),
         "events_accepted": len(accepted),
         "canonical_events": len(canonical_events),
         "events_stored": stored,
         "ok": ok,
-        "serper_failed": serper_failed,
+        "research_failed": research_failed,
         "llm_failed": llm_failed,
         "partial_llm_failure": 0 < stats["chunks_failed"] < stats["chunks_total"],
     }

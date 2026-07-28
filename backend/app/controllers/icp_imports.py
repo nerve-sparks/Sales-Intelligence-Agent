@@ -39,7 +39,7 @@ async def _ingest_and_schedule(
 ) -> ImportBatchOut:
     """Shared prospect-upload path (brief sections 4, 7, 8). Parses + upserts
     identity/contact data synchronously (fast), records the batch, and hands
-    live Serper research + evidence scoring off to a background task scoped to
+    live Tavily research + evidence scoring off to a background task scoped to
     just this upload's companies. Returns immediately with
     scoring_status='pending'; poll GET .../imports to see it flip to
     'complete' with real sales-status counts. No ICP anywhere in this flow."""
@@ -135,7 +135,7 @@ async def retry_failed(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> RetryFailedOut:
-    """Re-queues only the companies currently 'failed' (transient - Serper/
+    """Re-queues only the companies currently 'failed' (transient - Tavily/
     LLM/scoring errors) in this batch, NOT 'needs_review' (permanent
     validation failures retrying can't fix) or already-completed companies."""
     await _get_batch_in_workspace(db, workspace_id, import_batch_id)

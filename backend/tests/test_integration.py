@@ -3,7 +3,7 @@
 Runs against the real Postgres DB (see conftest.py) and calls the actual
 service-layer functions the API routes delegate to - no HTTP layer, no
 Firebase auth, no mocking of the DB. The only things ever monkeypatched are
-the outbound Serper/LLM/Nexus network calls, and only in the tests that
+the outbound Tavily/LLM/Nexus network calls, and only in the tests that
 specifically simulate those services being down.
 
 Coverage (mapped to the brief's item-25 checklist):
@@ -11,7 +11,7 @@ Coverage (mapped to the brief's item-25 checklist):
   - company in multiple batches                 -> test_company_appears_in_multiple_batches
   - batch-scoped endpoints use membership table  -> test_batch_scoped_endpoints_use_membership_table_not_legacy_pointer
   - concurrent uploads                          -> test_concurrent_uploads_do_not_interfere
-  - Serper unavailable                          -> test_serper_unavailable_completes_with_warning
+  - Tavily unavailable                          -> test_tavily_unavailable_completes_with_warning
   - LLM unavailable                             -> test_llm_unavailable_marks_research_failed
   - partial LLM batch failure                   -> test_partial_llm_batch_failure
   - background exception -> batch failed status -> test_background_exception_marks_batch_failed
@@ -26,7 +26,7 @@ Coverage (mapped to the brief's item-25 checklist):
   - organisation isolation                      -> test_organisation_isolation
   - ranked endpoint returns every company        -> test_every_company_gets_scored_no_icp_gate
   - Offering Profile fallback                   -> test_offering_profile_falls_back_when_scraper_unavailable
-  - signal pages read Serper-derived events      -> test_signal_directory_reads_buying_events
+  - signal pages read Tavily-derived events      -> test_signal_directory_reads_buying_events
 
 Migration upgrade/downgrade is deliberately NOT exercised here as an
 automated test - it mutates the shared dev DB's schema and is run once,
@@ -55,7 +55,7 @@ from app.services import (
     excel_pipeline,
     offering_profile_service,
     search_signal_ingest,
-    serper_client,
+    tavily_client,
 )
 from app.services import llm_client as llm_client_module
 from app.services import nexus_scraper as nexus_scraper_module
@@ -224,10 +224,10 @@ async def test_concurrent_uploads_do_not_interfere(org_ctx, make_company):
 # Background task resilience (never stuck "pending")
 # ---------------------------------------------------------------------------
 
-async def test_serper_unavailable_completes_with_warning(org_ctx, make_company, monkeypatch):
+async def test_tavily_unavailable_completes_with_warning(org_ctx, make_company, monkeypatch):
     organisation_id, workspace_id = org_ctx
     company = await make_company()
-    monkeypatch.setattr(serper_client, "is_configured", lambda: False)
+    monkeypatch.setattr(tavily_client, "is_configured", lambda: False)
 
     async with async_session_maker() as session:
         batch = await excel_pipeline.record_import_batch(
@@ -243,7 +243,7 @@ async def test_serper_unavailable_completes_with_warning(org_ctx, make_company, 
     assert refreshed.research_status == "complete_with_warnings"
     assert refreshed.scoring_status == "complete"
     assert refreshed.processing_warnings
-    assert any("Serper" in w for w in refreshed.processing_warnings)
+    assert any("Tavily" in w for w in refreshed.processing_warnings)
 
 
 async def test_background_exception_marks_batch_failed(org_ctx, make_company, monkeypatch):
@@ -254,7 +254,7 @@ async def test_background_exception_marks_batch_failed(org_ctx, make_company, mo
         raise RuntimeError("scoring exploded")
 
     monkeypatch.setattr(evidence_scorer, "run_scoring", _boom)
-    monkeypatch.setattr(serper_client, "is_configured", lambda: False)
+    monkeypatch.setattr(tavily_client, "is_configured", lambda: False)
 
     async with async_session_maker() as session:
         batch = await excel_pipeline.record_import_batch(
@@ -273,7 +273,7 @@ async def test_background_exception_marks_batch_failed(org_ctx, make_company, mo
 
 
 # ---------------------------------------------------------------------------
-# Serper/LLM failure handling at the research layer
+# Tavily/LLM failure handling at the research layer
 # ---------------------------------------------------------------------------
 
 def _fake_evidence_item(index: int, url: str | None = None) -> dict:
@@ -287,16 +287,15 @@ def _fake_evidence_item(index: int, url: str | None = None) -> dict:
     }
 
 
-def _patch_serper_ok(monkeypatch, items: list[dict]):
-    async def _search_news_and_site(_domain):
-        return [{"link": it["url"], **it} for it in items], []
+def _patch_tavily_ok(monkeypatch, items: list[dict]):
+    async def _search(_domain, _company_name=None, num=15):
+        return [{"link": it["url"], **it} for it in items]
 
-    monkeypatch.setattr(serper_client, "is_configured", lambda: True)
-    monkeypatch.setattr(serper_client, "search_news_and_site", _search_news_and_site)
-    monkeypatch.setattr(serper_client, "build_news_query", lambda domain: f"news:{domain}")
-    monkeypatch.setattr(serper_client, "build_site_query", lambda domain: f"site:{domain}")
-    monkeypatch.setattr(serper_client, "is_relevant", lambda *_a, **_kw: True)
-    monkeypatch.setattr(serper_client, "match_confidence", lambda *_a, **_kw: 0.9)
+    monkeypatch.setattr(tavily_client, "is_configured", lambda: True)
+    monkeypatch.setattr(tavily_client, "search", _search)
+    monkeypatch.setattr(tavily_client, "build_query", lambda domain, company_name=None: f"web:{domain}")
+    monkeypatch.setattr(tavily_client, "is_relevant", lambda *_a, **_kw: True)
+    monkeypatch.setattr(tavily_client, "match_confidence", lambda *_a, **_kw: 0.9)
 
     def _to_evidence(item, query, qtype, retrieved_at, company_domain=None):
         return {
@@ -305,11 +304,11 @@ def _patch_serper_ok(monkeypatch, items: list[dict]):
             "search_query": query, "retrieved_at": retrieved_at, "source_type": qtype,
         }
 
-    monkeypatch.setattr(serper_client, "to_evidence", _to_evidence)
+    monkeypatch.setattr(tavily_client, "to_evidence", _to_evidence)
 
 
 async def test_llm_unavailable_marks_research_failed(monkeypatch):
-    _patch_serper_ok(monkeypatch, [_fake_evidence_item(0)])
+    _patch_tavily_ok(monkeypatch, [_fake_evidence_item(0)])
 
     async def _llm_boom(*_args, **_kwargs):
         raise RuntimeError("LLM_API_KEY not configured")
@@ -324,7 +323,7 @@ async def test_llm_unavailable_marks_research_failed(monkeypatch):
 
     assert summary["ok"] is False
     assert summary["llm_failed"] is True
-    assert summary["serper_failed"] is False
+    assert summary["research_failed"] is False
     assert summary["events_stored"] == 0
 
 
@@ -332,7 +331,7 @@ async def test_partial_llm_batch_failure(monkeypatch):
     # Two chunks worth of evidence (CHUNK_SIZE=8) so one chunk can fail while
     # the other succeeds - distinct from a total LLM outage.
     items = [_fake_evidence_item(i) for i in range(16)]
-    _patch_serper_ok(monkeypatch, items)
+    _patch_tavily_ok(monkeypatch, items)
 
     call_count = {"n": 0}
 
@@ -743,7 +742,7 @@ async def test_offering_profile_falls_back_when_scraper_unavailable(org_ctx, mon
 
 
 # ---------------------------------------------------------------------------
-# Signal Intelligence reads Serper-derived BuyingEvents
+# Signal Intelligence reads Tavily-derived BuyingEvents
 # ---------------------------------------------------------------------------
 
 async def test_signal_directory_reads_buying_events(org_ctx, make_company):

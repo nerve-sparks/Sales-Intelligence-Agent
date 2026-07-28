@@ -338,7 +338,7 @@ const DISCOVERY_STAGE_DEFS = [
   },
   {
     name: "Buying Evidence Researched",
-    description: "Live web research via Serper, classified into canonical buying events",
+    description: "Live web research via Tavily, classified into canonical buying events",
     icon: RadioTower,
     iconClassName: "bg-[#dbeafe] text-[#2563eb]",
     detail: (s: ImportBatchOut) => `${s.signals_extracted} buying events found`,
@@ -1246,7 +1246,7 @@ function ExcelUploadButton({ workspaceId, onUploadStart, onUploadComplete }: Exc
     setError(null);
     onUploadStart();
     try {
-      // Ingestion is done by the time this resolves; live Serper research +
+      // Ingestion is done by the time this resolves; live Tavily research +
       // evidence scoring keep running in the background (batch.scoring_status
       // === "pending") - see AiBusinessDiscoveryForm's polling below. No ICP
       // required (brief item 1).

@@ -1,5 +1,5 @@
 """Orchestrates the live buying-evidence research for a set of companies:
-runs Serper research + LLM event extraction + canonical dedup per company
+runs Tavily research + LLM event extraction + canonical dedup per company
 (buying_event_service), each company as its own concurrent task.
 
 Replaces the old CompanyNews/Signal ingestion in the active pipeline - all
@@ -30,12 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.db import async_session_maker
 from app.models import Company, Organisation
-from app.services import buying_event_service, company_batch_status, serper_client
+from app.services import buying_event_service, company_batch_status, tavily_client
 from app.services.offering_profile_service import profile_for_scoring
 
 RESEARCH_REFRESH_DAYS = 10  # reuse research newer than this; refresh older (brief section 9)
 
-# Bounded in-task retry for transient per-company research failures (Serper/
+# Bounded in-task retry for transient per-company research failures (Tavily/
 # LLM temporarily unavailable) - short exponential backoff, not the long
 # multi-minute kind, since a retry sleep holds this company's concurrency
 # slot. A company still failing after these retries is left 'failed' for the
@@ -47,12 +47,12 @@ logger = logging.getLogger(__name__)
 
 
 async def _process_company(
-    company_row, offering_profile: dict, now: datetime, research_run_id, import_batch_id=None,
+    company_row, offering_profile: dict, now: datetime, research_run_id, import_batch_id=None, organisation_id=None,
 ) -> dict:
     """One company's full research pipeline in its own session, so companies
     commit independently and progress is visible mid-run. Returns a per-company
     outcome dict. search_signals_fetched_at is stamped ONLY when research
-    genuinely succeeded (item 7) - never on Serper/LLM failure, so a failed
+    genuinely succeeded (item 7) - never on Tavily/LLM failure, so a failed
     company is retried next run instead of being permanently recorded as
     'researched, no evidence'."""
     company_id = company_row.company_id
@@ -61,6 +61,11 @@ async def _process_company(
         "company_name": company_row.company_name,
         "company_domain": company_row.company_domain,
         "industry": (company_row.industries or [None])[0] if company_row.industries else None,
+        # Carried through to buying_event_service's LLM calls for Langfuse
+        # per-tenant cost attribution (langfuse_user_id) - not a company
+        # attribute, just riding along on the dict that's already threaded
+        # all the way down to _classify_chunk.
+        "organisation_id": organisation_id,
     }
 
     attempts = (len(TRANSIENT_RETRY_BACKOFF_SECONDS) + 1)
@@ -84,7 +89,7 @@ async def _process_company(
             last_summary = summary
         except Exception as exc:
             last_summary = {
-                "ok": False, "events_stored": 0, "serper_failed": True, "llm_failed": False, "partial_llm_failure": False,
+                "ok": False, "events_stored": 0, "research_failed": True, "llm_failed": False, "partial_llm_failure": False,
             }
             logger.exception(
                 "company research raised: %s",
@@ -96,7 +101,7 @@ async def _process_company(
             return {
                 "ok": True,
                 "events_stored": last_summary["events_stored"],
-                "research_failed": last_summary["serper_failed"],
+                "research_failed": last_summary["research_failed"],
                 "llm_failed": last_summary["llm_failed"],
                 "partial_llm_failure": last_summary["partial_llm_failure"],
             }
@@ -107,7 +112,7 @@ async def _process_company(
                 await session.commit()
             await asyncio.sleep(TRANSIENT_RETRY_BACKOFF_SECONDS[attempt])
 
-    error = "Serper unavailable" if last_summary and last_summary.get("serper_failed") else "LLM unavailable or returned no usable result"
+    error = "Tavily unavailable" if last_summary and last_summary.get("research_failed") else "LLM unavailable or returned no usable result"
     async with async_session_maker() as session:
         await company_batch_status.mark_failed(session, company_id, import_batch_id, error, permanent=False)
         await session.commit()
@@ -119,7 +124,7 @@ async def _process_company(
     return {
         "ok": False,
         "events_stored": 0,
-        "research_failed": last_summary["serper_failed"] if last_summary else True,
+        "research_failed": last_summary["research_failed"] if last_summary else True,
         "llm_failed": last_summary["llm_failed"] if last_summary else False,
         "partial_llm_failure": last_summary["partial_llm_failure"] if last_summary else False,
     }
@@ -132,11 +137,11 @@ async def research_companies(
     missing or stale. Each company runs concurrently up to
     settings.research_concurrency (RESEARCH_CONCURRENCY env var - see
     config.py). Returns a rich summary (item 7) distinguishing successes from
-    Serper/LLM failures so the caller can set complete vs complete_with_warnings."""
-    if not serper_client.is_configured():
+    Tavily/LLM failures so the caller can set complete vs complete_with_warnings."""
+    if not tavily_client.is_configured():
         return {
             "researched": 0, "successful": 0, "failed": 0, "research_failures": 0,
-            "llm_failures": 0, "events_stored": 0, "serper_not_configured": True,
+            "llm_failures": 0, "events_stored": 0, "tavily_not_configured": True,
         }
 
     org = await session.get(Organisation, organisation_id)
@@ -190,7 +195,7 @@ async def research_companies(
 
         # Companies in scope but skipped this pass (already fresh, and not
         # missing a domain) go straight to 'scoring' - they still get a fresh
-        # Lead Score from their existing evidence, just no new Serper/LLM call.
+        # Lead Score from their existing evidence, just no new Tavily/LLM call.
         target_ids = {row.company_id for row in targets}
         no_domain_id_set = set(no_domain_ids)
         skipped_ids = [cid for cid in company_ids if cid not in target_ids and cid not in no_domain_id_set]
@@ -204,7 +209,7 @@ async def research_companies(
 
     async def _bounded(row):
         async with semaphore:
-            return await _process_company(row, offering_profile, now, research_run_id, import_batch_id)
+            return await _process_company(row, offering_profile, now, research_run_id, import_batch_id, organisation_id)
 
     results = await asyncio.gather(*[_bounded(row) for row in targets])
     successful = sum(1 for r in results if r["ok"])

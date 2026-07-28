@@ -49,7 +49,7 @@ function ScoringMethodCard() {
         <li>Evidence is deduplicated - multiple articles about one event count once, with corroborating sources.</li>
         <li>Revenue and funding affect Expected Deal Value only, never the Lead Score.</li>
         <li>Confidence is calculated separately from the score.</li>
-        <li>External evidence is gathered live via Serper.dev web research.</li>
+        <li>External evidence is gathered live via Tavily web research.</li>
       </ul>
     </div>
   );
@@ -140,7 +140,7 @@ function ExcelUploadButton({
     setError(null);
     onUploadStart();
     try {
-      // Ingestion finishes by the time this resolves; live Serper research +
+      // Ingestion finishes by the time this resolves; live Tavily research +
       // evidence scoring run in the background on the server
       // (batch.scoring_status === "pending") - polling refreshes history until
       // it flips to "complete". No ICP (brief section 7).

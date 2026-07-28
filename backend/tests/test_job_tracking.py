@@ -17,7 +17,7 @@ from sqlalchemy import select, update
 from app.controllers import icp_imports as icp_imports_controller
 from app.core.db import async_session_maker
 from app.models import CompanyImportBatch, IcpImportBatch
-from app.services import company_batch_status, evidence_scorer, excel_pipeline, job_recovery, search_signal_ingest, serper_client
+from app.services import company_batch_status, evidence_scorer, excel_pipeline, job_recovery, search_signal_ingest, tavily_client
 
 NOW = datetime(2026, 1, 15, tzinfo=timezone.utc)
 
@@ -103,7 +103,7 @@ async def test_job_status_partially_completed_with_some_failures(org_ctx, make_c
         session.add(CompanyImportBatch(company_id=company_bad.company_id, import_batch_id=batch.import_batch_id))
         await session.commit()
     await _set_item_status(batch.import_batch_id, company_ok.company_id, "completed", completed_at=NOW)
-    await _set_item_status(batch.import_batch_id, company_bad.company_id, "failed", error_message="Serper unavailable", completed_at=NOW)
+    await _set_item_status(batch.import_batch_id, company_bad.company_id, "failed", error_message="Tavily unavailable", completed_at=NOW)
     async with async_session_maker() as session:
         await session.execute(
             update(IcpImportBatch)
@@ -171,7 +171,7 @@ async def test_retry_failed_ids_exclude_needs_review_and_completed(org_ctx, make
         session.add(CompanyImportBatch(company_id=needs_review_co.company_id, import_batch_id=batch.import_batch_id))
         session.add(CompanyImportBatch(company_id=completed_co.company_id, import_batch_id=batch.import_batch_id))
         await session.commit()
-    await _set_item_status(batch.import_batch_id, failed_co.company_id, "failed", error_message="Serper unavailable")
+    await _set_item_status(batch.import_batch_id, failed_co.company_id, "failed", error_message="Tavily unavailable")
     await _set_item_status(batch.import_batch_id, needs_review_co.company_id, "needs_review", error_message="No domain", is_permanent_failure=True)
     await _set_item_status(batch.import_batch_id, completed_co.company_id, "completed")
 
@@ -216,7 +216,7 @@ async def test_retry_failed_endpoint_only_touches_failed_companies(org_ctx, make
     async with async_session_maker() as session:
         session.add(CompanyImportBatch(company_id=completed_co.company_id, import_batch_id=batch.import_batch_id))
         await session.commit()
-    await _set_item_status(batch.import_batch_id, failed_co.company_id, "failed", error_message="Serper unavailable")
+    await _set_item_status(batch.import_batch_id, failed_co.company_id, "failed", error_message="Tavily unavailable")
     await _set_item_status(batch.import_batch_id, completed_co.company_id, "completed", completed_at=NOW)
 
     class _NoOpBackgroundTasks:
@@ -262,7 +262,7 @@ async def test_no_domain_company_marked_needs_review_not_failed(org_ctx, make_co
     organisation_id, workspace_id = org_ctx
     company = await make_company(company_domain=None)
     batch = await _make_batch(workspace_id, company)
-    monkeypatch.setattr(serper_client, "is_configured", lambda: True)
+    monkeypatch.setattr(tavily_client, "is_configured", lambda: True)
 
     async with async_session_maker() as session:
         await search_signal_ingest.research_companies(

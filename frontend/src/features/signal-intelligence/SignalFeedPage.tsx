@@ -322,7 +322,7 @@ export function SignalFeedPage() {
             </span>
           </div>
           <p className="m-0 mt-[6px] text-[15px] text-[#64748b]">
-            Canonical buying events researched live via Serper for your uploaded companies.
+            Canonical buying events researched live via Tavily for your uploaded companies.
           </p>
 
           <div className="mt-[22px]">

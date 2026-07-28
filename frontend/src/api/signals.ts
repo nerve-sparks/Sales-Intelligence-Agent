@@ -50,7 +50,7 @@ export type SignalListOut = {
 };
 
 /** @deprecated inert - nothing populates CompanyNews/CompanyScoop anymore; the
- * active pipeline researches via Serper directly into BuyingEvent. */
+ * active pipeline researches via Tavily directly into BuyingEvent. */
 export function extractSignals(organisationId: string): Promise<SignalExtractResult> {
   return apiPost<SignalExtractResult>(`/organisations/${organisationId}/signals/extract`);
 }

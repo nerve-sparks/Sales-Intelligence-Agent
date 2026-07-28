@@ -12,7 +12,7 @@ settings = get_settings()
 # concurrently-researched company, on top of normal request traffic; the
 # SQLAlchemy async engine's default (pool_size=5, max_overflow=10) is sized
 # for request/response traffic alone and would bottleneck a raised
-# RESEARCH_CONCURRENCY on "waiting for a free connection" instead of Serper/LLM.
+# RESEARCH_CONCURRENCY on "waiting for a free connection" instead of Tavily/LLM.
 engine = create_async_engine(
     settings.database_url,
     echo=False,

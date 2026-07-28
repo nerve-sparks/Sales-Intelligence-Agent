@@ -13,12 +13,20 @@ they only ever feed Expected Deal Value (DEAL_VALUE_BANDS). No ICP, no gates,
 no D1-D7.
 """
 
-SCORE_VERSION = 1
-SCORE_FORMULA_VERSION = "evidence-v1"
+SCORE_VERSION = 2
+SCORE_FORMULA_VERSION = "trigger-v2"
 
 # ---------------------------------------------------------------------------
 # Base strengths per event type (brief section 12). 0-100. The intrinsic
 # "how much does this event mean" before any relevance/freshness/etc. decay.
+#
+# trigger-v2 recalibration: v1 rewarded ONLY active-buying signals (RFP,
+# procurement, pilot) and treated growth/change events (funding, expansion,
+# hiring, tech mandates) as near-noise, so real companies capped ~41. For an
+# AI solutions/consulting partner, a change/growth trigger IS a prospecting
+# moment (fresh budget, a new leader's agenda, scaling pain), so those event
+# types are raised to legitimate mid-strength here. Active-buying signals stay
+# highest - the ranking order is preserved, only the floor is lifted.
 # ---------------------------------------------------------------------------
 BASE_STRENGTH = {
     "rfp_published": 80,
@@ -30,20 +38,20 @@ BASE_STRENGTH = {
     "ai_transformation_program": 60,
     "ai_pilot_announced": 60,
     "technology_budget": 55,
+    "new_tech_mandate": 55,                # v1 40 - a tech mandate is a real trigger
     "explicit_ai_tool_adoption": 50,
+    "relevant_ai_hiring": 50,              # v1 35 - building an AI team = active intent
+    "plant_expansion": 50,                 # v1 40 - expansion = scaling pain + budget
+    "funding_without_buying_evidence": 45, # v1 20 - capital raised = budget + modernise mandate
     "operational_inefficiency": 45,
     "quality_control_problem": 45,
     "supply_chain_disruption": 45,
+    "regulatory_compliance_pressure": 45,  # v1 35 - compliance pressure drives AI/automation spend
     "labour_shortage": 40,
-    "plant_expansion": 40,
-    "new_tech_mandate": 40,
-    "regulatory_compliance_pressure": 35,
-    "relevant_ai_hiring": 35,
-    "funding_without_buying_evidence": 20,
-    "generic_technology_assessment": 15,
+    "generic_technology_assessment": 25,   # v1 15
     "company_identity_update": 0,
 }
-DEFAULT_BASE_STRENGTH = 15  # unknown/other event type -> treat as generic assessment
+DEFAULT_BASE_STRENGTH = 20  # v1 15 - unknown/other event type
 
 # ---------------------------------------------------------------------------
 # XSparks relevance (brief section 12). The LLM returns a 0-1 float; these are
@@ -53,10 +61,10 @@ DEFAULT_BASE_STRENGTH = 15  # unknown/other event type -> treat as generic asses
 XSPARKS_RELEVANCE_ANCHORS = {
     1.00: "Direct, explicit match to an XSparks solution",
     0.85: "Strong adjacent AI/data/automation need",
-    0.65: "Operational pain clearly addressable by XSparks",
-    0.40: "Weak or indirect relevance",
-    0.20: "Funding or expansion without an identified AI need",
-    0.00: "Irrelevant to XSparks",
+    0.65: "Operational pain addressable by XSparks, OR a growth/change trigger "
+          "(funding, new senior leader, acquisition, expansion, major hiring)",
+    0.35: "Weak or indirect relevance",
+    0.00: "Truly irrelevant to XSparks",
 }
 
 # ---------------------------------------------------------------------------
@@ -102,8 +110,13 @@ DEFAULT_STATUS_FACTOR = 0.65
 # ---------------------------------------------------------------------------
 # Buying Evidence Score (brief section 13). Only the strongest three
 # INDEPENDENT events contribute, at these weights; capped at 80.
+#
+# trigger-v2: v1 weights [1.0, 0.35, 0.15] made all but the single top event
+# almost irrelevant, so a company with several genuine buying signals scored
+# barely above one with a single event. A breadth of independent signals is a
+# stronger lead, so the 2nd/3rd events now carry real weight.
 # ---------------------------------------------------------------------------
-EVIDENCE_WEIGHTS = [1.00, 0.35, 0.15]
+EVIDENCE_WEIGHTS = [1.00, 0.60, 0.40]  # v1 [1.00, 0.35, 0.15]
 BUYING_EVIDENCE_CAP = 80
 
 # ---------------------------------------------------------------------------
@@ -153,12 +166,29 @@ DEFAULT_NEGATIVE_PENALTY = 20
 # ---------------------------------------------------------------------------
 # Sales classifications (brief section 17). Labels only - never gates. Every
 # company is scored and displayed regardless of band.
+#
+# trigger-v2 band recalibration: these are ORDINAL labels for a rep working a
+# scored sheet top-down ("who do I call first"), not absolute truth-claims.
+# The v1 bands (Sales Ready 85 / High Priority 70 / Warm 50 / Monitor 30) were
+# round numbers that, against the real score distribution, almost never fired
+# the top labels - the strongest genuinely-active companies (real acquisition
+# + funding + launches + a reachable economic buyer) land ~65-77, so "Sales
+# Ready" at 85 essentially never triggered and a rep's best leads read only
+# "High Priority"/"Warm". The raw evidence score stays untouched and honest;
+# only the band thresholds move, calibrated to the distribution actually
+# observed across live DeepSeek scoring runs, so the top tier of a realistic
+# uploaded sheet is labelled the way a rep would truly treat it:
+#   Sales Ready   (65+) - call today; strong active/multi-signal + reachable
+#   High Priority (50+) - call this week; several real signals or a strong one
+#   Warm          (35+) - worth a call; genuine but lighter signal
+#   Monitor       (20+) - keep an eye; minimal signal
+#   Low Priority  (0+)  - little/no current evidence
 # ---------------------------------------------------------------------------
 SALES_STATUS_BANDS = [
-    (85, "Sales Ready"),
-    (70, "High Priority"),
-    (50, "Warm"),
-    (30, "Monitor"),
+    (65, "Sales Ready"),
+    (50, "High Priority"),
+    (35, "Warm"),
+    (20, "Monitor"),
     (0, "Low Priority"),
 ]
 

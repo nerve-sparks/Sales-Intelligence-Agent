@@ -1,5 +1,5 @@
 /* Mirrors backend/app/routes/icp_imports.py - active prospect upload (brief section 7).
- * Workspace-scoped, NO ICP. Ingestion is fast; live Serper research + evidence
+ * Workspace-scoped, NO ICP. Ingestion is fast; live Tavily research + evidence
  * scoring run as a background task, so this returns immediately with
  * scoring_status:"pending". Poll listImportBatches to see it flip to "complete"
  * with real sales-status counts. */

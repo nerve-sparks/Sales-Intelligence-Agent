@@ -214,7 +214,7 @@ async def classify_batch(items: list[LlmItem]) -> dict[int, LlmSignalClass]:
             try:
                 raw = await llm_client.complete(
                     [{"role": "user", "content": _build_prompt(chunk)}],
-                    generation_name="signal-extraction-classify",
+                    generation_name="classify-signal-extraction",
                 )
             except Exception:
                 # One chunk failing (timeout, transient proxy error) drops
