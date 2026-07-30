@@ -490,7 +490,7 @@ export function SignalIntelligencePage() {
 
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
-      <Sidebar active="Signal Intelligence" />
+      <Sidebar active="Signal Intelligence" activeSub="Overview" />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar

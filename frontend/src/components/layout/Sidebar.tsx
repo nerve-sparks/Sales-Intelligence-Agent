@@ -1,13 +1,12 @@
 import {
-  ChevronDown,
   ChevronRight,
   Contact,
   Home,
   Radio,
   Settings,
-  Zap,
+  // Zap,  // re-add with the Trigger Intelligence nav item below
 } from "lucide-react";
-import type { ComponentType, ReactNode } from "react";
+import { useState, type ComponentType, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { FigmaLogo } from "../../features/auth/LoginPage";
 import { cn } from "../../lib/cn";
@@ -23,12 +22,18 @@ type NavEntry = {
 
 const navItems: NavEntry[] = [
   { icon: Home, label: "Dashboard", href: "/dashboard" },
-  { icon: Zap, label: "Trigger Intelligence", href: "/trigger-library" },
+  // Trigger Intelligence hidden from nav - the /trigger-library, /trigger-details
+  // and /trigger-editor routes still exist and work if reached directly.
+  // { icon: Zap, label: "Trigger Intelligence", href: "/trigger-library" },
   {
+    // No href: a group with children is a disclosure toggle, so clicking it
+    // opens/closes the sub-items rather than navigating. Its own overview page
+    // moves into the list as "Overview" - the sidebar is the only route to
+    // /signal-intelligence, so without that entry the page is unreachable.
     icon: Radio,
     label: "Signal Intelligence",
-    href: "/signal-intelligence",
     children: [
+      { label: "Overview", href: "/signal-intelligence" },
       { label: "Signal Feed", href: "/signal-feed" },
       { label: "Signal Analytics", href: "/signal-analytics" },
     ],
@@ -38,9 +43,14 @@ const navItems: NavEntry[] = [
 
 const settingsItem: NavEntry = { icon: Settings, label: "Settings", href: "/settings" };
 
+/* whitespace-nowrap: labels like "Signal Intelligence" must stay on one line.
+   In a row flex with an icon and a trailing chevron the label is the only
+   flexible item, so without this it wraps to a second line as soon as the
+   fixed elements leave it short - a width bump alone would only postpone that
+   until the next long label. */
 const itemClass = (isActive: boolean) =>
   cn(
-    "flex items-center gap-[12px] rounded-[10px] px-[13px] py-[10px] text-[14px] transition",
+    "flex items-center gap-[12px] whitespace-nowrap rounded-[10px] px-[13px] py-[10px] text-[14px] transition",
     isActive
       ? "bg-[#fff1e6] font-semibold text-[#0f172a]"
       : "font-medium text-[#64748b] hover:bg-[#f6f7fb]",
@@ -79,8 +89,19 @@ export function Sidebar({
   active: string;
   activeSub?: string;
 }) {
+  /* Which nav groups are expanded. The group you're currently inside starts
+     open so landing on Signal Feed shows its siblings; everything else starts
+     closed. Keyed by label rather than a single "openGroup" so opening one
+     group never force-closes another if more groups gain children later. */
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => ({
+    [active]: true,
+  }));
+
+  const toggleGroup = (label: string) =>
+    setOpenGroups((prev) => ({ ...prev, [label]: !prev[label] }));
+
   return (
-    <aside className="sticky top-0 hidden h-screen w-[236px] shrink-0 self-start overflow-y-auto border-r border-[#e9edf5] bg-white lg:flex lg:flex-col">
+    <aside className="sticky top-0 hidden h-screen w-[268px] shrink-0 self-start overflow-y-auto border-r border-[#e9edf5] bg-white lg:flex lg:flex-col">
       <div className="flex h-[88px] shrink-0 items-center border-b border-[#e9edf5] px-[22px]">
         <FigmaLogo />
       </div>
@@ -90,48 +111,79 @@ export function Sidebar({
           const Icon = item.icon;
           const isActive = item.label === active;
           const hasChildren = Boolean(item.children?.length);
-          const expanded = isActive && hasChildren;
-          const Chevron = expanded ? ChevronDown : ChevronRight;
+          const isOpen = hasChildren && Boolean(openGroups[item.label]);
+
+          const iconEl = (
+            <Icon
+              className={cn(
+                "size-[19px] shrink-0",
+                isActive ? "text-[#f97316]" : "text-[#94a3b8]",
+              )}
+              strokeWidth={2}
+            />
+          );
 
           return (
             <div key={item.label}>
-              <NavLink className={itemClass(isActive)} href={item.href} isActive={isActive}>
-                <Icon
-                  className={cn(
-                    "size-[19px] shrink-0",
-                    isActive ? "text-[#f97316]" : "text-[#94a3b8]",
-                  )}
-                  strokeWidth={2}
-                />
-                {item.label}
-                {hasChildren && (
-                  <Chevron className="ml-auto size-[15px] text-[#94a3b8]" />
-                )}
-              </NavLink>
+              {hasChildren ? (
+                /* A group toggles its sub-items open/closed on each click
+                   instead of navigating - its own page lives in the list as
+                   "Overview". The chevron rotates rather than swapping icons,
+                   so the open/close state animates instead of snapping. */
+                <button
+                  aria-expanded={isOpen}
+                  className={cn(itemClass(isActive), "w-full text-left")}
+                  onClick={() => toggleGroup(item.label)}
+                  type="button"
+                >
+                  {iconEl}
+                  {item.label}
+                  <ChevronRight
+                    aria-hidden="true"
+                    className={cn(
+                      "ml-auto size-[15px] shrink-0 text-[#94a3b8] transition-transform duration-200",
+                      isOpen && "rotate-90",
+                    )}
+                  />
+                </button>
+              ) : (
+                <NavLink className={itemClass(isActive)} href={item.href} isActive={isActive}>
+                  {iconEl}
+                  {item.label}
+                </NavLink>
+              )}
 
-              {expanded && (
-                <div className="mt-[2px] flex flex-col gap-[2px] pb-[4px] pl-[24px]">
+              {/* A connector rail groups the sub-items under their parent: it
+                  sits on the parent's icon centre (22px), and the active page
+                  marks itself on that rail rather than with a bullet, which
+                  read as decoration rather than state. */}
+              {isOpen && (
+                <div className="relative mt-[3px] flex flex-col gap-[1px] pb-[5px] pl-[32px]">
+                  <span
+                    aria-hidden="true"
+                    className="absolute bottom-[7px] left-[22px] top-[3px] w-[2px] rounded-full bg-[#eef1f6]"
+                  />
                   {item.children?.map((child) => {
                     const subActive = child.label === activeSub;
 
                     return (
                       <NavLink
                         className={cn(
-                          "flex items-center gap-[10px] rounded-[8px] px-[12px] py-[8px] text-[13px] transition",
+                          "relative flex items-center whitespace-nowrap rounded-[8px] px-[12px] py-[7px] text-[13px] transition",
                           subActive
-                            ? "bg-[#fff1e6] font-semibold text-[#f97316]"
-                            : "font-medium text-[#64748b] hover:bg-[#f6f7fb]",
+                            ? "bg-[#fff1e6] font-semibold text-[#0f172a]"
+                            : "font-medium text-[#64748b] hover:bg-[#f6f7fb] hover:text-[#334155]",
                         )}
                         href={child.href}
                         isActive={subActive}
                         key={child.label}
                       >
-                        <span
-                          className={cn(
-                            "size-[7px] shrink-0 rounded-full",
-                            subActive ? "bg-[#f97316]" : "bg-[#cbd5e1]",
-                          )}
-                        />
+                        {subActive && (
+                          <span
+                            aria-hidden="true"
+                            className="absolute -left-[10px] top-1/2 h-[18px] w-[2px] -translate-y-1/2 rounded-full bg-[#f97316]"
+                          />
+                        )}
                         {child.label}
                       </NavLink>
                     );
