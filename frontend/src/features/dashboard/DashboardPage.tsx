@@ -1,5 +1,4 @@
 import {
-  Building2,
   Calendar,
   ChevronDown,
   DollarSign,
@@ -9,7 +8,6 @@ import {
   Maximize2,
   Radio,
   Send,
-  Sparkles,
   Target,
 } from "lucide-react";
 import { lazy, Suspense } from "react";
@@ -20,7 +18,7 @@ import { Delta, FLAT_LINE, Sparkline, UpTriangle, smoothPath } from "../../compo
 import { cn } from "../../lib/cn";
 import { useEffect, useRef, useState } from "react";
 import { getRankedScores, type RankedLeadScoreOut } from "../../api/scores";
-import { getCompanyInsight, getCompanyStats, type CompanyStatsOut } from "../../api/companies";
+import { getCompanyStats, type CompanyStatsOut } from "../../api/companies";
 import { getSignalStats, listSignals, type SignalStatsOut, type SignalWithCompanyOut } from "../../api/signals";
 import { listImportBatches, type ImportBatchOut } from "../../api/icp";
 import { listWorkspaceMembers } from "../../api/workspaces";
@@ -159,19 +157,42 @@ function toProspect(row: RankedLeadScoreOut) {
   };
 }
 
-/* SignalWithCompanyOut has no action-tag/score-ring vocabulary - those are
- * UI-only. Real company/time come from the API (BuyingEvent-backed). */
+/* Same company-color-hash approach as SignalFeedPage's LOGO_COLORS/hashString
+ * - same company always gets the same color across pages, and different
+ * companies are visually distinguishable instead of one flat blue for every
+ * row. */
+const AVATAR_COLORS = ["#16a34a", "#2563eb", "#7c3aed", "#0d9488", "#ef4444", "#6366f1", "#10b981", "#3b82f6", "#334155", "#f97316"];
+
+function hashString(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function initialsOf(name: string): string {
+  return name.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+}
+
+/* SignalWithCompanyOut has no action-tag vocabulary - that's UI-only. Real
+ * company/time/score come from the API (BuyingEvent-backed). event_score
+ * (how strong this specific buying signal is) is what Signal Feed's own
+ * "Score" column shows for the same data - using extraction_confidence here
+ * instead, as this used to, showed a different metric under an identical
+ * label depending which page you were on. */
 function toRecentSignal(s: SignalWithCompanyOut) {
-  const confidence = s.extraction_confidence ?? 0;
-  const score = Math.round(confidence * 100);
+  const score = Math.round(s.event_score ?? 0);
   return {
+    signalId: s.buying_event_id,
     time: relativeTime(s.published_at),
     company: s.company_name,
     action: s.event_type.replace(/_/g, " "),
     tone: "blue",
     score,
-    ring: score >= 75 ? "green" : "orange",
-    iconBg: "bg-[#2563eb]",
+    ring: score >= 60 ? "green" : "orange",
+    initials: initialsOf(s.company_name) || "?",
+    avatarColor: AVATAR_COLORS[hashString(s.company_name) % AVATAR_COLORS.length],
   };
 }
 
@@ -444,12 +465,15 @@ function SalesStatusBreakdown({ companyStats }: { companyStats: CompanyStatsOut 
 /* Lead Opportunity Map (dark card)                                    */
 /* ------------------------------------------------------------------ */
 
+/* Ranges mirror cfg.SALES_STATUS_BANDS - keep in sync with it and with
+ * LeadGlobe's zoneForScore (all three were left at the pre-recalibration
+ * 85/70/50/30 values once already). */
 const mapLegend = [
-  { label: "Sales Ready", range: "85-100", color: "#16a34a" },
-  { label: "High Priority", range: "70-84", color: "#22c55e" },
-  { label: "Warm", range: "50-69", color: "#f97316" },
-  { label: "Monitor", range: "30-49", color: "#eab308" },
-  { label: "Low Priority", range: "0-29", color: "#94a3b8" },
+  { label: "Sales Ready", range: "65-100", color: "#16a34a" },
+  { label: "High Priority", range: "50-64", color: "#22c55e" },
+  { label: "Warm", range: "35-49", color: "#f97316" },
+  { label: "Monitor", range: "20-34", color: "#eab308" },
+  { label: "Low Priority", range: "0-19", color: "#94a3b8" },
 ];
 
 const LeadGlobe = lazy(() => import("./LeadGlobe"));
@@ -687,9 +711,9 @@ function TopPriorityProspects({ prospects }: { prospects: typeof dummyProspects 
         <h2 className="m-0 text-[17px] font-bold text-[#0f172a]">
           Top Priority Prospects
         </h2>
-        <button className="text-[13px] font-semibold text-[#2563eb]" type="button">
+        <a className="text-[13px] font-semibold text-[#2563eb] no-underline" href="/enterprise-list">
           View All
-        </button>
+        </a>
       </div>
 
       <div className="mt-[16px] grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-[16px] border-b border-[#eef1f6] pb-[10px] text-[11px] font-semibold uppercase tracking-[0.02em] text-[#94a3b8]">
@@ -753,49 +777,59 @@ function TopPriorityProspects({ prospects }: { prospects: typeof dummyProspects 
 
 const dummyRecentSignals = [
   {
+    signalId: "",
     time: "2m ago",
     company: "Thomson & Associates",
     action: "PE Acquisition",
     tone: "red",
     score: 95,
     ring: "green",
-    iconBg: "bg-[#db2777]",
+    initials: initialsOf("Thomson & Associates"),
+    avatarColor: "#db2777",
   },
   {
+    signalId: "",
     time: "15m ago",
     company: "ABC Accounting Group",
     action: "New Lead Joined",
     tone: "blue",
     score: 92,
     ring: "green",
-    iconBg: "bg-[#2563eb]",
+    initials: initialsOf("ABC Accounting Group"),
+    avatarColor: "#2563eb",
   },
   {
+    signalId: "",
     time: "1h ago",
     company: "Clifton Larson Allen",
     action: "Competitor AI Move",
     tone: "purple",
     score: 78,
     ring: "orange",
-    iconBg: "bg-[#0f766e]",
+    initials: initialsOf("Clifton Larson Allen"),
+    avatarColor: "#0f766e",
   },
   {
+    signalId: "",
     time: "2h ago",
     company: "Plante Moran",
     action: "Hiring Freeze",
     tone: "orange",
     score: 69,
     ring: "orange",
-    iconBg: "bg-[#f97316]",
+    initials: initialsOf("Plante Moran"),
+    avatarColor: "#f97316",
   },
   {
+    signalId: "",
     time: "3h ago",
     company: "Crowe LLP",
     action: "Regulatory Change",
     tone: "blue",
     score: 65,
     ring: "orange",
-    iconBg: "bg-[#2563eb]",
+    initials: initialsOf("Crowe LLP"),
+    avatarColor: "#2563eb",
   },
 ];
 
@@ -804,21 +838,32 @@ function RecentSignals({ signals }: { signals: typeof dummyRecentSignals }) {
     <section className="rounded-[18px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex items-center justify-between">
         <h2 className="m-0 text-[17px] font-bold text-[#0f172a]">Recent Signals</h2>
-        <button className="text-[13px] font-semibold text-[#2563eb]" type="button">
+        <a className="text-[13px] font-semibold text-[#2563eb] no-underline" href="/signal-feed">
           View All
-        </button>
+        </a>
       </div>
 
       <div className="mt-[8px] divide-y divide-[#f1f5f9]">
         {signals.map((signal, i) => (
-          <div className="flex items-center gap-[12px] py-[13px]" key={`${signal.company}-${i}`}>
+          <div
+            className={cn(
+              "flex items-center gap-[12px] py-[13px]",
+              signal.signalId && "cursor-pointer rounded-[10px] transition hover:bg-[#fafbff]",
+            )}
+            key={`${signal.company}-${i}`}
+            onClick={() => {
+              if (signal.signalId) {
+                window.location.href = `/signal-detail?id=${signal.signalId}`;
+              }
+            }}
+            role={signal.signalId ? "button" : undefined}
+            tabIndex={signal.signalId ? 0 : undefined}
+          >
             <span
-              className={cn(
-                "flex size-[38px] shrink-0 items-center justify-center rounded-[10px] text-white",
-                signal.iconBg,
-              )}
+              className="flex size-[38px] shrink-0 items-center justify-center rounded-[10px] text-[13px] font-bold text-white"
+              style={{ backgroundColor: signal.avatarColor }}
             >
-              <Building2 className="size-[19px]" />
+              {signal.initials}
             </span>
             <div className="min-w-0 flex-1">
               <p className="m-0 text-[11px] text-[#94a3b8]">{signal.time}</p>
@@ -837,53 +882,6 @@ function RecentSignals({ signals }: { signals: typeof dummyRecentSignals }) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Company Overview (was "Pipeline Overview" - no deal/pipeline-stage    */
-/* model exists in the backend at all - then a real intent-tier donut,   */
-/* now a full 3-paragraph analyst briefing (BridgeLLM, gemini-2.5-flash -  */
-/* see backend/app/controllers/companies.py::insight) covering pipeline   */
-/* health, named top opportunities, and signal trends + a recommended     */
-/* next action - all grounded in real gate/score/signal-category data,    */
-/* never invented. Falls back to a plain real-numbers sentence server-    */
-/* side if the LLM isn't configured, so this card always shows something  */
-/* real either way. Full-width row (moved out of the 3-column grid) since */
-/* a real 3-paragraph briefing needs real reading room.)                  */
-/* ------------------------------------------------------------------ */
-
-function CompanyOverview({ summary, loading }: { summary: string | null; loading: boolean }) {
-  // Backend writes one paragraph per section (health / opportunities /
-  // trends+action), separated by a blank line - split on that so each
-  // renders as its own paragraph instead of one dense wall of text.
-  const paragraphs = summary
-    ? summary
-        .split(/\n\s*\n/)
-        .map((p) => p.trim())
-        .filter(Boolean)
-    : [];
-
-  return (
-    <section className="rounded-[18px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="flex items-center gap-[8px]">
-        <Sparkles className="size-[16px] text-[#7c3aed]" />
-        <h2 className="m-0 text-[17px] font-bold text-[#0f172a]">AI Company Overview</h2>
-      </div>
-
-      {loading ? (
-        <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">Generating insight...</p>
-      ) : paragraphs.length > 0 ? (
-        <div className="mt-[14px] flex max-w-[900px] flex-col gap-[12px]">
-          {paragraphs.map((p, i) => (
-            <p className="m-0 text-[13px] leading-[21px] text-[#334155]" key={i}>
-              {p}
-            </p>
-          ))}
-        </div>
-      ) : (
-        <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">No data yet.</p>
-      )}
-    </section>
-  );
-}
 
 /* ------------------------------------------------------------------ */
 /* Page                                                                */
@@ -913,8 +911,6 @@ export function DashboardPage() {
   const [firstName, setFirstName] = useState("Arjun");
   const [companyStats, setCompanyStats] = useState<CompanyStatsOut>(emptyCompanyStats);
   const [signalStats, setSignalStats] = useState<SignalStatsOut>(emptySignalStats);
-  const [companyInsight, setCompanyInsight] = useState<string | null>(null);
-  const [companyInsightLoading, setCompanyInsightLoading] = useState(true);
   const [importBatches, setImportBatches] = useState<ImportBatchOut[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
 
@@ -953,7 +949,6 @@ export function DashboardPage() {
   useEffect(() => {
     const organisationId = getOrganisationId();
     if (!organisationId) {
-      setCompanyInsightLoading(false);
       return;
     }
     const batchId = selectedBatchId ?? undefined;
@@ -985,12 +980,6 @@ export function DashboardPage() {
       .catch(() => {
         // No backend/org yet - keep the empty stats.
       });
-    getCompanyInsight(organisationId)
-      .then((res) => setCompanyInsight(res.summary))
-      .catch(() => {
-        // No backend/org yet, or LLM call failed - leave summary null.
-      })
-      .finally(() => setCompanyInsightLoading(false));
   }, [selectedBatchId]);
 
   const topProspect = prospects !== dummyProspects ? prospects[0] ?? null : null;
@@ -1034,9 +1023,6 @@ export function DashboardPage() {
             <RecentSignals signals={recentSignals} />
           </div>
 
-          <div className="mt-[22px]">
-            <CompanyOverview loading={companyInsightLoading} summary={companyInsight} />
-          </div>
         </main>
       </div>
     </div>

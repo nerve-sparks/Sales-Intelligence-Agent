@@ -406,38 +406,45 @@ async def test_cancel_endpoint_sets_flag_and_reflects_in_status(org_ctx, make_co
 
 
 # ---------------------------------------------------------------------------
-# Crash recovery
+# Crash recovery - a stopped backend STOPS the job, never silently resumes it
 # ---------------------------------------------------------------------------
 
-async def test_resume_interrupted_jobs_picks_up_pending_batches(org_ctx, make_company, monkeypatch):
+async def test_stop_interrupted_jobs_does_not_resume_processing(org_ctx, make_company, monkeypatch):
     organisation_id, workspace_id = org_ctx
     company = await make_company()
     batch = await _make_batch(workspace_id, company)  # research_status defaults to 'pending'
+    await _set_item_status(batch.import_batch_id, company.company_id, "researching")
 
-    resumed_with: list = []
+    called = False
 
-    async def _fake_score_companies_in_background(org_id, ws_id, import_batch_id):
-        resumed_with.append((org_id, ws_id, import_batch_id))
-        async with async_session_maker() as session:
-            await session.execute(
-                update(IcpImportBatch)
-                .where(IcpImportBatch.import_batch_id == import_batch_id)
-                .values(research_status="complete", scoring_status="complete")
-            )
-            await session.commit()
+    async def _fail_if_called(*_a, **_kw):
+        nonlocal called
+        called = True
 
-    monkeypatch.setattr(excel_pipeline, "score_companies_in_background", _fake_score_companies_in_background)
+    # The old crash-recovery behaviour resumed processing via this function -
+    # asserting it's never called is the core of this test (brief: a stopped
+    # backend must not silently continue work in the background).
+    monkeypatch.setattr(excel_pipeline, "score_companies_in_background", _fail_if_called)
 
-    count = await job_recovery.resume_interrupted_jobs()
+    count = await job_recovery.stop_interrupted_jobs()
     assert count >= 1
+    assert called is False
 
-    # Let the fire-and-forget task actually run before asserting on its effect.
-    for _ in range(20):
-        await asyncio.sleep(0.05)
-        async with async_session_maker() as session:
-            refreshed = await session.get(IcpImportBatch, batch.import_batch_id)
-        if refreshed.research_status != "pending":
-            break
+    async with async_session_maker() as session:
+        refreshed_batch = await session.get(IcpImportBatch, batch.import_batch_id)
+        refreshed_item = (
+            await session.execute(
+                select(CompanyImportBatch).where(
+                    CompanyImportBatch.company_id == company.company_id,
+                    CompanyImportBatch.import_batch_id == batch.import_batch_id,
+                )
+            )
+        ).scalar_one()
 
-    assert refreshed.research_status == "complete"
-    assert any(import_batch_id == batch.import_batch_id for _org, _ws, import_batch_id in resumed_with)
+    # Batch reaches an honest terminal state instead of staying 'pending' forever.
+    assert refreshed_batch.research_status == "complete_with_warnings"
+    assert refreshed_batch.scoring_status == "complete"
+    assert refreshed_batch.processing_warnings == [job_recovery.STOPPED_MESSAGE]
+    # The in-flight company is marked failed (retryable), not left stuck at 'researching'.
+    assert refreshed_item.status == "failed"
+    assert refreshed_item.error_message == job_recovery.STOPPED_MESSAGE

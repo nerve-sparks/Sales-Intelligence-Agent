@@ -45,7 +45,7 @@ function ScoringMethodCard() {
         Lead Score = Buying Evidence + Contact Access − Negative Evidence (0–100)
       </p>
       <ul className="m-0 mt-[10px] flex flex-col gap-[6px] pl-[18px] font-['Inter'] text-[13px] text-[#64748b]">
-        <li>Status thresholds: Sales Ready 85+, High Priority 70–84, Warm 50–69, Monitor 30–49, Low Priority 0–29.</li>
+        <li>Status thresholds: Sales Ready 65+, High Priority 50–64, Warm 35–49, Monitor 20–34, Low Priority 0–19.</li>
         <li>Evidence is deduplicated - multiple articles about one event count once, with corroborating sources.</li>
         <li>Revenue and funding affect Expected Deal Value only, never the Lead Score.</li>
         <li>Confidence is calculated separately from the score.</li>

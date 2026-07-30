@@ -106,6 +106,11 @@ class CountryLeadScoreOut(BaseModel):
     country: str
     avg_lead_score: float
     company_count: int
+    # The Dashboard globe colors by this, not avg_lead_score - a large mixed
+    # population (e.g. 475 US companies) can average into "Monitor" while
+    # still containing genuinely Sales Ready companies; max reflects "does
+    # real opportunity exist here" instead of hiding it behind the average.
+    max_lead_score: float
 
 
 class CompanyStatsOut(BaseModel):

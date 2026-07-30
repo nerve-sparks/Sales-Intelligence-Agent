@@ -18,18 +18,21 @@ from app.routes import (
     users,
     workspaces,
 )
-from app.services.job_recovery import resume_interrupted_jobs
+from app.services.job_recovery import stop_interrupted_jobs
 
 configure_logging()
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Crash-recovery: a batch left mid-flight when the process last stopped
-    # (deploy, crash, dev-server reload) has no in-memory BackgroundTask left
-    # to finish it - without this it would show 'pending' in Postgres
-    # forever. Resumes each such job's background processing on startup.
-    await resume_interrupted_jobs()
+    # A batch left mid-flight when the process last stopped (deploy, crash,
+    # dev-server reload) has no in-memory BackgroundTask left to finish it.
+    # Deliberately does NOT resume it - a stopped backend means the job
+    # stopped too; silently continuing in the background would surprise
+    # anyone restarting the server for an unrelated reason. Marks it (and any
+    # still-in-flight companies) as stopped/retryable instead - see
+    # job_recovery.py.
+    await stop_interrupted_jobs()
     yield
 
 

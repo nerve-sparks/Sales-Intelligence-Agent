@@ -8,18 +8,44 @@ from app.core.db import get_db
 from app.controllers import signals as signals_controller
 from app.models import Workspace
 from app.services import llm_client
-from app.services.trigger_matcher import create_trigger, detect_trigger_events, get_trigger, list_triggers
+from app.services.trigger_matcher import (
+    create_trigger,
+    delete_trigger,
+    detect_trigger_events,
+    get_trigger,
+    list_triggers,
+    mark_trigger_seen,
+)
 from app.schemas.trigger import TriggerEventOut, TriggerEventsOut, TriggerInsightOut
 
 
 class TriggerCreate(BaseModel):
+    """Criteria are BuyingEvent.category values + a minimum real event_score -
+    the same values the scoring pipeline computes. signal_types is gone; see
+    trigger_matcher's module docstring and migration b8e3d1f7a2c9."""
+
     name: str | None = None
-    signal_types: list[str] | None = None
     signal_categories: list[str] | None = None
+    min_event_score: float = 0
 
 
 async def create(workspace_id: UUID, payload: TriggerCreate, db: AsyncSession = Depends(get_db)):
     return await create_trigger(db, workspace_id, payload.model_dump())
+
+
+async def remove(workspace_id: UUID, trigger_id: UUID, db: AsyncSession = Depends(get_db)):
+    if not await delete_trigger(db, workspace_id, trigger_id):
+        raise HTTPException(status_code=404, detail="trigger not found")
+    return {"deleted": True}
+
+
+async def mark_seen(workspace_id: UUID, trigger_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Clears this trigger's "new matches" badge. Separate from GET .../events
+    on purpose - Trigger Library fetches events for every trigger just to show
+    counts, so clearing there would wipe every badge on page load."""
+    if not await mark_trigger_seen(db, workspace_id, trigger_id):
+        raise HTTPException(status_code=404, detail="trigger not found")
+    return {"marked_seen": True}
 
 
 async def list_all(workspace_id: UUID, db: AsyncSession = Depends(get_db)):
@@ -72,20 +98,33 @@ async def events(workspace_id: UUID, trigger_id: UUID, db: AsyncSession = Depend
     if trigger is None:
         raise HTTPException(status_code=404, detail="trigger not found")
 
-    matched = await detect_trigger_events(db, trigger)
+    matched, new_count = await detect_trigger_events(db, trigger)
+    # The newest `new_count` matches (the list is already detected_at-desc) are
+    # exactly the ones past the last_seen_at watermark - flagged per row so the
+    # UI can mark them without recomputing the comparison client-side.
     events_out = [
         TriggerEventOut(
             trigger_event_id=e.trigger_event_id,
             trigger_id=e.trigger_id,
             company_id=e.company_id,
             company_name=e.company.company_name,
-            signal_id=e.signal_id,
-            signal_type=e.signal.signal_type,
-            signal_category=e.signal.signal_category,
-            core_fact=e.signal.core_fact,
+            buying_event_id=e.buying_event_id,
+            event_type=e.buying_event.event_type,
+            category=e.buying_event.category,
+            title=e.buying_event.title,
+            summary=e.buying_event.summary,
+            event_score=float(e.buying_event.event_score) if e.buying_event.event_score is not None else None,
+            published_at=e.buying_event.published_at,
+            is_new=i < new_count,
             notified=e.notified,
             detected_at=e.detected_at,
         )
-        for e in matched
+        for i, e in enumerate(matched)
     ]
-    return TriggerEventsOut(trigger=trigger, event_count=len(matched), events=events_out)
+    return TriggerEventsOut(
+        trigger=trigger,
+        event_count=len(matched),
+        new_event_count=new_count,
+        company_count=len({e.company_id for e in matched}),
+        events=events_out,
+    )

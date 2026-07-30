@@ -1010,52 +1010,25 @@ function DataSourceSetupForm() {
   );
 }
 
-// Seeded once per workspace, only if it has zero triggers yet. Every
-// signal_type/signal_category here is a real value from SIGNAL_CATEGORY_MAP
-// in backend/app/services/signal_extractor.py, so these are genuinely
-// matchable triggers (created via a real POST), not display-only dummy rows -
-// one per real signal category, covering the ones most people want on day one.
+/* Seeded once per workspace, only if it has zero triggers yet - one per real
+ * BuyingEvent.category, with a min_event_score calibrated to that category's
+ * actual observed volume so a starter trigger is neither noisy nor silently
+ * empty (the sparser categories get a lower bar).
+ *
+ * Rewritten when triggers moved onto the evidence pipeline: these previously
+ * carried signal_types from signal_extractor.py's old vocabulary
+ * (rfp_published, ceo_change, ...) which BuyingEvent never produces, and two
+ * of them targeted company_identity / reachability - enrichment categories
+ * deliberately excluded from the trigger vocabulary (see
+ * lib/signalCategories.ts). So every new workspace got 8 triggers that
+ * matched nothing. */
 const STARTER_TRIGGERS: TriggerCreate[] = [
-  {
-    name: "Buying Intent Signals",
-    signal_categories: ["buying_stage"],
-    signal_types: ["rfp_published", "vendor_evaluation_mentioned", "contract_awarded"],
-  },
-  {
-    name: "New Funding & Budget",
-    signal_categories: ["budget_and_capital"],
-    signal_types: ["funding_round_announced", "tech_budget_announced", "acquisition_completed"],
-  },
-  {
-    name: "Leadership Change",
-    signal_categories: ["urgency_and_catalysts"],
-    signal_types: ["ceo_change", "cto_change", "leadership_mandate_announced"],
-  },
-  {
-    name: "AI Adoption Activity",
-    signal_categories: ["ai_seriousness"],
-    signal_types: ["ai_tool_adoption", "ai_pilot_announced", "ai_budget_announcement"],
-  },
-  {
-    name: "Operational Pain Points",
-    signal_categories: ["ai_pain_points"],
-    signal_types: ["operational_inefficiency", "supply_chain_disruption", "cost_pressure_mentioned"],
-  },
-  {
-    name: "Competitive Displacement",
-    signal_categories: ["competitive_context"],
-    signal_types: ["vendor_replacement_signal", "competitive_evaluation", "greenfield_opportunity"],
-  },
-  {
-    name: "Company Growth Signals",
-    signal_categories: ["company_identity"],
-    signal_types: ["employee_count_update", "revenue_update", "headquarters_update"],
-  },
-  {
-    name: "Key Contacts Identified",
-    signal_categories: ["reachability"],
-    signal_types: ["cto_identified", "cfo_identified", "procurement_contact_identified"],
-  },
+  { name: "Active Buying Motion", signal_categories: ["buying_stage"], min_event_score: 20 },
+  { name: "New Funding & Budget", signal_categories: ["budget_and_capital"], min_event_score: 20 },
+  { name: "AI Adoption Activity", signal_categories: ["ai_seriousness"], min_event_score: 20 },
+  { name: "Operational Pain Points", signal_categories: ["ai_pain_points"], min_event_score: 10 },
+  { name: "Leadership & Catalysts", signal_categories: ["urgency_and_catalysts"], min_event_score: 10 },
+  { name: "Competitive Displacement", signal_categories: ["competitive_context"], min_event_score: 10 },
 ];
 
 function TriggerGenerationForm({ workspaceId }: { workspaceId: string | null }) {
@@ -1164,10 +1137,9 @@ function TriggerGenerationForm({ workspaceId }: { workspaceId: string | null }) 
                 const style =
                   TRIGGER_CATEGORY_STYLES[trigger.signal_categories?.[0] ?? ""] ?? DEFAULT_TRIGGER_STYLE;
                 const Icon = style.icon;
-                const signalMatch =
-                  [...(trigger.signal_types ?? []), ...(trigger.signal_categories ?? [])]
-                    .map(humanizeEnumValue)
-                    .join(", ") || "—";
+                const categoryPart = (trigger.signal_categories ?? []).map(humanizeEnumValue).join(", ");
+                const scorePart = trigger.min_event_score > 0 ? ` (score ${trigger.min_event_score}+)` : "";
+                const signalMatch = categoryPart ? `${categoryPart}${scorePart}` : "—";
                 const isEnabled = enabled[trigger.trigger_id] ?? true;
 
                 return (

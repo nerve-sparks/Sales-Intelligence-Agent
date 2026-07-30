@@ -16,6 +16,14 @@ import { categoryLabel, SIGNAL_CATEGORY_OPTIONS } from "../../lib/signalCategori
 
 const PAGE_SIZE = 20;
 
+/* Lets a category card elsewhere (Trigger Library) deep-link straight into
+ * a pre-filtered feed instead of landing on the unfiltered "All Categories"
+ * view and making the user re-select it. */
+function getCategoryFromUrl(): string {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get("category") ?? "";
+}
+
 function relativeTime(iso: string | null): string {
   if (!iso) return "—";
   const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -282,7 +290,7 @@ function Pagination({ page, total, onPageChange }: { page: number; total: number
 
 export function SignalFeedPage() {
   const [signals, setSignals] = useState<Signal[]>([]);
-  const [category, setCategory] = useState("");
+  const [category, setCategory] = useState(getCategoryFromUrl);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
 

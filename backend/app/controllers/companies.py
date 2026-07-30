@@ -80,8 +80,10 @@ async def stats(organisation_id: UUID, import_batch_id: UUID | None = None, db: 
         high_confidence=summary["high_confidence"],
         provisional_pipeline_value=summary["pipeline_value"],
         by_country=[
-            CountryLeadScoreOut(country=country, avg_lead_score=float(avg or 0), company_count=count)
-            for country, avg, count in country_rows
+            CountryLeadScoreOut(
+                country=country, avg_lead_score=float(avg or 0), company_count=count, max_lead_score=float(max_score or 0)
+            )
+            for country, avg, count, max_score in country_rows
         ],
     )
 
@@ -159,6 +161,8 @@ async def insight(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
 async def export(organisation_id: UUID, import_batch_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
     """Evidence-based company export (brief section 23). Optionally scoped to a
     single upload via import_batch_id; no ICP."""
+    print(f"\n[EXPORT] >>> Download requested: organisation_id={organisation_id}, "
+          f"import_batch_id={import_batch_id or '(all companies, no batch scope)'}")
     company_ids = None
     if import_batch_id is not None:
         # Permanent membership table (item 5), not Company.import_batch_id -
@@ -178,9 +182,13 @@ async def export(organisation_id: UUID, import_batch_id: UUID | None = None, db:
                 )
             ).scalars().all()
         )
+        print(f"[EXPORT]     scoped to {len(company_ids)} companies from this batch's membership table")
 
     rows = await company_directory.list_companies_for_export(db, organisation_id, company_ids)
+    print(f"[EXPORT]     pulled {len(rows)} row(s) to write into the workbook")
     workbook_bytes = excel_pipeline.build_company_export_workbook(rows)
+    print(f"[EXPORT] <<< Workbook built: {len(workbook_bytes)} bytes -> streaming to browser as "
+          f"'companies_export.xlsx'\n")
 
     return Response(
         content=workbook_bytes,

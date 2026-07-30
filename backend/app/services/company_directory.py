@@ -146,15 +146,20 @@ async def sales_status_summary(
 
 async def lead_score_by_country(
     session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None
-) -> list[tuple[str, float | None, int]]:
-    """Real average LeadScore.lead_score per Company.country (unscored
-    companies excluded from the average via the outer join, but still
-    counted) - feeds the Dashboard globe's per-country tiering. Passing
+) -> list[tuple[str, float | None, int, float | None]]:
+    """Real average AND max LeadScore.lead_score per Company.country
+    (unscored companies excluded from both via the outer join, but still
+    counted) - feeds the Dashboard globe's per-country tiering. Both are
+    returned deliberately: average alone hides real opportunity in any
+    country with a large, mixed population (e.g. 475 US companies averaging
+    ~38 despite 124 of them individually being Sales Ready/High Priority) -
+    the globe colors by max (does real opportunity exist here) while the
+    average stays available for the tooltip's fuller picture. Passing
     import_batch_id restricts to companies from one specific Excel upload
     (Dashboard timeline picker), instead of every company the org has ever
     ingested."""
     stmt = (
-        select(Company.country, func.avg(LeadScore.lead_score), func.count())
+        select(Company.country, func.avg(LeadScore.lead_score), func.count(), func.max(LeadScore.lead_score))
         .select_from(Company)
         .outerjoin(LeadScore, LeadScore.company_id == Company.company_id)
         .where(Company.organisation_id == organisation_id, Company.country.isnot(None))

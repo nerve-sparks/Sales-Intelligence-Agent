@@ -38,6 +38,11 @@ async function parseErrorDetail(response: Response): Promise<unknown> {
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {
+    // Every page (Dashboard included) fetches its data fresh on load/navigation
+    // - "no-store" guarantees that's a real network hit against the current
+    // database state, not a cached response from the browser's disk/back-
+    // forward cache, regardless of what any intermediary might otherwise do.
+    cache: "no-store",
     ...options,
     headers: {
       "Content-Type": "application/json",

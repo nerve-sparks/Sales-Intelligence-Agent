@@ -6,22 +6,16 @@ import {
   Plus,
   Search,
   Settings,
-  Sparkles,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { getTriggerEvents, getTriggerInsight, listTriggers, type TriggerOut } from "../../api/triggers";
+import { getTriggerEvents, listTriggers, type TriggerOut } from "../../api/triggers";
 import { getSignalStats, type SignalStatsOut } from "../../api/signals";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
-import {
-  categoryLabel,
-  categoryStyle,
-  SIGNAL_CATEGORY_OPTIONS,
-  typeLabel,
-} from "../../lib/signalCategories";
+import { categoryLabel, categoryStyle, SIGNAL_CATEGORY_OPTIONS } from "../../lib/signalCategories";
 
-/* A trigger is exactly name + signal_types[] + signal_categories[] on the
+/* A trigger is exactly name + signal_categories[] + min_event_score on the
  * backend (TriggerDefinition) - no status/description/priority column
  * exists, so this display type only carries what's real plus derived
  * labels for the card UI. */
@@ -34,12 +28,12 @@ type DisplayTrigger = {
 
 function toDisplayTrigger(trigger: TriggerOut): DisplayTrigger {
   const catLabels = (trigger.signal_categories ?? []).map(categoryLabel);
-  const typeLabels = (trigger.signal_types ?? []).map(typeLabel);
+  const scoreSuffix = trigger.min_event_score > 0 ? ` - score ${trigger.min_event_score}+` : "";
   return {
     id: trigger.trigger_id,
     name: trigger.name || "Untitled Trigger",
-    category: trigger.signal_categories?.[0] || trigger.signal_types?.[0] || "",
-    description: [...catLabels, ...typeLabels].join(", ") || "No signal criteria set",
+    category: trigger.signal_categories?.[0] ?? "",
+    description: catLabels.length ? `${catLabels.join(", ")}${scoreSuffix}` : "No categories set - matches nothing",
   };
 }
 
@@ -151,7 +145,7 @@ function SummaryCards({ summary }: { summary: SummaryStat[] }) {
 /* User-created triggers                                               */
 /* ------------------------------------------------------------------ */
 
-type TriggerStat = { events: number; companies: number } | null;
+type TriggerStat = { events: number; companies: number; newEvents: number } | null;
 
 /* Same icon/color per signal_category as the Trigger Editor's category
  * picker and the category cards above (signalCategories.CATEGORY_STYLE) -
@@ -171,12 +165,19 @@ function TriggerCard({ trigger, stat }: { trigger: DisplayTrigger; stat: Trigger
       role="button"
       tabIndex={0}
     >
-      <span
-        className="flex size-[48px] items-center justify-center rounded-[12px]"
-        style={{ backgroundColor: style.bg, color: style.color }}
-      >
-        <Icon className="size-[24px]" />
-      </span>
+      <div className="flex items-start justify-between gap-[8px]">
+        <span
+          className="flex size-[48px] items-center justify-center rounded-[12px]"
+          style={{ backgroundColor: style.bg, color: style.color }}
+        >
+          <Icon className="size-[24px]" />
+        </span>
+        {stat && stat.newEvents > 0 && (
+          <span className="rounded-full bg-[#fa5a1e] px-[8px] py-[3px] text-[10px] font-bold text-white">
+            {stat.newEvents} new
+          </span>
+        )}
+      </div>
       <h3 className="m-0 mt-[14px] truncate text-[15px] font-bold text-[#0f172a]">
         {trigger.name}
       </h3>
@@ -253,28 +254,6 @@ function YourTriggers({
   );
 }
 
-/* AI-generated (BridgeLLM, gemini/gemini-2.5-pro - see
- * backend/app/controllers/triggers.py::insight) plain-English read of real
- * category performance + your saved triggers. Falls back to a plain
- * real-numbers sentence server-side if the LLM isn't configured. */
-function AIInsightsCard({ summary, loading }: { summary: string | null; loading: boolean }) {
-  return (
-    <section className="rounded-[16px] border border-[#eee9ff] bg-[#faf8ff] p-[20px]">
-      <h2 className="m-0 flex items-center gap-[8px] text-[15px] font-bold text-[#0f172a]">
-        <Sparkles className="size-[16px] text-[#7c3aed]" />
-        AI Category Insights
-      </h2>
-      {loading ? (
-        <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">Generating insight...</p>
-      ) : summary ? (
-        <p className="m-0 mt-[14px] text-[13px] leading-[19px] text-[#475569]">{summary}</p>
-      ) : (
-        <p className="m-0 mt-[14px] text-[13px] text-[#94a3b8]">No data yet.</p>
-      )}
-    </section>
-  );
-}
-
 /* ------------------------------------------------------------------ */
 /* Page                                                                */
 /* ------------------------------------------------------------------ */
@@ -284,13 +263,10 @@ export function TriggerLibraryPage() {
   const [triggerStats, setTriggerStats] = useState<Record<string, TriggerStat>>({});
   const [statsData, setStatsData] = useState<SignalStatsOut | null>(null);
   const [search, setSearch] = useState("");
-  const [insight, setInsight] = useState<string | null>(null);
-  const [insightLoading, setInsightLoading] = useState(true);
 
   useEffect(() => {
     const workspaceId = getWorkspaceId();
     if (!workspaceId) {
-      setInsightLoading(false);
       return;
     }
     listTriggers(workspaceId)
@@ -298,14 +274,19 @@ export function TriggerLibraryPage() {
         const mapped = rows.map(toDisplayTrigger);
         setTriggers(mapped);
 
-        // Real per-trigger match counts, computed from the signals the
+        // Real per-trigger match counts against the buying events the
         // uploaded Excel actually produced (see trigger_matcher.detect_trigger_events).
+        // Fetching events here does NOT clear the "new" badge - only opening a
+        // trigger (Detail page -> markTriggerSeen) does.
         Promise.allSettled(mapped.map((t) => getTriggerEvents(workspaceId, t.id))).then((results) => {
           const next: Record<string, TriggerStat> = {};
           results.forEach((result, i) => {
             if (result.status === "fulfilled") {
-              const companies = new Set(result.value.events.map((e) => e.company_id));
-              next[mapped[i].id] = { events: result.value.event_count, companies: companies.size };
+              next[mapped[i].id] = {
+                events: result.value.event_count,
+                companies: result.value.company_count,
+                newEvents: result.value.new_event_count,
+              };
             }
           });
           setTriggerStats(next);
@@ -314,12 +295,6 @@ export function TriggerLibraryPage() {
       .catch(() => {
         // No backend/workspace yet - keep the empty list.
       });
-    getTriggerInsight(workspaceId)
-      .then((res) => setInsight(res.summary))
-      .catch(() => {
-        // No backend/workspace yet, or LLM call failed - leave insight null.
-      })
-      .finally(() => setInsightLoading(false));
   }, []);
 
   useEffect(() => {
@@ -364,8 +339,6 @@ export function TriggerLibraryPage() {
 
           <div className="mt-[22px] flex flex-col gap-[24px]">
             <SummaryCards summary={summary} />
-
-            <AIInsightsCard loading={insightLoading} summary={insight} />
 
             <YourTriggers hasAny={triggers.length > 0} stats={triggerStats} triggers={filteredTriggers} />
           </div>

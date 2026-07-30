@@ -82,11 +82,20 @@ async def search(domain: str, company_name: str | None = None, num: int = MAX_RE
         "include_answer": False,
         "include_raw_content": False,
     }
+    print(f"[TAVILY] >>> Calling Tavily Advanced Search for '{company_name}' ({domain})")
+    print(f"[TAVILY]     query: {query!r}")
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(SEARCH_URL, headers=_headers(), json=payload)
     if response.status_code != 200:
+        print(f"[TAVILY] <<< FAILED ({response.status_code}) for '{company_name}': {response.text[:200]}")
         raise TavilyError(f"Tavily search failed ({response.status_code}): {response.text}")
     results = response.json().get("results", [])
+    print(f"[TAVILY] <<< Got {len(results)} raw results for '{company_name}' "
+          f"(status={response.status_code})")
+    for i, r in enumerate(results[:5]):
+        print(f"[TAVILY]     [{i}] {r.get('title')!r} -> {r.get('url')}")
+    if len(results) > 5:
+        print(f"[TAVILY]     ... and {len(results) - 5} more")
     return [
         {
             "link": r.get("url"),

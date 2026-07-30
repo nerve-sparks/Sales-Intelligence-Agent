@@ -203,6 +203,7 @@ async def complete(
 
     if settings.llm_api_key:
         try:
+            print(f"[LLM-PROVIDER] Trying PRIMARY: BridgeLLM ({BRIDGE_MODEL}) for '{generation_name}'...")
             client = _get_bridge_client()
             response = await client.chat.completions.create(
                 model=BRIDGE_MODEL,
@@ -219,12 +220,15 @@ async def complete(
                 },
                 **kwargs,
             )
+            print(f"[LLM-PROVIDER] SUCCESS via BridgeLLM ({BRIDGE_MODEL})")
             return response.choices[0].message.content or ""
         except Exception as exc:
+            print(f"[LLM-PROVIDER] BridgeLLM FAILED: {type(exc).__name__}: {exc} -> falling back to DeepSeek")
             first_error = exc
 
     if settings.deepseek_api_key:
         try:
+            print(f"[LLM-PROVIDER] Trying FALLBACK: DeepSeek ({DEEPSEEK_MODEL}) for '{generation_name}'...")
             client = _get_deepseek_client()
             response = await client.chat.completions.create(
                 model=DEEPSEEK_MODEL,
@@ -233,13 +237,16 @@ async def complete(
                 metadata=langfuse_metadata,
                 **kwargs,
             )
+            print(f"[LLM-PROVIDER] SUCCESS via DeepSeek ({DEEPSEEK_MODEL})")
             return response.choices[0].message.content or ""
         except Exception as exc:
+            print(f"[LLM-PROVIDER] DeepSeek FAILED: {type(exc).__name__}: {exc} -> falling back to Ollama")
             if first_error is None:
                 first_error = exc
 
     if settings.ollama_base_url:
         try:
+            print(f"[LLM-PROVIDER] Trying LAST-RESORT: Ollama ({settings.ollama_model}) for '{generation_name}'...")
             client = _get_ollama_client()
             response = await client.chat.completions.create(
                 model=settings.ollama_model,
@@ -248,11 +255,14 @@ async def complete(
                 metadata=langfuse_metadata,
                 **kwargs,
             )
+            print(f"[LLM-PROVIDER] SUCCESS via Ollama ({settings.ollama_model})")
             return response.choices[0].message.content or ""
         except Exception as exc:
+            print(f"[LLM-PROVIDER] Ollama FAILED: {type(exc).__name__}: {exc} -> ALL PROVIDERS EXHAUSTED")
             if first_error is None:
                 first_error = exc
 
     # Every configured provider failed - surface the primary's own failure,
     # the most diagnostically relevant one (see module docstring).
+    print(f"[LLM-PROVIDER] !!! ALL PROVIDERS FAILED for '{generation_name}' - raising {type(first_error).__name__}")
     raise first_error

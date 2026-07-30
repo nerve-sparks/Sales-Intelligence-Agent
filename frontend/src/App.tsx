@@ -65,10 +65,10 @@ export default function App() {
               path={path}
             />
           ))}
-          {/* LoginPage covers "/", "/forgot-password" and "/mfa-verification"
-              itself (reads window.location.pathname to pick a mode) - the
-              wildcard catches all three plus anything unrecognized, same as
-              the old fallback. */}
+          {/* LoginPage covers "/", "/signup" and "/mfa-verification" itself
+              (reads window.location.pathname to pick a mode) - the wildcard
+              catches all three plus anything unrecognized, same as the old
+              fallback. */}
           <Route element={<PageTransition><LoginPage /></PageTransition>} path="*" />
         </Routes>
       </CurrentUserProvider>

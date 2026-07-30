@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Globe, { type GlobeMethods } from "react-globe.gl";
 import countriesUrl from "../../assets/globe/countries-110m.json?url";
 import earthNight from "../../assets/globe/earth-night.jpg";
@@ -6,8 +6,10 @@ import earthTopology from "../../assets/globe/earth-topology.png";
 
 /* Zone colors + boundaries mirror the Lead Opportunity Map legend and the
  * real sales_status bands (evidence_scorer.sales_status /
- * cfg.SALES_STATUS_BANDS): Sales Ready 85+, High Priority 70-84, Warm 50-69,
- * Monitor 30-49, Low Priority 0-29. */
+ * cfg.SALES_STATUS_BANDS): Sales Ready 65+, High Priority 50-64, Warm 35-49,
+ * Monitor 20-34, Low Priority 0-19. Keep zoneForScore below in sync with
+ * cfg.SALES_STATUS_BANDS - these were left at the pre-recalibration values
+ * (85/70/50/30) once already, which silently mis-coloured every country. */
 const ZONE = {
   sales_ready: "#16a34a",
   high_priority: "#22c55e",
@@ -18,8 +20,14 @@ const ZONE = {
 type Zone = keyof typeof ZONE;
 
 type LeadPoint = { lat: number; lng: number; zone: Zone; label: string };
-type Feature = { properties: Record<string, string | number> };
-export type CountryLeadScore = { country: string; avg_lead_score: number; company_count: number };
+type Geometry = { type: "Polygon" | "MultiPolygon"; coordinates: unknown };
+type Feature = { properties: Record<string, string | number>; geometry?: Geometry };
+export type CountryLeadScore = {
+  country: string;
+  avg_lead_score: number;
+  company_count: number;
+  max_lead_score: number;
+};
 
 const dummyPoints: LeadPoint[] = [
   { lat: 37.77, lng: -122.42, zone: "sales_ready", label: "San Francisco" },
@@ -51,61 +59,130 @@ const dummyHighlight: Record<string, Zone> = {
   Australia: "low_priority",
 };
 
-/* Approximate geographic centroids for the country names that actually
- * appear in real Company.country data (same lowercase keys as
- * SignalAnalyticsPage's COUNTRY_ISO, which solved the same "real ZoomInfo
- * country name" problem for its 2D map) - country-level, not per-company,
- * since Company has no lat/lng column at all. */
-const COUNTRY_CENTROID: Record<string, { lat: number; lng: number; admin: string }> = {
-  "united states": { lat: 39.8, lng: -98.6, admin: "United States of America" },
-  canada: { lat: 56.13, lng: -106.35, admin: "Canada" },
-  "united kingdom": { lat: 55.38, lng: -3.44, admin: "United Kingdom" },
-  india: { lat: 20.59, lng: 78.96, admin: "India" },
-  australia: { lat: -25.27, lng: 133.78, admin: "Australia" },
-  germany: { lat: 51.17, lng: 10.45, admin: "Germany" },
-  israel: { lat: 31.05, lng: 34.85, admin: "Israel" },
-  russia: { lat: 61.52, lng: 105.32, admin: "Russia" },
-  belgium: { lat: 50.5, lng: 4.47, admin: "Belgium" },
-  ireland: { lat: 53.41, lng: -8.24, admin: "Ireland" },
-  denmark: { lat: 56.26, lng: 9.5, admin: "Denmark" },
-  singapore: { lat: 1.35, lng: 103.82, admin: "Singapore" },
-  sweden: { lat: 60.13, lng: 18.64, admin: "Sweden" },
-  finland: { lat: 61.92, lng: 25.75, admin: "Finland" },
-  france: { lat: 46.23, lng: 2.21, admin: "France" },
+/* Real Company.country values are free-text (ZoomInfo/CSV import), while the
+ * loaded map's country polygons are keyed by Natural Earth's ADMIN name -
+ * these mostly agree case-insensitively ("Germany" == "germany"), but a
+ * handful of real-world names genuinely differ from ADMIN's naming.
+ * Confirmed against the actual countries-110m.json feature list - only maps
+ * names that DON'T already match ADMIN case-insensitively. */
+const COUNTRY_NAME_TO_ADMIN: Record<string, string> = {
+  "united states": "United States of America",
+  usa: "United States of America",
+  "u.s.a.": "United States of America",
+  "u.s.": "United States of America",
+  uk: "United Kingdom",
+  "u.k.": "United Kingdom",
+  "czech republic": "Czechia",
+  "republic of korea": "South Korea",
+  "korea, republic of": "South Korea",
+  "democratic people's republic of korea": "North Korea",
+  burma: "Myanmar",
+  "ivory coast": "Ivory Coast",
+  "cote d'ivoire": "Ivory Coast",
+  "congo (kinshasa)": "Democratic Republic of the Congo",
+  "congo (brazzaville)": "Republic of the Congo",
+  "dr congo": "Democratic Republic of the Congo",
+  tanzania: "United Republic of Tanzania",
+  "uae": "United Arab Emirates",
+  "u.a.e.": "United Arab Emirates",
+  holland: "Netherlands",
 };
+
+/* Centroid of one country's geometry - MultiPolygon countries (e.g. islands/
+ * exclaves) use the ring with the most points as a proxy for the main
+ * landmass, rather than averaging every ring (which would skew toward
+ * far-flung small territories). Good enough for placing a single globe
+ * marker/label point, not meant to be survey-accurate. */
+function ringCentroid(ring: number[][]): { lat: number; lng: number } {
+  let sumLng = 0;
+  let sumLat = 0;
+  for (const [lng, lat] of ring) {
+    sumLng += lng;
+    sumLat += lat;
+  }
+  return { lng: sumLng / ring.length, lat: sumLat / ring.length };
+}
+
+function featureCentroid(feature: Feature): { lat: number; lng: number } | null {
+  const geom = feature.geometry;
+  if (!geom) return null;
+  if (geom.type === "Polygon") {
+    const rings = geom.coordinates as number[][][];
+    return ringCentroid(rings[0]);
+  }
+  const polygons = geom.coordinates as number[][][][];
+  if (polygons.length === 0) return null;
+  const largest = polygons.reduce((a, b) => (b[0].length > a[0].length ? b : a));
+  return ringCentroid(largest[0]);
+}
+
+/* Built once the real map geometry loads (see `countries` state) - every
+ * country the globe can actually draw becomes available for point
+ * placement, instead of a fixed hand-picked subset that silently drops any
+ * real Company.country not on the list. */
+function buildCentroidLookup(countries: Feature[]): Record<string, { lat: number; lng: number; admin: string }> {
+  const byAdmin: Record<string, { lat: number; lng: number; admin: string }> = {};
+  for (const f of countries) {
+    const admin = String(f.properties.ADMIN);
+    const centroid = featureCentroid(f);
+    if (centroid) {
+      byAdmin[admin.toLowerCase()] = { ...centroid, admin };
+    }
+  }
+  return byAdmin;
+}
+
+function lookupCentroid(
+  countryName: string,
+  byAdmin: Record<string, { lat: number; lng: number; admin: string }>,
+): { lat: number; lng: number; admin: string } | undefined {
+  const key = countryName.trim().toLowerCase();
+  const alias = COUNTRY_NAME_TO_ADMIN[key];
+  return byAdmin[alias ? alias.toLowerCase() : key];
+}
 
 /* Real avg LeadScore.lead_score per country -> globe points + polygon
  * shading, using the same 5 sales-status thresholds as evidence_scorer.py's
  * sales_status() / cfg.SALES_STATUS_BANDS - not the old 4-zone hot/warm/
  * emerging/monitor split. */
 function zoneForScore(score: number): Zone {
-  if (score >= 85) return "sales_ready";
-  if (score >= 70) return "high_priority";
-  if (score >= 50) return "warm";
-  if (score >= 30) return "monitor";
+  if (score >= 65) return "sales_ready";
+  if (score >= 50) return "high_priority";
+  if (score >= 35) return "warm";
+  if (score >= 20) return "monitor";
   return "low_priority";
 }
 
-type CountryInfo = { country: string; companyCount: number; avgScore: number };
+type CountryInfo = { country: string; companyCount: number; avgScore: number; maxScore: number };
 
 function toRealPoints(
   byCountry: CountryLeadScore[],
+  centroidByAdmin: Record<string, { lat: number; lng: number; admin: string }>,
 ): { points: LeadPoint[]; highlight: Record<string, Zone>; info: Record<string, CountryInfo> } {
   const known = byCountry
-    .map((c) => ({ ...c, centroid: COUNTRY_CENTROID[c.country.toLowerCase()] }))
+    .map((c) => ({ ...c, centroid: lookupCentroid(c.country, centroidByAdmin) }))
     .filter((c): c is CountryLeadScore & { centroid: NonNullable<typeof c.centroid> } => Boolean(c.centroid));
 
+  // Zone comes from the country's BEST lead score, not its average: a
+  // country with 475 companies averaging ~38 but holding 124 genuinely
+  // Sales Ready / High Priority ones is a real opportunity, and averaging
+  // buried exactly that. The average is still surfaced in the tooltip.
   const points = known.map((c) => ({
     lat: c.centroid.lat,
     lng: c.centroid.lng,
-    zone: zoneForScore(c.avg_lead_score),
-    label: `${c.country} - Lead Score ${Math.round(c.avg_lead_score)} (${c.company_count})`,
+    zone: zoneForScore(c.max_lead_score),
+    label: `${c.country} - best ${Math.round(c.max_lead_score)}, avg ${Math.round(c.avg_lead_score)} (${c.company_count})`,
   }));
   const highlight: Record<string, Zone> = {};
   const info: Record<string, CountryInfo> = {};
   for (const c of known) {
-    highlight[c.centroid.admin] = zoneForScore(c.avg_lead_score);
-    info[c.centroid.admin] = { country: c.country, companyCount: c.company_count, avgScore: c.avg_lead_score };
+    highlight[c.centroid.admin] = zoneForScore(c.max_lead_score);
+    info[c.centroid.admin] = {
+      country: c.country,
+      companyCount: c.company_count,
+      avgScore: c.avg_lead_score,
+      maxScore: c.max_lead_score,
+    };
   }
   return { points, highlight, info };
 }
@@ -124,7 +201,15 @@ export default function LeadGlobe({ countryData }: { countryData?: CountryLeadSc
   const [size, setSize] = useState({ width: 480, height: 480 });
   const [countries, setCountries] = useState<Feature[]>([]);
 
-  const real = countryData && countryData.length > 0 ? toRealPoints(countryData) : null;
+  // Depends on `countries` (the loaded map geometry) - real country data
+  // can't be placed until the polygons it's centroid-derived from have
+  // loaded, so real points/highlights are unavailable for one render pass
+  // on first load (falls back to dummy briefly, then real once ready).
+  const centroidByAdmin = useMemo(() => buildCentroidLookup(countries), [countries]);
+  const real =
+    countryData && countryData.length > 0 && countries.length > 0
+      ? toRealPoints(countryData, centroidByAdmin)
+      : null;
   const points = real ? real.points : dummyPoints;
   const HIGHLIGHT = real ? real.highlight : dummyHighlight;
   const INFO = real ? real.info : {};
@@ -201,7 +286,7 @@ export default function LeadGlobe({ countryData }: { countryData?: CountryLeadSc
           const info = INFO[admin];
           if (info) {
             const companyWord = info.companyCount === 1 ? "company" : "companies";
-            return `${info.country} - ${info.companyCount} ${companyWord} (avg score ${Math.round(info.avgScore)})`;
+            return `${info.country} - ${info.companyCount} ${companyWord} | best score ${Math.round(info.maxScore)}, avg ${Math.round(info.avgScore)}`;
           }
           return HIGHLIGHT[admin] ? admin : "";
         }}

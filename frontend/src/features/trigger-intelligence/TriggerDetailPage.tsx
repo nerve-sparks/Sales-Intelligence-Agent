@@ -4,7 +4,12 @@ import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Donut } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
-import { getTriggerEvents, type TriggerEventOut, type TriggerEventsOut } from "../../api/triggers";
+import {
+  getTriggerEvents,
+  markTriggerSeen,
+  type TriggerEventOut,
+  type TriggerEventsOut,
+} from "../../api/triggers";
 import { getWorkspaceId } from "../../lib/session";
 import { CATEGORY_COLORS, categoryLabel, categoryStyle } from "../../lib/signalCategories";
 
@@ -138,7 +143,8 @@ function OverviewItem({
 function categoryDistribution(events: TriggerEventOut[]) {
   const counts: Record<string, number> = {};
   for (const e of events) {
-    counts[e.signal_category] = (counts[e.signal_category] || 0) + 1;
+    const key = e.category ?? "uncategorized";
+    counts[key] = (counts[key] || 0) + 1;
   }
   return Object.entries(counts)
     .map(([category, value], i) => ({
@@ -165,14 +171,21 @@ function OverviewCard({ trigger, events }: { trigger: TriggerEventsOut["trigger"
 
           <div className="mt-[18px] flex flex-col gap-[18px]">
             <OverviewItem color="#7c3aed" icon={Tag} label="Matches On">
-              <div className="flex flex-wrap gap-[6px]">
-                {[...(trigger.signal_types ?? []), ...(trigger.signal_categories ?? [])].map((v) => (
+              <div className="flex flex-wrap items-center gap-[6px]">
+                {(trigger.signal_categories ?? []).map((v) => (
                   <span className="rounded-[6px] bg-[#f3e9ff] px-[8px] py-[3px] text-[12px] font-medium text-[#7c3aed]" key={v}>
                     {titleCase(v)}
                   </span>
                 ))}
-                {!trigger.signal_types?.length && !trigger.signal_categories?.length && (
-                  <span className="text-[12px] font-normal text-[#94a3b8]">Not configured</span>
+                {!trigger.signal_categories?.length && (
+                  <span className="text-[12px] font-normal text-[#94a3b8]">
+                    No categories set - matches nothing
+                  </span>
+                )}
+                {trigger.min_event_score > 0 && (
+                  <span className="rounded-[6px] bg-[#e7f8ef] px-[8px] py-[3px] text-[12px] font-medium text-[#16a34a]">
+                    score {trigger.min_event_score}+
+                  </span>
                 )}
               </div>
             </OverviewItem>
@@ -246,40 +259,53 @@ function RecentSignalsCard({ events }: { events: TriggerEventOut[] }) {
           <div className="min-w-[820px]">
             <div className={cn("grid gap-[16px] border-b border-[#eef1f6] pb-[10px] text-[12px] font-medium text-[#94a3b8]", signalColumns)}>
               <span>Company</span>
-              <span>Fact</span>
+              <span>Buying Event</span>
               <span>Category</span>
               <span>Detected</span>
-              <span>Notified</span>
+              <span>Score</span>
             </div>
 
             <div className="divide-y divide-[#f1f5f9]">
               {rows.map((e) => {
-                const style = categoryStyle(e.signal_category);
+                const style = categoryStyle(e.category ?? "");
                 return (
-                  <div className={cn("grid items-center gap-[16px] py-[14px]", signalColumns)} key={e.trigger_event_id}>
+                  <div
+                    className={cn(
+                      "grid cursor-pointer items-center gap-[16px] py-[14px] transition hover:bg-[#fafbff]",
+                      signalColumns,
+                    )}
+                    key={e.trigger_event_id}
+                    onClick={() => {
+                      window.location.href = `/signal-detail?id=${e.buying_event_id}`;
+                    }}
+                    role="button"
+                    tabIndex={0}
+                  >
                     <div className="flex min-w-0 items-center gap-[10px]">
                       <LogoSquare bg={style.bg} color={style.color} icon={Building2} radius={9} size={36} />
                       <p className="m-0 truncate text-[13px] font-bold text-[#0f172a]">{e.company_name}</p>
                     </div>
                     <div className="min-w-0">
-                      <p className="m-0 truncate text-[13px] font-medium text-[#334155]">
-                        {e.core_fact || titleCase(e.signal_type)}
-                      </p>
+                      <div className="flex items-center gap-[6px]">
+                        {e.is_new && (
+                          <span className="shrink-0 rounded-full bg-[#fa5a1e] px-[6px] py-[1px] text-[9px] font-bold text-white">
+                            NEW
+                          </span>
+                        )}
+                        <p className="m-0 truncate text-[13px] font-medium text-[#334155]">
+                          {e.title || e.summary || titleCase(e.event_type)}
+                        </p>
+                      </div>
                     </div>
                     <span
                       className="w-fit rounded-[6px] px-[8px] py-[2px] text-[11px] font-semibold"
                       style={{ backgroundColor: style.bg, color: style.color }}
                     >
-                      {categoryLabel(e.signal_category)}
+                      {e.category ? categoryLabel(e.category) : "—"}
                     </span>
                     <span className="text-[13px] text-[#64748b]">{relativeTime(e.detected_at)}</span>
-                    <span
-                      className={cn(
-                        "w-fit rounded-[6px] px-[8px] py-[2px] text-[11px] font-semibold",
-                        e.notified ? "bg-[#dcfce7] text-[#16a34a]" : "bg-[#f1f5f9] text-[#64748b]",
-                      )}
-                    >
-                      {e.notified ? "Yes" : "No"}
+                    <span className="text-[13px] font-bold text-[#0f172a]">
+                      {e.event_score !== null ? Math.round(e.event_score) : "—"}
                     </span>
                   </div>
                 );
@@ -332,7 +358,11 @@ function TopMatchedCard({ events }: { events: TriggerEventOut[] }) {
     if (existing) {
       existing.count += 1;
     } else {
-      byCompany.set(e.company_id, { name: e.company_name, count: 1, latestFact: e.core_fact });
+      byCompany.set(e.company_id, {
+        name: e.company_name,
+        count: 1,
+        latestFact: e.title ?? e.summary ?? null,
+      });
     }
   }
   const rows = [...byCompany.values()].sort((a, b) => b.count - a.count).slice(0, 6);
@@ -378,7 +408,18 @@ export function TriggerDetailPage() {
       return;
     }
     getTriggerEvents(workspaceId, triggerId)
-      .then(setData)
+      .then((res) => {
+        setData(res);
+        // Viewing the matches is what "seeing" them means - clears this
+        // trigger's new-count badge on Trigger Library. Deliberately after the
+        // response is rendered, so the NEW row markers in `res` stay visible
+        // for this view and only disappear on the next visit.
+        if (res.new_event_count > 0) {
+          markTriggerSeen(workspaceId, triggerId).catch(() => {
+            // Non-critical: the badge just stays until the next successful view.
+          });
+        }
+      })
       .catch(() => setLoadError("Could not load this trigger."));
   }, []);
 

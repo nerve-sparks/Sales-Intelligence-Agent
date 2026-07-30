@@ -151,10 +151,17 @@ async def score_companies_in_background(
     error: str | None = None
     log_ctx = {"job_id": str(import_batch_id), "stage": "job"}
     logger.info("job started", extra=log_ctx)
+    print(f"\n{'='*80}\n[UPLOAD] Background scoring job STARTED\n"
+          f"[UPLOAD]   organisation_id = {organisation_id}\n"
+          f"[UPLOAD]   workspace_id    = {workspace_id}\n"
+          f"[UPLOAD]   import_batch_id = {import_batch_id}\n"
+          f"[UPLOAD]   started_at      = {started.isoformat()}\n{'='*80}")
 
     try:
         async with async_session_maker() as session:
             company_id_list = await _company_ids_for_batch(session, import_batch_id)
+            print(f"[UPLOAD] Batch resolved to {len(company_id_list)} companies "
+                  f"(via permanent company_import_batch membership table)")
 
             if await _cancel_requested(session, import_batch_id):
                 await session.execute(
@@ -172,11 +179,24 @@ async def score_companies_in_background(
                 return
 
             # Ensure a real Offering Profile (auto-sync if none/stale - item 11).
+            print(f"[UPLOAD] Ensuring XSparks Offering Profile is fresh (auto-syncs from "
+                  f"xsparks.ai if missing/stale)...")
             await ensure_offering_profile(session, organisation_id)
+            print(f"[UPLOAD] Offering Profile ready. Handing off to research_companies() "
+                  f"for {len(company_id_list)} companies...")
 
+            research_start = datetime.now(timezone.utc)
             research_summary = await search_signal_ingest.research_companies(
                 session, organisation_id, company_ids=company_id_list, import_batch_id=import_batch_id,
             )
+            research_elapsed = (datetime.now(timezone.utc) - research_start).total_seconds()
+            print(f"\n[UPLOAD] === RESEARCH STAGE COMPLETE in {research_elapsed:.1f}s ===")
+            print(f"[UPLOAD]   researched:        {research_summary.get('researched', 0)}")
+            print(f"[UPLOAD]   successful:        {research_summary.get('successful', 0)}")
+            print(f"[UPLOAD]   failed:            {research_summary.get('failed', 0)}")
+            print(f"[UPLOAD]   research_failures: {research_summary.get('research_failures', 0)} (Tavily)")
+            print(f"[UPLOAD]   llm_failures:      {research_summary.get('llm_failures', 0)}")
+            print(f"[UPLOAD]   events_stored:     {research_summary.get('events_stored', 0)}\n")
 
             if await _cancel_requested(session, import_batch_id):
                 await session.execute(
@@ -196,9 +216,18 @@ async def score_companies_in_background(
                 await session.commit()
                 return
 
+            print(f"[UPLOAD] Handing off to run_scoring() for {len(company_id_list)} companies...")
+            scoring_start = datetime.now(timezone.utc)
             counts = await evidence_scorer.run_scoring(
                 session, organisation_id, company_ids=company_id_list, import_batch_id=import_batch_id,
             )
+            scoring_elapsed = (datetime.now(timezone.utc) - scoring_start).total_seconds()
+            print(f"\n[UPLOAD] === SCORING STAGE COMPLETE in {scoring_elapsed:.1f}s ===")
+            print(f"[UPLOAD]   Sales Ready:   {counts.get('Sales Ready', 0)}")
+            print(f"[UPLOAD]   High Priority: {counts.get('High Priority', 0)}")
+            print(f"[UPLOAD]   Warm:          {counts.get('Warm', 0)}")
+            print(f"[UPLOAD]   Monitor:       {counts.get('Monitor', 0)}")
+            print(f"[UPLOAD]   Low Priority:  {counts.get('Low Priority', 0)}\n")
 
             signals_extracted = (
                 await session.execute(

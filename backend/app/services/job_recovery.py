@@ -1,58 +1,76 @@
-"""Crash-recovery for prospect-upload jobs (brief: "continue processing if
-the user closes the browser" / durability across restarts).
+"""Startup handling for jobs interrupted by a backend stop (crash, dev
+restart, deploy) - a stopped backend means the job stopped too, not
+"silently continue in the background without telling anyone."
 
 score_companies_in_background runs as an in-process asyncio task kicked off
-by FastAPI's BackgroundTasks - if the app process stops (crash, deploy,
-`--reload`) while a job is mid-flight, that task is gone with it, and
-IcpImportBatch.research_status is left at 'pending' forever with no
-in-memory work left to finish it. On startup, resume_interrupted_jobs()
-finds every such job and restarts its background processing from scratch
-(the pipeline is idempotent per company - see company_batch_status.py/
-buying_event_service.persist_company_events - so re-running is safe, not
-duplicate work: already-researched companies within the refresh window are
-skipped, already-scored companies are just re-scored to the same values).
+by FastAPI's BackgroundTasks - if the app process stops while a job is
+mid-flight, that task is gone with it, and IcpImportBatch.research_status is
+left at 'pending' forever with no in-memory work left to finish it. On
+startup, stop_interrupted_jobs() finds every such job and marks it - and any
+of its companies still stuck in a non-terminal stage (queued/researching/
+scoring/retrying) - as stopped, instead of transparently re-launching the
+research/scoring pipeline for it. A dev restarting the backend for an
+unrelated reason should see an honest "stopped, retry if you want" state in
+the UI, not unexplained background activity resuming on its own. Companies
+that already finished scoring before the stop keep their real results
+untouched; only the still-in-flight ones are marked 'failed', which is
+retryable via the existing POST .../retry-failed endpoint.
 """
 
-import asyncio
 import logging
+from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.db import async_session_maker
-from app.models import IcpImportBatch, Workspace
-from app.services import excel_pipeline
+from app.models import CompanyImportBatch, IcpImportBatch
+from app.services import company_batch_status
 
 logger = logging.getLogger(__name__)
 
-# asyncio.create_task() doesn't keep its own strong reference - without this,
-# the task can be garbage-collected mid-run since nothing else holds it
-# (there's no request/response cycle here to anchor it to, unlike
-# BackgroundTasks). Discarded via the done-callback once each job finishes.
-_background_jobs: set[asyncio.Task] = set()
+STOPPED_MESSAGE = "Processing stopped: the backend was restarted before this company finished."
 
 
-async def resume_interrupted_jobs() -> int:
+async def stop_interrupted_jobs() -> int:
+    """Marks every batch left at research_status='pending' (interrupted
+    mid-flight by the process's last stop) as stopped/complete_with_warnings,
+    and any of its companies still in a non-terminal stage as failed
+    (retryable). Returns how many batches were stopped."""
     async with async_session_maker() as session:
-        rows = (
+        batch_ids = (
             await session.execute(
-                select(IcpImportBatch.import_batch_id, IcpImportBatch.workspace_id, Workspace.organisation_id)
-                .join(Workspace, Workspace.workspace_id == IcpImportBatch.workspace_id)
-                .where(IcpImportBatch.research_status == "pending")
+                select(IcpImportBatch.import_batch_id).where(IcpImportBatch.research_status == "pending")
             )
-        ).all()
+        ).scalars().all()
 
-    for import_batch_id, workspace_id, organisation_id in rows:
-        logger.info(
-            "resuming interrupted job",
-            extra={"job_id": str(import_batch_id), "stage": "job"},
-        )
-        # Fire-and-forget, same as a request-scoped BackgroundTasks.add_task -
-        # there's no request to attach to at startup, so this is scheduled
-        # directly on the running event loop instead.
-        task = asyncio.create_task(
-            excel_pipeline.score_companies_in_background(organisation_id, workspace_id, import_batch_id)
-        )
-        _background_jobs.add(task)
-        task.add_done_callback(_background_jobs.discard)
+        for import_batch_id in batch_ids:
+            logger.info(
+                "stopping interrupted job (backend restarted mid-flight, not resuming)",
+                extra={"job_id": str(import_batch_id), "stage": "job"},
+            )
+            in_flight_ids = (
+                await session.execute(
+                    select(CompanyImportBatch.company_id).where(
+                        CompanyImportBatch.import_batch_id == import_batch_id,
+                        CompanyImportBatch.status.notin_(company_batch_status.TERMINAL_STATUSES),
+                    )
+                )
+            ).scalars().all()
+            for company_id in in_flight_ids:
+                await company_batch_status.mark_failed(
+                    session, company_id, import_batch_id, STOPPED_MESSAGE, permanent=False,
+                )
 
-    return len(rows)
+            await session.execute(
+                update(IcpImportBatch)
+                .where(IcpImportBatch.import_batch_id == import_batch_id)
+                .values(
+                    scoring_status="complete",
+                    research_status="complete_with_warnings",
+                    processing_completed_at=datetime.now(timezone.utc),
+                    processing_warnings=[STOPPED_MESSAGE],
+                )
+            )
+        await session.commit()
+
+    return len(batch_ids)

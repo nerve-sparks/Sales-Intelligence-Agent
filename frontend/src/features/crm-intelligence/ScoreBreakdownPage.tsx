@@ -1,10 +1,10 @@
-import { ChevronRight, ExternalLink, Info } from "lucide-react";
+import { ChevronRight, ExternalLink, Info, Mail, Phone } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { cn } from "../../lib/cn";
-import { getCompany } from "../../api/companies";
-import type { CompanyOut } from "../../api/icp";
+import { getCompany, listDecisionMakers } from "../../api/companies";
+import type { CompanyOut, DecisionMakerOut } from "../../api/icp";
 import { getScore, isScored, type BuyingEventOut, type ScoreDetailOut, type NotScoredOut } from "../../api/scores";
 import { getOrganisationId } from "../../lib/session";
 
@@ -42,6 +42,45 @@ function titleize(value: string | null | undefined): string {
     .split(/[_\s]+/)
     .map((w) => (ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
     .join(" ");
+}
+
+/* Mirrors backend/app/core/scoring_config.py's ECONOMIC_BUYER_TITLES /
+ * RELEVANT_EXEC_TITLES + evidence_scorer._contact_tier - for DISPLAY only
+ * (explaining why a contact landed in a tier), the backend's own
+ * contact_access_score is always the authoritative number. */
+const ECONOMIC_BUYER_TITLES = [
+  "ceo", "chief executive", "coo", "chief operating", "cto", "chief technology",
+  "cio", "chief information", "chief ai", "chief data", "chief digital",
+];
+const RELEVANT_EXEC_TITLES = [
+  "vp operations", "vp technology", "vp data", "vp automation", "vice president",
+  "transformation", "it director", "operations director", "director of it",
+  "director of operations", "procurement", "head of data", "head of ai", "head of technology",
+];
+const CONTACT_TIERS = [
+  { score: 20, label: "Economic buyer, verified email" },
+  { score: 15, label: "Relevant executive, verified email" },
+  { score: 8, label: "Relevant contact, no verified email" },
+  { score: 3, label: "Generic company contact" },
+  { score: 0, label: "No usable contact found" },
+];
+
+function titleMatches(title: string | null, needles: string[]): boolean {
+  if (!title) return false;
+  const t = title.toLowerCase();
+  return needles.some((n) => t.includes(n));
+}
+
+function contactTier(c: DecisionMakerOut): { score: number; label: string } {
+  const hasEmail = Boolean(c.email);
+  const hasOther = Boolean(c.phone || c.mobile_phone || c.linkedin_url);
+  const isEconomic = titleMatches(c.job_title, ECONOMIC_BUYER_TITLES);
+  const isRelevant = isEconomic || titleMatches(c.job_title, RELEVANT_EXEC_TITLES);
+  if (isEconomic && hasEmail) return CONTACT_TIERS[0];
+  if (isRelevant && hasEmail) return CONTACT_TIERS[1];
+  if (isRelevant && hasOther) return CONTACT_TIERS[2];
+  if (c.email || hasOther || c.job_title) return CONTACT_TIERS[3];
+  return CONTACT_TIERS[4];
 }
 
 const toneClass: Record<string, string> = {
@@ -125,25 +164,113 @@ function Header({ company, score }: { company: CompanyOut | null; score: ScoreDe
 
 /* ---- Score composition ---- */
 function Composition({ score }: { score: ScoreDetailOut }) {
+  const positiveEvents = score.events.filter((e) => !e.is_negative).length;
+  const negativeEvents = score.events.filter((e) => e.is_negative);
   const rows = [
-    { label: "Buying Evidence", value: score.buying_evidence_score ?? 0, max: "/ 80", sign: "+", tone: "text-[#16a34a]" },
-    { label: "Contact Access", value: score.contact_access_score ?? 0, max: "/ 20", sign: "+", tone: "text-[#16a34a]" },
-    { label: "Negative Evidence", value: score.negative_event_score ?? 0, max: "", sign: "−", tone: "text-[#ef4444]" },
+    {
+      label: "Buying Evidence",
+      value: score.buying_evidence_score ?? 0,
+      max: "/ 80",
+      sign: "+",
+      tone: "text-[#16a34a]",
+      detail:
+        positiveEvents > 0
+          ? `Built from your ${Math.min(3, positiveEvents)} strongest event(s) out of ${positiveEvents} found`
+          : "No positive buying events found",
+    },
+    {
+      label: "Contact Access",
+      value: score.contact_access_score ?? 0,
+      max: "/ 20",
+      sign: "+",
+      tone: "text-[#16a34a]",
+      detail: CONTACT_TIERS.find((t) => t.score === Math.round(score.contact_access_score ?? 0))?.label ?? "—",
+    },
+    {
+      label: "Negative Evidence",
+      value: score.negative_event_score ?? 0,
+      max: "",
+      sign: "−",
+      tone: "text-[#ef4444]",
+      detail: negativeEvents.length > 0 ? `${negativeEvents.length} negative event(s) found` : "No negative events found",
+    },
   ];
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Lead Score <Info className="size-[14px] text-[#cbd5e1]" /></h2>
       <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Buying Evidence + Contact Access − Negative Evidence, clamped to 0–100.</p>
-      <div className="mt-[16px] flex flex-col gap-[10px]">
+      <div className="mt-[16px] flex flex-col gap-[12px]">
         {rows.map((r) => (
-          <div className="flex items-center justify-between gap-[10px]" key={r.label}>
-            <span className="text-[13px] font-medium text-[#334155]">{r.label}</span>
-            <span className={cn("text-[14px] font-bold", r.tone)}>{r.sign} {Math.round(r.value)} <span className="text-[12px] font-normal text-[#94a3b8]">{r.max}</span></span>
+          <div key={r.label}>
+            <div className="flex items-center justify-between gap-[10px]">
+              <span className="text-[13px] font-medium text-[#334155]">{r.label}</span>
+              <span className={cn("text-[14px] font-bold", r.tone)}>{r.sign} {Math.round(r.value)} <span className="text-[12px] font-normal text-[#94a3b8]">{r.max}</span></span>
+            </div>
+            <p className="m-0 mt-[2px] text-[11px] text-[#94a3b8]">{r.detail}</p>
           </div>
         ))}
         <div className="mt-[4px] flex items-center justify-between gap-[10px] border-t border-[#f1f5f9] pt-[12px]">
           <span className="text-[14px] font-bold text-[#0f172a]">Final Lead Score</span>
           <span className="text-[18px] font-bold text-[#0f172a]">{score.lead_score !== null ? Math.round(score.lead_score) : "—"}<span className="text-[13px] font-normal text-[#94a3b8]"> / 100</span></span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ---- Contact Access breakdown ---- */
+function ContactAccessCard({ score, contacts }: { score: ScoreDetailOut; contacts: DecisionMakerOut[] }) {
+  const achievedScore = Math.round(score.contact_access_score ?? 0);
+  return (
+    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
+      <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Contact Access <Info className="size-[14px] text-[#cbd5e1]" /></h2>
+      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">
+        Scored once, from the single strongest reachable contact - never summed across contacts.
+      </p>
+
+      {contacts.length === 0 ? (
+        <p className="m-0 mt-[16px] text-[13px] text-[#94a3b8]">No contacts found for this company yet.</p>
+      ) : (
+        <div className="mt-[14px] flex flex-col gap-[8px]">
+          {contacts.map((c) => {
+            const tier = contactTier(c);
+            const counted = tier.score === achievedScore && tier.score === Math.max(...contacts.map((x) => contactTier(x).score));
+            const name = [c.first_name, c.last_name].filter(Boolean).join(" ") || "Unnamed contact";
+            return (
+              <div
+                className={cn(
+                  "rounded-[10px] border p-[12px]",
+                  counted ? "border-[#bbf7d0] bg-[#f0fdf4]" : "border-[#eef1f6]",
+                )}
+                key={c.decision_maker_id}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-[8px]">
+                  <div className="min-w-0">
+                    <span className="text-[13px] font-bold text-[#0f172a]">{name}</span>
+                    <span className="ml-[6px] text-[12px] text-[#64748b]">{c.job_title || "Title unknown"}</span>
+                  </div>
+                  {counted && <Badge label={`Counted: +${tier.score}`} tone="green" />}
+                </div>
+                <div className="mt-[6px] flex flex-wrap items-center gap-x-[14px] gap-y-[2px] text-[11px] text-[#94a3b8]">
+                  <span className="flex items-center gap-[4px]"><Mail className="size-[11px]" /> {c.email ? "Email on file" : "No email"}</span>
+                  <span className="flex items-center gap-[4px]"><Phone className="size-[11px]" /> {c.phone || c.mobile_phone ? "Phone on file" : "No phone"}</span>
+                  <span>Tier: {tier.label} (+{tier.score})</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-[16px] border-t border-[#f1f5f9] pt-[12px]">
+        <p className="m-0 text-[11px] font-semibold text-[#94a3b8]">Scoring tiers</p>
+        <div className="mt-[6px] flex flex-col gap-[3px]">
+          {CONTACT_TIERS.map((t) => (
+            <div className="flex items-center justify-between text-[11px]" key={t.label}>
+              <span className={achievedScore === t.score ? "font-bold text-[#0f172a]" : "text-[#94a3b8]"}>{t.label}</span>
+              <span className={achievedScore === t.score ? "font-bold text-[#16a34a]" : "text-[#94a3b8]"}>+{t.score}</span>
+            </div>
+          ))}
         </div>
       </div>
     </section>
@@ -212,9 +339,89 @@ function Field({ label, value }: { label: string; value: string | null }) {
   );
 }
 
+/* Mirrors backend/app/core/scoring_config.py's EVIDENCE_WEIGHTS - only the
+ * top 3 positive events (by event_score) actually count toward Buying
+ * Evidence, at these weights. Shown here so it's obvious a 4th/5th real
+ * event doesn't add to the score, matching evidence_scorer.buying_evidence_score. */
+const EVIDENCE_WEIGHTS = [1.0, 0.6, 0.4];
+
+const FACTORS: { key: keyof BuyingEventOut; label: string }[] = [
+  { key: "base_strength", label: "Base strength" },
+  { key: "relevance", label: "XSparks relevance" },
+  { key: "freshness", label: "Freshness" },
+  { key: "source_quality", label: "Source quality" },
+  { key: "extraction_confidence", label: "Extraction confidence" },
+  { key: "status_factor", label: "Status factor" },
+];
+
+function factorDisplay(key: keyof BuyingEventOut, value: number | null): string {
+  if (value === null) return "—";
+  return key === "base_strength" ? value.toFixed(0) : value.toFixed(2);
+}
+
+/* Plain-language reading of each factor, for reps who don't want to parse
+ * decimals - the raw numbers are still available under "Show the math"
+ * below. Thresholds mirror the bands in scoring_config.py. */
+function relevanceLabel(v: number | null): string {
+  if (v === null) return "Unknown fit";
+  if (v >= 0.85) return "Very strong fit";
+  if (v >= 0.55) return "Good fit";
+  if (v >= 0.25) return "Weak fit";
+  return "Not relevant";
+}
+function freshnessLabel(v: number | null): string {
+  if (v === null) return "Unknown age";
+  if (v >= 0.95) return "Very recent";
+  if (v >= 0.85) return "Recent (~3 months)";
+  if (v >= 0.65) return "Within the year";
+  if (v >= 0.45) return "Getting old (~18 months)";
+  return "Old";
+}
+function sourceQualityLabel(v: number | null): string {
+  if (v === null) return "Unknown source";
+  if (v >= 0.9) return "Official / independent press";
+  if (v >= 0.75) return "Company or industry source";
+  if (v >= 0.55) return "Aggregator / directory";
+  return "Unverified source";
+}
+function confidenceLabel(v: number | null): string {
+  if (v === null) return "Unknown confidence";
+  if (v >= 0.85) return "High AI confidence";
+  if (v >= 0.6) return "Medium AI confidence";
+  return "Low AI confidence";
+}
+function statusFactorLabel(v: number | null): string {
+  if (v === null) return "Unknown status";
+  if (v >= 0.95) return "Active now";
+  if (v >= 0.8) return "Announced";
+  if (v >= 0.55) return "Being explored";
+  if (v >= 0.4) return "Speculative";
+  if (v > 0) return "Already completed";
+  return "No longer relevant";
+}
+function baseStrengthLabel(v: number | null): string {
+  if (v === null) return "Unknown event type";
+  if (v >= 65) return "Very strong signal type";
+  if (v >= 45) return "Strong signal type";
+  if (v >= 25) return "Moderate signal type";
+  return "Weak signal type";
+}
+
 /* ---- Evidence events ---- */
-function EvidenceEvent({ event }: { event: BuyingEventOut }) {
+function EvidenceEvent({ event, weightIndex }: { event: BuyingEventOut; weightIndex: number | null }) {
   const sources = event.evidence ?? [];
+  const weight = weightIndex !== null ? EVIDENCE_WEIGHTS[weightIndex] : null;
+  const formula = FACTORS.map((f) => factorDisplay(f.key, event[f.key] as number | null)).join(" × ");
+  const [showMath, setShowMath] = useState(false);
+  const plainLabels = [
+    baseStrengthLabel(event.base_strength),
+    relevanceLabel(event.relevance),
+    freshnessLabel(event.freshness),
+    sourceQualityLabel(event.source_quality),
+    confidenceLabel(event.extraction_confidence),
+    statusFactorLabel(event.status_factor),
+  ];
+
   return (
     <div className="rounded-[12px] border border-[#eef1f6] p-[16px]">
       <div className="flex flex-wrap items-start justify-between gap-[8px]">
@@ -222,6 +429,20 @@ function EvidenceEvent({ event }: { event: BuyingEventOut }) {
           <div className="flex flex-wrap items-center gap-[8px]">
             <span className="text-[14px] font-bold text-[#0f172a]">{event.title || titleize(event.event_type)}</span>
             <Badge label={titleize(event.event_type)} tone={event.is_negative ? "red" : "blue"} />
+            {!event.is_negative && (
+              <Badge
+                label={
+                  weightIndex === 0
+                    ? "Your #1 strongest signal"
+                    : weightIndex === 1
+                      ? "Your #2 strongest signal"
+                      : weightIndex === 2
+                        ? "Your #3 strongest signal"
+                        : "Doesn't count toward score"
+                }
+                tone={weight !== null ? "green" : "gray"}
+              />
+            )}
           </div>
           <p className="m-0 mt-[4px] text-[13px] text-[#475569]">{event.summary || "—"}</p>
         </div>
@@ -230,6 +451,43 @@ function EvidenceEvent({ event }: { event: BuyingEventOut }) {
           <p className="m-0 text-[11px] text-[#94a3b8]">{event.is_negative ? "penalty" : "event score"}</p>
         </div>
       </div>
+
+      {!event.is_negative && (
+        <div className="mt-[10px] rounded-[8px] bg-[#f8fafc] p-[10px]">
+          <div className="flex flex-wrap gap-[6px]">
+            {plainLabels.map((label) => (
+              <span
+                className="rounded-[6px] border border-[#e2e8f0] bg-white px-[8px] py-[3px] text-[11px] font-medium text-[#334155]"
+                key={label}
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+          <button
+            className="mt-[8px] bg-transparent p-0 text-[11px] font-semibold text-[#4f46e5]"
+            onClick={() => setShowMath((v) => !v)}
+            type="button"
+          >
+            {showMath ? "Hide the math ▾" : "Show the math ▸"}
+          </button>
+          {showMath && (
+            <div className="mt-[8px] border-t border-[#e2e8f0] pt-[8px]">
+              <div className="grid grid-cols-2 gap-[8px] sm:grid-cols-3 lg:grid-cols-6">
+                {FACTORS.map((f) => (
+                  <div key={f.key}>
+                    <p className="m-0 text-[10px] text-[#94a3b8]">{f.label}</p>
+                    <p className="m-0 text-[13px] font-bold text-[#0f172a]">{factorDisplay(f.key, event[f.key] as number | null)}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="m-0 mt-[8px] text-[11px] text-[#64748b]">
+                {formula} = <span className="font-bold text-[#0f172a]">{event.event_score !== null ? event.event_score.toFixed(2) : "—"}</span>
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mt-[10px] flex flex-wrap gap-x-[18px] gap-y-[4px] text-[12px] text-[#64748b]">
         <span>Date: {formatDate(event.published_at)}</span>
@@ -258,16 +516,23 @@ function EvidenceEvent({ event }: { event: BuyingEventOut }) {
 }
 
 function EvidenceEvents({ events }: { events: BuyingEventOut[] }) {
-  const sorted = [...events].sort((a, b) => (b.event_score ?? 0) - (a.event_score ?? 0));
+  const positive = [...events.filter((e) => !e.is_negative)].sort((a, b) => (b.event_score ?? 0) - (a.event_score ?? 0));
+  const negative = events.filter((e) => e.is_negative);
+  // Only the top 3 positive events count toward Buying Evidence (see
+  // EVIDENCE_WEIGHTS) - map each event to its weight index (0/1/2) or null.
+  const weightIndexById = new Map(positive.map((e, i) => [e.buying_event_id, i < 3 ? i : null]));
+  const sorted = [...positive, ...negative];
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Evidence Events <Info className="size-[14px] text-[#cbd5e1]" /></h2>
-      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Each unique real-world event, once - multiple articles about the same event are collapsed into a single event with several sources.</p>
+      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Every real signal we found, strongest first. Duplicate articles about the same event are combined into one. Only your top 3 signals actually count toward the score below.</p>
       {events.length === 0 ? (
         <p className="m-0 mt-[16px] text-[13px] text-[#94a3b8]">No buying events found for this company yet.</p>
       ) : (
         <div className="mt-[16px] flex flex-col gap-[12px]">
-          {sorted.map((e) => <EvidenceEvent event={e} key={e.buying_event_id} />)}
+          {sorted.map((e) => (
+            <EvidenceEvent event={e} key={e.buying_event_id} weightIndex={weightIndexById.get(e.buying_event_id) ?? null} />
+          ))}
         </div>
       )}
     </section>
@@ -277,6 +542,7 @@ function EvidenceEvents({ events }: { events: BuyingEventOut[] }) {
 export function ScoreBreakdownPage() {
   const [company, setCompany] = useState<CompanyOut | null>(null);
   const [score, setScore] = useState<ScoreDetailOut | NotScoredOut | null>(null);
+  const [contacts, setContacts] = useState<DecisionMakerOut[]>([]);
 
   useEffect(() => {
     const organisationId = getOrganisationId();
@@ -284,6 +550,7 @@ export function ScoreBreakdownPage() {
     if (!organisationId || !companyId) return;
     getCompany(organisationId, companyId).then(setCompany).catch(() => setCompany(null));
     getScore(organisationId, companyId).then(setScore).catch(() => setScore(null));
+    listDecisionMakers(organisationId, companyId).then(setContacts).catch(() => setContacts([]));
   }, []);
 
   const scored = score !== null && isScored(score);
@@ -302,11 +569,14 @@ export function ScoreBreakdownPage() {
             <>
               <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-3">
                 <Composition score={s} />
+                <ContactAccessCard contacts={contacts} score={s} />
                 <DealPotential score={s} />
-                <Recommendation score={s} />
               </div>
-              <div className="mt-[20px]">
-                <EvidenceEvents events={s.events} />
+              <div className="mt-[20px] grid grid-cols-1 gap-[20px] xl:grid-cols-3">
+                <div className="xl:col-span-2">
+                  <EvidenceEvents events={s.events} />
+                </div>
+                <Recommendation score={s} />
               </div>
             </>
           )}

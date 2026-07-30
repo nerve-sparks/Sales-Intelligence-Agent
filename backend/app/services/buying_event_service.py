@@ -252,6 +252,9 @@ async def _classify_chunk(
     'zero events' (brief item 7), since silently doing so would permanently
     mark a company researched with no evidence when the truth is 'not yet
     classified'."""
+    company_name = company.get("company_name")
+    print(f"[LLM] >>> Classifying {len(items)} evidence item(s) for '{company_name}' "
+          f"(provider order: BridgeLLM -> DeepSeek -> Ollama)...")
     try:
         raw = await llm_client.complete(
             [{"role": "user", "content": _build_prompt(company, offering_profile, items, now)}],
@@ -267,12 +270,52 @@ async def _classify_chunk(
             # where per-tenant DeepSeek cost tracking actually matters.
             trace_user_id=str(company["organisation_id"]) if company.get("organisation_id") else None,
         )
-    except Exception:
+    except Exception as exc:
+        print(f"[LLM] <<< FAILED for '{company_name}': {type(exc).__name__}: {exc}")
         return {}, False  # LLM unavailable
+    print(f"[LLM] <<< Raw response for '{company_name}' ({len(raw)} chars): {raw[:300]!r}"
+          f"{'...' if len(raw) > 300 else ''}")
     parsed = _parse(raw)
     if not parsed:
+        print(f"[LLM] <<< UNPARSEABLE response for '{company_name}' - treating as failure, not zero-events")
         return {}, False  # invalid / unparseable response
+    accepted_ct = sum(1 for v in parsed.values() if v.get("is_real_company_event"))
+    print(f"[LLM] <<< Parsed {len(parsed)} classification(s) for '{company_name}': "
+          f"{accepted_ct} accepted as real events, {len(parsed) - accepted_ct} rejected")
     return parsed, True
+
+
+
+# Deterministic safety net for the single highest-stakes classification in
+# the pipeline: whether a company is going under. Confirmed live (Luminar
+# Technologies, 2026-07-29): the LLM classified an article titled "...Initiates
+# Voluntary Chapter 11 Proceedings..." as a POSITIVE vendor_evaluation event,
+# with zero negative events extracted - the company then scored 66.48 and
+# showed "Sales Ready" while in active bankruptcy. temperature=0 does not
+# guarantee this can't recur (confirmed: the same real Luminar facts were
+# correctly read as severe_financial_distress in an earlier run and missed
+# entirely in this one). Rather than trust LLM judgment alone for this one
+# outcome, unambiguous distress language in the SOURCE text (not the LLM's
+# possibly-softened summary) forces is_negative regardless of what the model
+# said - a false positive here costs some Buying Evidence; a false negative
+# recommends pursuing a company that may no longer exist.
+_FORCED_NEGATIVE_PATTERNS = (
+    "chapter 11", "chapter 7 bankruptcy", "bankrupt", "insolvent", "insolvency",
+    "ceased operations", "ceased trading", "wind down", "winding down", "wound down",
+    "liquidation", "liquidating", "dissolved", "effectively collapsed", "has collapsed",
+)
+
+
+def _forced_negative_reason(item: dict) -> str | None:
+    """Returns the matched distress phrase if the evidence item's own title/
+    snippet contains unambiguous company-distress language, else None. Checks
+    the SOURCE text, not the LLM's summary - the LLM's own wording is exactly
+    what's unreliable here."""
+    haystack = f"{item.get('title') or ''} {item.get('snippet') or ''}".lower()
+    for pattern in _FORCED_NEGATIVE_PATTERNS:
+        if pattern in haystack:
+            return pattern
+    return None
 
 
 async def extract_events(
@@ -303,6 +346,14 @@ async def extract_events(
             cls = classes.get(i)
             if not cls or not cls.get("is_real_company_event"):
                 continue
+
+            forced_reason = _forced_negative_reason(item)
+            if forced_reason and not cls.get("is_negative"):
+                print(f"[SAFETY-NET] Overriding LLM: '{item.get('title')}' contains distress "
+                      f"phrase {forced_reason!r} but was classified non-negative - forcing "
+                      f"is_negative=True, negative_type=severe_financial_distress")
+                cls = {**cls, "is_negative": True, "negative_type": "severe_financial_distress"}
+
             event_type = cls.get("event_type")
             relevance = _clamp01(cls.get("xsparks_relevance"))
             if relevance <= 0.0 and not cls.get("is_negative"):
@@ -374,7 +425,7 @@ def _build_canonical_events(company_id, accepted: list[dict], now: datetime) -> 
             groups[key] = candidate
         else:
             _absorb(existing, candidate)
-    return _merge_similar_groups(groups)
+    return _suppress_positive_duplicates_of_negative(_merge_similar_groups(groups))
 
 
 def _absorb(keeper: dict, other: dict) -> None:
@@ -459,6 +510,52 @@ def _match_existing_event(candidate: dict, existing_rows: list) -> "BuyingEvent 
 
 def _evidence_domains(ev: dict) -> set[str]:
     return {e.get("domain") for e in ev.get("evidence", []) if e.get("domain")}
+
+
+def _suppress_positive_duplicates_of_negative(groups: dict[str, dict]) -> dict[str, dict]:
+    """Drops a positive event that describes the SAME real-world fact as an
+    already-present negative event (e.g. a distressed-sale/bankruptcy asset
+    disposal read once as a "vendor evaluation" growth opportunity and once
+    as "severe financial distress" - confirmed live: Luminar Technologies'
+    $110M photonics-division sale to Quantum Computing Inc. was extracted as
+    both, from two different source pages, in opposite polarities).
+
+    Deliberately crosses the positive/negative boundary that
+    _merge_similar_groups refuses to cross (there, same-polarity is required
+    because collapsing a positive and negative read into ONE record would
+    hide the conflict; here, the negative read is kept as the authoritative
+    one and the positive duplicate is dropped entirely, rather than merged -
+    a bankruptcy-driven divestiture should not also count as an independent
+    growth signal toward Buying Evidence).
+
+    Matched by shared evidence URL (the strongest possible signal) OR real
+    ACTION+OBJECT overlap - never subject, which is almost always just the
+    company name and would over-match every unrelated event pair for the
+    same company (same reasoning as _merge_similar_groups' domain path).
+    Cross-polarity framings diverge more in wording than same-polarity
+    duplicates do (compare "sale of photonics business" vs "severe financial
+    distress" for the identical transaction), so this uses a looser
+    threshold (0.30) than the 0.34 same-polarity/same-domain path - a
+    heuristic, not exact, and worth revisiting if it over- or under-fires in
+    practice."""
+    positives = [(k, v) for k, v in groups.items() if not v["is_negative"]]
+    negatives = [v for v in groups.values() if v["is_negative"]]
+    if not positives or not negatives:
+        return groups
+
+    suppressed: set[str] = set()
+    for key, pos in positives:
+        pos_urls = {e.get("url") for e in pos.get("evidence", []) if e.get("url")}
+        for neg in negatives:
+            if not _dates_compatible(pos["_date"], neg["_date"]):
+                continue
+            shared_evidence = bool(pos_urls & {e.get("url") for e in neg.get("evidence", []) if e.get("url")})
+            act = _token_jaccard(pos["_action"], neg["_action"])
+            obj = _token_jaccard(pos["_object"], neg["_object"])
+            if shared_evidence or (act + obj) / 2 >= 0.30:
+                suppressed.add(key)
+                break
+    return {k: v for k, v in groups.items() if k not in suppressed}
 
 
 def _merge_similar_groups(groups: dict[str, dict]) -> dict[str, dict]:

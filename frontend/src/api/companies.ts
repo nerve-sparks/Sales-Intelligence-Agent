@@ -50,6 +50,11 @@ export type CountryLeadScoreOut = {
   country: string;
   avg_lead_score: number;
   company_count: number;
+  /* The Dashboard globe colors by this, not avg_lead_score - see
+   * company_directory.lead_score_by_country: a large mixed population can
+   * average into "Monitor" while still holding genuinely Sales Ready
+   * companies. */
+  max_lead_score: number;
 };
 
 export type CompanyStatsOut = {

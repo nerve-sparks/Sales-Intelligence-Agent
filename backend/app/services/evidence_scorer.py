@@ -266,12 +266,14 @@ async def score_company(session: AsyncSession, company: Company, now: datetime) 
     influence as it ages and eventually hits zero past the window. Stale events
     (not rediscovered in the latest research run - item 10) are excluded from
     the live score entirely."""
+    print(f"\n[SCORING] >>> Scoring '{company.company_name}' ({company.company_id})...")
     all_events = (
         await session.execute(select(BuyingEvent).where(BuyingEvent.company_id == company.company_id))
     ).scalars().all()
     contacts = (
         await session.execute(select(DecisionMaker).where(DecisionMaker.company_id == company.company_id))
     ).scalars().all()
+    print(f"[SCORING]     found {len(all_events)} stored buying_event row(s), {len(contacts)} contact(s)")
 
     # Recompute freshness + event_score from published_at, persist, and drop
     # stale events from the live score.
@@ -285,9 +287,17 @@ async def score_company(session: AsyncSession, company: Company, now: datetime) 
                 float(e.status_factor or 0),
             )
     events = [e for e in all_events if not e.is_stale]
+    if len(events) != len(all_events):
+        print(f"[SCORING]     {len(all_events) - len(events)} event(s) excluded as stale "
+              f"(not rediscovered in latest research)")
 
     positive = [e for e in events if not e.is_negative]
     negatives = [e for e in events if e.is_negative]
+    print(f"[SCORING]     {len(positive)} positive event(s), {len(negatives)} negative event(s)")
+    for e in sorted(positive, key=lambda e: float(e.event_score or 0), reverse=True)[:3]:
+        print(f"[SCORING]       top event: [{e.event_type}] score={e.event_score} "
+              f"(base={e.base_strength} x rel={e.relevance} x fresh={e.freshness} "
+              f"x srcQ={e.source_quality} x conf={e.extraction_confidence} x status={e.status_factor})")
 
     be = buying_evidence_score([float(e.event_score or 0) for e in positive])
     ca = contact_access_score(
@@ -300,6 +310,8 @@ async def score_company(session: AsyncSession, company: Company, now: datetime) 
     neg = negative_penalty([float(e.penalty_value or 0) for e in negatives])
     score = final_lead_score(be, ca, neg)
     status = sales_status(score)
+    print(f"[SCORING] <<< '{company.company_name}': Buying Evidence={be} + Contact Access={ca} "
+          f"- Negative={neg} => Lead Score={score} ({status})")
 
     conf_value, conf_label, conf_reason = confidence(
         [
@@ -320,13 +332,40 @@ async def score_company(session: AsyncSession, company: Company, now: datetime) 
     )
     weighted = provisional_weighted_value(score, edv["value"])
 
-    # Best offering / why-now / action come from the strongest positive event.
+    # A disqualified company (score floored to 0 by negative evidence, per
+    # final_lead_score's clamp) must not carry a deal value into pipeline
+    # totals - company_directory.sales_status_summary() sums
+    # expected_deal_value_usd across every scored company with no
+    # sales_status filter, so a nonzero value here silently inflates
+    # "Pipeline Value" with revenue attributed to a company just flagged
+    # "don't pursue" (e.g. bankrupt/collapsed/recalled). The revenue-band
+    # math itself doesn't know about the penalty, so it's zeroed here rather
+    # than inside expected_deal_value().
+    if score == 0:
+        edv = {**edv, "min": 0.0, "max": 0.0, "value": 0.0}
+        weighted = 0.0
+
+    # Best offering / why-now / action normally come from the strongest
+    # positive event. But when negative evidence is what actually determined
+    # the outcome (floored the score, or is simply the stronger factor), the
+    # positive-only narrative is misleading - a rep reading "why now" should
+    # see the disqualifying reason, not an unrelated growth signal that lost
+    # the math. strongest_negative uses penalty_value (not event_score, which
+    # negative events don't carry) as its strength measure.
     strongest = max(positive, key=lambda e: float(e.event_score or 0), default=None)
-    best_offering = strongest.best_offering if strongest else None
-    why_now = strongest.summary if strongest else None
-    recommended_action = (
-        f"Lead with {best_offering}: {strongest.reasoning}" if strongest and strongest.reasoning else None
-    )
+    strongest_negative = max(negatives, key=lambda e: float(e.penalty_value or 0), default=None)
+    negative_dominates = score == 0 and strongest_negative is not None
+
+    if negative_dominates:
+        best_offering = strongest.best_offering if strongest else None
+        why_now = f"DISQUALIFIED: {strongest_negative.summary}" if strongest_negative.summary else "DISQUALIFIED: see negative evidence below."
+        recommended_action = "Do not pursue until this is resolved - see negative evidence below."
+    else:
+        best_offering = strongest.best_offering if strongest else None
+        why_now = strongest.summary if strongest else None
+        recommended_action = (
+            f"Lead with {best_offering}: {strongest.reasoning}" if strongest and strongest.reasoning else None
+        )
 
     warnings = []
     if not events:

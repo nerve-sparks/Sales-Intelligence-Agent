@@ -9,18 +9,43 @@ import {
   categoryLabel,
   categoryStyle,
   SIGNAL_CATEGORY_OPTIONS,
-  SIGNAL_TYPES_BY_CATEGORY,
-  typeLabel,
 } from "../../lib/signalCategories";
 import { cn } from "../../lib/cn";
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
 
-/* A trigger is exactly two things on the backend (TriggerDefinition: name +
- * signal_types[] + signal_categories[] - see app/models/trigger_definition.py).
+/* A trigger is exactly three things on the backend (TriggerDefinition: name +
+ * signal_categories[] + min_event_score - see app/models/trigger_definition.py).
  * No priority, no status, no conditions/weights, no actions/notifications -
- * none of that exists in the schema, so this page doesn't pretend to collect it. */
+ * none of that exists in the schema, so this page doesn't pretend to collect it.
+ *
+ * The old "Signal Types" picker is gone: it offered signal_extractor.py's
+ * vocabulary (rfp_published, ceo_change, ...), which the evidence pipeline
+ * never produces, so any trigger narrowed by type matched zero events. The
+ * score threshold replaces it as the way to make a trigger precise, and it
+ * uses the real BuyingEvent.event_score the Lead Score itself is built from. */
+
+/* Thresholds are anchored to the real observed event_score distribution
+ * (live data tops out in the mid-40s, since event_score multiplies
+ * base_strength by five 0-1 factors) - not a 0-100 guess. */
+const SCORE_PRESETS = [
+  { value: 0, label: "Any signal", hint: "Every match in the category, including weak mentions" },
+  { value: 10, label: "Weak and up", hint: "Filters out only the faintest signals" },
+  { value: 20, label: "Moderate and up", hint: "A real, reasonably-sourced event" },
+  { value: 30, label: "Strong and up", hint: "Well-sourced, recent, clearly relevant" },
+  { value: 40, label: "Very strong only", hint: "Top-tier signals - expect few matches" },
+];
+
+function scoreHint(value: number): string {
+  const match = [...SCORE_PRESETS].reverse().find((p) => value >= p.value);
+  return match ? match.hint : SCORE_PRESETS[0].hint;
+}
+
+function scoreLabel(value: number): string {
+  const match = [...SCORE_PRESETS].reverse().find((p) => value >= p.value);
+  return match ? match.label : SCORE_PRESETS[0].label;
+}
 
 function CategoryGrid({ selected, onToggle }: { selected: string[]; onToggle: (category: string) => void }) {
   return (
@@ -58,45 +83,43 @@ function CategoryGrid({ selected, onToggle }: { selected: string[]; onToggle: (c
   );
 }
 
-function TypeChips({
-  categories,
-  selected,
-  onToggle,
-}: {
-  categories: string[];
-  selected: string[];
-  onToggle: (type: string) => void;
-}) {
-  const available = categories.flatMap((c) => SIGNAL_TYPES_BY_CATEGORY[c] ?? []);
-
-  if (available.length === 0) {
-    return (
-      <p className="m-0 text-[13px] text-[#94a3b8]">
-        Pick a signal category above to narrow this to specific signal types (optional).
-      </p>
-    );
-  }
-
+function ScoreThreshold({ value, onChange }: { value: number; onChange: (value: number) => void }) {
   return (
-    <div className="flex flex-wrap gap-[8px]">
-      {available.map((type) => {
-        const isSelected = selected.includes(type);
-        return (
+    <div>
+      <div className="flex flex-wrap gap-[8px]">
+        {SCORE_PRESETS.map((preset) => (
           <button
             className={cn(
               "rounded-[8px] border px-[12px] py-[6px] text-[12px] font-semibold transition",
-              isSelected
+              value === preset.value
                 ? "border-[#5b3df5] bg-[#eef1ff] text-[#5b3df5]"
                 : "border-[#e9edf5] bg-white text-[#475569] hover:border-[#d7dcff]",
             )}
-            key={type}
-            onClick={() => onToggle(type)}
+            key={preset.value}
+            onClick={() => onChange(preset.value)}
             type="button"
           >
-            {typeLabel(type)}
+            {preset.label}
           </button>
-        );
-      })}
+        ))}
+      </div>
+
+      <div className="mt-[14px] flex items-center gap-[14px]">
+        <input
+          aria-label="Minimum event score"
+          className="h-[4px] w-full max-w-[320px] cursor-pointer appearance-none rounded-full bg-[#e9edf5] accent-[#5b3df5]"
+          max={50}
+          min={0}
+          onChange={(e) => onChange(Number(e.target.value))}
+          step={1}
+          type="range"
+          value={value}
+        />
+        <span className="whitespace-nowrap text-[13px] font-bold text-[#0f172a]">
+          {value === 0 ? "no minimum" : `score ${value}+`}
+        </span>
+      </div>
+      <p className="m-0 mt-[8px] text-[12px] text-[#94a3b8]">{scoreHint(value)}</p>
     </div>
   );
 }
@@ -104,26 +127,21 @@ function TypeChips({
 export function TriggerEditorPage() {
   const [name, setName] = useState("");
   const [categories, setCategories] = useState<string[]>([]);
-  const [types, setTypes] = useState<string[]>([]);
+  const [minScore, setMinScore] = useState(20);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const toggleCategory = (category: string) => {
-    const isRemoving = categories.includes(category);
-    setCategories((prev) => (isRemoving ? prev.filter((c) => c !== category) : [...prev, category]));
-    // Dropping a category prunes any of its types that were selected, so the
-    // preview never shows a type whose category is no longer checked.
-    if (isRemoving) {
-      const removedTypes = new Set(SIGNAL_TYPES_BY_CATEGORY[category] ?? []);
-      setTypes((prev) => prev.filter((t) => !removedTypes.has(t)));
-    }
+    setCategories((prev) =>
+      prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category],
+    );
   };
 
-  const toggleType = (type: string) => {
-    setTypes((prev) => (prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]));
-  };
-
-  const canSave = name.trim().length > 0 && (categories.length > 0 || types.length > 0);
+  // At least one category is genuinely required now - the matcher treats a
+  // trigger with no categories as matching nothing (see
+  // trigger_matcher.detect_trigger_events), so allowing an empty save would
+  // just create an inert rule.
+  const canSave = name.trim().length > 0 && categories.length > 0;
 
   const save = async () => {
     const workspaceId = getWorkspaceId();
@@ -136,8 +154,8 @@ export function TriggerEditorPage() {
     try {
       const trigger = await createTrigger(workspaceId, {
         name: name.trim(),
-        signal_categories: categories.length ? categories : null,
-        signal_types: types.length ? types : null,
+        signal_categories: categories,
+        min_event_score: minScore,
       });
       window.location.href = `/trigger-details?id=${trigger.trigger_id}`;
     } catch (err) {
@@ -203,19 +221,23 @@ export function TriggerEditorPage() {
 
               <div>
                 <label className="mb-[8px] block text-[13px] font-semibold text-[#334155]">
-                  Signal Categories
+                  Signal Categories <span className="font-normal text-[#94a3b8]">(required)</span>
                 </label>
                 <p className="m-0 mb-[10px] text-[12px] text-[#94a3b8]">
-                  Match any signal in these categories.
+                  Match any buying event in these categories.
                 </p>
                 <CategoryGrid onToggle={toggleCategory} selected={categories} />
               </div>
 
               <div>
                 <label className="mb-[8px] block text-[13px] font-semibold text-[#334155]">
-                  Signal Types <span className="font-normal text-[#94a3b8]">(optional, narrows further)</span>
+                  Minimum Signal Strength
                 </label>
-                <TypeChips categories={categories} onToggle={toggleType} selected={types} />
+                <p className="m-0 mb-[10px] text-[12px] text-[#94a3b8]">
+                  Only alert on events scoring at least this much - the same event score the Lead Score is
+                  built from, so this trigger stays in step with your scoring.
+                </p>
+                <ScoreThreshold onChange={setMinScore} value={minScore} />
               </div>
             </section>
 
@@ -262,22 +284,12 @@ export function TriggerEditorPage() {
 
                   <div>
                     <p className="m-0 text-[11px] font-semibold uppercase tracking-[0.02em] text-[#94a3b8]">
-                      Types
+                      Minimum Strength
                     </p>
-                    {types.length === 0 ? (
-                      <p className="m-0 mt-[3px] text-[13px] text-[#94a3b8]">None selected</p>
-                    ) : (
-                      <div className="mt-[6px] flex flex-wrap gap-[6px]">
-                        {types.map((t) => (
-                          <span
-                            className="rounded-[6px] bg-[#f1f5f9] px-[8px] py-[3px] text-[11px] font-semibold text-[#334155]"
-                            key={t}
-                          >
-                            {typeLabel(t)}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                    <p className="m-0 mt-[3px] text-[14px] font-bold text-[#0f172a]">
+                      {minScore === 0 ? "Any score" : `Score ${minScore}+`}
+                    </p>
+                    <p className="m-0 mt-[2px] text-[12px] text-[#94a3b8]">{scoreLabel(minScore)}</p>
                   </div>
                 </div>
               </section>

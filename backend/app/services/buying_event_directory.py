@@ -65,7 +65,18 @@ async def list_events(
 
     total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
 
-    stmt = stmt.order_by(BuyingEvent.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    # Ordered by the real-world event date (published_at) - what the feed's
+    # "Detected" column actually shows - not created_at (when OUR research
+    # happened to discover it). Those can diverge (a re-research pass can
+    # discover an old article days after it was published), which made the
+    # feed's displayed dates look out of order despite technically having a
+    # sort. Events with no known date sort last, tie-broken by created_at so
+    # they're still in a stable, deterministic order rather than scattered.
+    stmt = (
+        stmt.order_by(BuyingEvent.published_at.desc().nulls_last(), BuyingEvent.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
     rows = (await session.execute(stmt)).all()
     return rows, total
 

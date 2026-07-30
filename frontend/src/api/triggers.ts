@@ -1,19 +1,25 @@
 /* Mirrors backend/app/routes/triggers.py */
-import { apiGet, apiPost } from "./client";
+import { apiDelete, apiGet, apiPost } from "./client";
 
+/* A trigger matches BuyingEvent.category + a minimum real event_score - the
+ * same values the scoring pipeline computes (see backend
+ * trigger_matcher.py's module docstring). The old signal_types field is gone:
+ * it targeted a vocabulary the evidence pipeline never produces, so those
+ * triggers silently matched nothing. */
 export type TriggerOut = {
   trigger_id: string;
   name: string | null;
-  signal_types: string[] | null;
   signal_categories: string[] | null;
+  min_event_score: number;
+  last_seen_at: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
 
 export type TriggerCreate = {
   name?: string | null;
-  signal_types?: string[] | null;
   signal_categories?: string[] | null;
+  min_event_score?: number;
 };
 
 export type TriggerEventOut = {
@@ -21,10 +27,16 @@ export type TriggerEventOut = {
   trigger_id: string;
   company_id: string;
   company_name: string;
-  signal_id: string;
-  signal_type: string;
-  signal_category: string;
-  core_fact: string | null;
+  buying_event_id: string;
+  event_type: string;
+  category: string | null;
+  title: string | null;
+  summary: string | null;
+  event_score: number | null;
+  published_at: string | null;
+  /* Matched after the user last viewed this trigger (server-computed against
+   * TriggerDefinition.last_seen_at). */
+  is_new: boolean;
   notified: boolean;
   detected_at: string | null;
 };
@@ -32,6 +44,8 @@ export type TriggerEventOut = {
 export type TriggerEventsOut = {
   trigger: TriggerOut;
   event_count: number;
+  new_event_count: number;
+  company_count: number;
   events: TriggerEventOut[];
 };
 
@@ -45,6 +59,17 @@ export function listTriggers(workspaceId: string): Promise<TriggerOut[]> {
 
 export function getTriggerEvents(workspaceId: string, triggerId: string): Promise<TriggerEventsOut> {
   return apiGet<TriggerEventsOut>(`/workspaces/${workspaceId}/triggers/${triggerId}/events`);
+}
+
+/* Clears this trigger's "new matches" badge. Separate from getTriggerEvents on
+ * purpose - Trigger Library fetches events for every trigger just to render
+ * counts, so clearing there would wipe every badge on page load. */
+export function markTriggerSeen(workspaceId: string, triggerId: string): Promise<{ marked_seen: boolean }> {
+  return apiPost<{ marked_seen: boolean }>(`/workspaces/${workspaceId}/triggers/${triggerId}/mark-seen`);
+}
+
+export function deleteTrigger(workspaceId: string, triggerId: string): Promise<{ deleted: boolean }> {
+  return apiDelete<{ deleted: boolean }>(`/workspaces/${workspaceId}/triggers/${triggerId}`);
 }
 
 export type TriggerInsightOut = {
