@@ -517,7 +517,7 @@ export function SignalIntelligencePage() {
             <StatCards stats={statCards} />
           </div>
 
-          <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[1.6fr_1fr]">
+          <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
             <SignalTrendCard hasData={hasTrend} labels={trendLabels} series={trendSeries} />
             <SourceTypeCard segments={categorySegments} total={data.total} />
           </div>

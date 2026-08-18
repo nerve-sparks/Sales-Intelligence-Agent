@@ -4,29 +4,22 @@ import {
   ChevronDown,
   Clock3,
   BarChart3,
-  Building2,
   Database,
-  Filter,
   Mail,
   MoreVertical,
   RadioTower,
   RefreshCcw,
-  Search,
   ShieldCheck,
   Target,
-  TrendingUp,
   Upload,
   User,
   Users,
-  X,
-  Zap,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { FigmaLogo } from "../auth/LoginPage";
-import { ApiError, BASE_URL } from "../../api/client";
+import { ApiError } from "../../api/client";
 import { createOrganisation } from "../../api/organisations";
-import { uploadLogo } from "../../api/uploads";
 import { addWorkspaceMember, createWorkspace } from "../../api/workspaces";
 import { createUser } from "../../api/users";
 import {
@@ -34,7 +27,6 @@ import {
   setWorkspaceId as setSessionWorkspaceId,
 } from "../../lib/session";
 import { listImportBatches, type ImportBatchOut } from "../../api/icp";
-import { createTrigger, listTriggers, type TriggerCreate, type TriggerOut } from "../../api/triggers";
 import { uploadProspects } from "../../api/prospectImports";
 import { OfferingProfileCard } from "../../components/OfferingProfileCard";
 import { useAuth } from "../../lib/useAuth";
@@ -160,12 +152,11 @@ const steps = [
   ["Organization", "Setup"],
   ["Workspace", "Setup"],
   ["Team", "Invitations"],
-  ["Data Source", "Setup"],
-  ["Trigger", "Generation"],
   ["Offering &", "Prospect Data"],
   ["Business", "Discovery"],
   ["Go", "Live"],
 ];
+const LAST_STEP = steps.length - 1;
 
 const invitedMembers = [
   {
@@ -229,90 +220,6 @@ const invitedMembers = [
     avatarClassName: "bg-[#cffafe] text-[#0284c7]",
   },
 ];
-
-const dataSources = [
-  {
-    name: "LinkedIn Sales Navigator",
-    description: "Access lead and company data, job changes, and intent signals.",
-    logo: "in",
-    logoClassName: "bg-[#0a66c2] text-white",
-    connected: true,
-  },
-  {
-    name: "Apollo.io",
-    description: "Find verified contacts, company data, and buying intent.",
-    logo: "A",
-    logoClassName: "bg-[#ffb338] text-[#111827]",
-    connected: true,
-  },
-  {
-    name: "ZoomInfo",
-    description: "Comprehensive company and contact data with intent insights.",
-    logo: "Z",
-    logoClassName: "bg-[#ef233c] text-white",
-    connected: true,
-  },
-  {
-    name: "Crunchbase",
-    description: "Company profiles, funding rounds, acquisitions, and news.",
-    logo: "cb",
-    logoClassName: "bg-[#0b74ff] text-white",
-    connected: true,
-  },
-  {
-    name: "News API",
-    description: "Real-time news and press releases to detect key events.",
-    logo: "N",
-    logoClassName: "bg-[#a855f7] text-white",
-    connected: true,
-  },
-  {
-    name: "Clearbit",
-    description: "Enrich profiles with firmographic and technographic data.",
-    logo: "C",
-    logoClassName: "bg-[#38bdf8] text-white",
-  },
-  {
-    name: "G2",
-    description: "Track product reviews, buyer intent, and competitive signals.",
-    logo: "G2",
-    logoClassName: "bg-[#ff6b35] text-white",
-  },
-  {
-    name: "Owler",
-    description: "Company intelligence, leadership changes, and alerts.",
-    logo: "O",
-    logoClassName: "bg-[#0f1f6f] text-white",
-  },
-  {
-    name: "Custom API",
-    description: "Connect any custom API or internal data source.",
-    logo: "API",
-    logoClassName: "bg-[#7c3aed] text-white",
-  },
-];
-
-// Keyed by signal.signal_category (see SIGNAL_CATEGORY_MAP in
-// backend/app/services/signal_extractor.py for the real category values) -
-// purely a visual treatment, the underlying trigger data is real.
-const TRIGGER_CATEGORY_STYLES: Record<string, { icon: typeof Zap; className: string }> = {
-  ai_seriousness: { icon: Zap, className: "bg-[#eef2ff] text-[#4f46e5]" },
-  ai_pain_points: { icon: Filter, className: "bg-[#fff7ed] text-[#f97316]" },
-  budget_and_capital: { icon: Target, className: "bg-[#ede9fe] text-[#7c3aed]" },
-  buying_stage: { icon: TrendingUp, className: "bg-[#eff6ff] text-[#005bff]" },
-  company_identity: { icon: Building2, className: "bg-[#fce7f3] text-[#db2777]" },
-  competitive_context: { icon: RefreshCcw, className: "bg-[#cffafe] text-[#0891b2]" },
-  reachability: { icon: Users, className: "bg-[#dcfce7] text-[#16a34a]" },
-  urgency_and_catalysts: { icon: RadioTower, className: "bg-[#f3e8ff] text-[#9333ea]" },
-};
-const DEFAULT_TRIGGER_STYLE = { icon: Zap, className: "bg-[#eef2ff] text-[#4f46e5]" };
-
-function humanizeEnumValue(value: string): string {
-  return value
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
-}
 
 /* Real stages of excel_pipeline (see app/services/excel_pipeline.py) - this
  * replaces a mockup "AI is scanning your website/LinkedIn/news" list with
@@ -406,8 +313,6 @@ const setupSummaryItems = [
   "Industry Selection",
   "Business Discovery",
   "Offering & Prospect Data",
-  "Trigger Generation",
-  "Data Source Setup",
   "Go Live",
 ];
 
@@ -536,96 +441,6 @@ function SelectField({ icon, label, required, value, onChange, options }: Select
   );
 }
 
-const LOGO_ACCEPT = "image/png,image/jpeg,image/svg+xml";
-const MAX_LOGO_BYTES = 2 * 1024 * 1024;
-
-function LogoUpload({ value, onChange }: { value: string; onChange: (url: string) => void }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleFile = async (file: File | undefined) => {
-    if (!file) return;
-    if (!["image/png", "image/jpeg", "image/svg+xml"].includes(file.type)) {
-      setError("Logo must be a PNG, JPG, or SVG image.");
-      return;
-    }
-    if (file.size > MAX_LOGO_BYTES) {
-      setError("Logo must be 2MB or smaller.");
-      return;
-    }
-    setError(null);
-    setUploading(true);
-    try {
-      const { url } = await uploadLogo(file);
-      onChange(url);
-    } catch (err) {
-      setError(err instanceof ApiError ? String(err.detail) : "Upload failed. Please try again.");
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  return (
-    <div className="flex flex-col gap-[8px]">
-      <FieldLabel>Company Logo</FieldLabel>
-      <input
-        accept={LOGO_ACCEPT}
-        className="hidden"
-        onChange={(e) => {
-          void handleFile(e.target.files?.[0]);
-          e.target.value = "";
-        }}
-        ref={inputRef}
-        type="file"
-      />
-      <div className="relative flex h-[119px] w-full flex-col items-center justify-center rounded-[12px] border-2 border-dashed border-[#e2e8f0] bg-[#f8fafc] px-[34px] py-[20px]">
-        {value && !uploading && (
-          <button
-            aria-label="Remove logo"
-            className="absolute right-[10px] top-[10px] flex size-[22px] items-center justify-center rounded-full bg-white text-[#64748b] shadow-[0px_1px_2px_rgba(15,23,42,0.15)] hover:text-[#dc2626]"
-            onClick={() => {
-              onChange("");
-              setError(null);
-            }}
-            type="button"
-          >
-            <X className="size-[13px]" strokeWidth={2.5} />
-          </button>
-        )}
-        <button
-          className="flex flex-col items-center justify-center disabled:opacity-60"
-          disabled={uploading}
-          onClick={() => inputRef.current?.click()}
-          type="button"
-        >
-          {value ? (
-            <img
-              alt="Company logo"
-              className="size-[48px] rounded-full object-cover"
-              src={`${BASE_URL}${value}`}
-            />
-          ) : (
-            <span className="flex size-[48px] items-center justify-center rounded-full bg-white shadow-[0px_1px_1px_rgba(0,0,0,0.05)]">
-              <img alt="" className="size-[24px]" src={icons.upload} />
-            </span>
-          )}
-          <span className="mt-[12px] font-['Inter'] text-[14px] font-bold leading-[20px] text-[#4f46e5]">
-            {uploading ? "Uploading..." : value ? "Change Logo" : "Upload Logo"}
-          </span>
-          <span className="mt-[1px] font-['Inter'] text-[11px] font-normal leading-[16.5px] text-[#94a3b8]">
-            SVG, PNG or JPG (max. 2MB)
-          </span>
-        </button>
-      </div>
-      {error && <p className="m-0 font-['Inter'] text-[11px] text-[#dc2626]">{error}</p>}
-      <p className="m-0 pt-[4px] font-['Inter'] text-[11px] italic leading-[16.5px] text-[#94a3b8]">
-        Recommended: 512x512px
-      </p>
-    </div>
-  );
-}
-
 type StepFormProps = {
   form: OnboardingFormState;
   onFieldChange: <K extends keyof OnboardingFormState>(field: K, value: OnboardingFormState[K]) => void;
@@ -679,10 +494,6 @@ function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
         onChange={(v) => onFieldChange("designation", v)}
         placeholder="e.g. VP of Sales"
         value={form.designation}
-      />
-      <LogoUpload
-        onChange={(v) => onFieldChange("account_logo_url", v)}
-        value={form.account_logo_url}
       />
 
       <div className="flex flex-col gap-[8px] md:col-span-2">
@@ -773,7 +584,7 @@ function StatusBadge({
 function TeamInvitationsForm() {
   return (
     <div className="flex flex-col gap-[16px]">
-      <div className="grid grid-cols-1 items-end gap-[12px] lg:grid-cols-[1.15fr_1fr_1fr_auto]">
+      <div className="grid grid-cols-1 items-end gap-[12px] lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
         <div className="flex flex-col gap-[8px]">
           <FieldLabel required>Email Address</FieldLabel>
           <div className="relative flex h-[42px] items-center rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc]">
@@ -920,279 +731,6 @@ function TeamInvitationsForm() {
           Import from CSV
         </button>
       </div>
-    </div>
-  );
-}
-
-function DataSourceSetupForm() {
-  return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <p className="m-0 font-['Inter'] text-[12px] font-medium leading-[18px] text-[#0f1f6f]">
-          Select and connect the data sources you want to use. You can connect
-          more anytime.
-        </p>
-        <div className="flex gap-[8px]">
-          <div className="relative h-[36px] w-[190px] rounded-[8px] border border-[#e2e8f0] bg-white">
-            <Search
-              aria-hidden="true"
-              className="absolute left-[10px] top-1/2 size-[16px] -translate-y-1/2 text-[#005bff]"
-            />
-            <input
-              className="h-full w-full rounded-[8px] bg-transparent pl-[34px] pr-[10px] font-['Inter'] text-[11px] text-[#0f172a] outline-none placeholder:text-[#64748b]"
-              placeholder="Search data sources..."
-              type="search"
-            />
-          </div>
-          <button
-            className="flex h-[36px] items-center gap-[7px] rounded-[8px] border border-[#e2e8f0] bg-white px-[12px] font-['Inter'] text-[11px] font-bold text-[#0f1f6f]"
-            type="button"
-          >
-            <Filter aria-hidden="true" className="size-[15px] text-[#005bff]" />
-            All Categories
-            <ChevronDown aria-hidden="true" className="size-[14px]" />
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-[12px] md:grid-cols-2 xl:grid-cols-3">
-        {dataSources.map((source) => (
-          <div
-            className="flex min-h-[118px] flex-col justify-between rounded-[10px] border border-[#e2e8f0] bg-white p-[14px]"
-            key={source.name}
-          >
-            <div className="flex gap-[14px]">
-              <div
-                className={`flex size-[40px] shrink-0 items-center justify-center rounded-[6px] font-['Inter'] text-[16px] font-bold ${source.logoClassName}`}
-              >
-                {source.logo}
-              </div>
-              <div className="min-w-0">
-                <h4 className="m-0 font-['Inter'] text-[13px] font-bold leading-[18px] text-[#0f1f6f]">
-                  {source.name}
-                </h4>
-                <p className="m-0 mt-[6px] font-['Inter'] text-[11px] font-medium leading-[17px] text-[#0f1f6f]">
-                  {source.description}
-                </p>
-              </div>
-            </div>
-            <div className="mt-[12px] flex items-center justify-between gap-3">
-              <span
-                className={`inline-flex items-center gap-[7px] font-['Inter'] text-[11px] font-medium leading-[16px] ${
-                  source.connected ? "text-[#059669]" : "text-[#64748b]"
-                }`}
-              >
-                {source.connected ? (
-                  <CheckCircle2 aria-hidden="true" className="size-[14px]" />
-                ) : (
-                  <Clock3 aria-hidden="true" className="size-[14px]" />
-                )}
-                {source.connected ? "Connected" : "Not Connected"}
-              </span>
-              <button
-                className="h-[32px] rounded-[6px] border border-[#e2e8f0] bg-white px-[13px] font-['Inter'] text-[11px] font-bold leading-[16px] text-[#005bff]"
-                type="button"
-              >
-                {source.connected ? "Manage" : "Connect"}
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="flex min-h-[36px] items-center gap-[10px] rounded-[8px] border border-[#bfdbfe] bg-[#eff6ff] px-[14px] font-['Inter'] text-[12px] font-medium leading-[18px] text-[#1e40af]">
-        <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full border border-[#005bff] text-[#005bff]">
-          i
-        </span>
-        You can connect multiple sources to improve data coverage and accuracy.
-      </div>
-    </div>
-  );
-}
-
-/* Seeded once per workspace, only if it has zero triggers yet - one per real
- * BuyingEvent.category, with a min_event_score calibrated to that category's
- * actual observed volume so a starter trigger is neither noisy nor silently
- * empty (the sparser categories get a lower bar).
- *
- * Rewritten when triggers moved onto the evidence pipeline: these previously
- * carried signal_types from signal_extractor.py's old vocabulary
- * (rfp_published, ceo_change, ...) which BuyingEvent never produces, and two
- * of them targeted company_identity / reachability - enrichment categories
- * deliberately excluded from the trigger vocabulary (see
- * lib/signalCategories.ts). So every new workspace got 8 triggers that
- * matched nothing. */
-const STARTER_TRIGGERS: TriggerCreate[] = [
-  { name: "Active Buying Motion", signal_categories: ["buying_stage"], min_event_score: 20 },
-  { name: "New Funding & Budget", signal_categories: ["budget_and_capital"], min_event_score: 20 },
-  { name: "AI Adoption Activity", signal_categories: ["ai_seriousness"], min_event_score: 20 },
-  { name: "Operational Pain Points", signal_categories: ["ai_pain_points"], min_event_score: 10 },
-  { name: "Leadership & Catalysts", signal_categories: ["urgency_and_catalysts"], min_event_score: 10 },
-  { name: "Competitive Displacement", signal_categories: ["competitive_context"], min_event_score: 10 },
-];
-
-function TriggerGenerationForm({ workspaceId }: { workspaceId: string | null }) {
-  const [triggers, setTriggers] = useState<TriggerOut[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [enabled, setEnabled] = useState<Record<string, boolean>>({});
-  const seededFor = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!workspaceId || seededFor.current === workspaceId) return;
-    let cancelled = false;
-    setLoading(true);
-    setLoadError(null);
-    (async () => {
-      let rows = await listTriggers(workspaceId);
-      if (rows.length === 0) {
-        rows = await Promise.all(
-          STARTER_TRIGGERS.map((starter) => createTrigger(workspaceId, starter)),
-        );
-      }
-      return rows;
-    })()
-      .then((rows) => {
-        if (cancelled) return;
-        seededFor.current = workspaceId;
-        setTriggers(rows);
-        setEnabled(Object.fromEntries(rows.map((t) => [t.trigger_id, true])));
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setLoadError(err instanceof ApiError ? String(err.detail) : "Could not load triggers.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId]);
-
-  return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <span className="flex h-[34px] w-fit items-center gap-[8px] rounded-[8px] border border-[#005bff] px-[12px] font-['Inter'] text-[11px] font-bold text-[#005bff]">
-          All Triggers
-          <span className="rounded-full bg-white/80 px-[7px] py-[2px] text-[10px]">
-            {triggers.length}
-          </span>
-        </span>
-        <div className="flex gap-[8px]">
-          <div className="relative h-[36px] w-[190px] rounded-[8px] border border-[#e2e8f0] bg-white">
-            <Search
-              aria-hidden="true"
-              className="absolute left-[10px] top-1/2 size-[16px] -translate-y-1/2 text-[#005bff]"
-            />
-            <input
-              className="h-full w-full rounded-[8px] bg-transparent pl-[34px] pr-[30px] font-['Inter'] text-[11px] text-[#0f172a] outline-none placeholder:text-[#64748b]"
-              placeholder="Search triggers..."
-              type="search"
-            />
-            <span className="absolute right-[10px] top-1/2 -translate-y-1/2 text-[16px] leading-none text-[#94a3b8]">
-              ×
-            </span>
-          </div>
-          <button
-            className="flex h-[36px] items-center gap-[7px] rounded-[8px] border border-[#e2e8f0] bg-white px-[12px] font-['Inter'] text-[11px] font-bold text-[#0f1f6f]"
-            type="button"
-          >
-            <Filter aria-hidden="true" className="size-[15px] text-[#005bff]" />
-            Filters
-            <ChevronDown aria-hidden="true" className="size-[14px]" />
-          </button>
-        </div>
-      </div>
-
-      <div className="overflow-hidden rounded-[12px] border border-[#e2e8f0] bg-white">
-        {loading ? (
-          <p className="m-0 px-[14px] py-[28px] text-center font-['Inter'] text-[12px] font-medium text-[#64748b]">
-            Loading triggers...
-          </p>
-        ) : loadError ? (
-          <p className="m-0 px-[14px] py-[28px] text-center font-['Inter'] text-[12px] font-medium text-[#ef4444]">
-            {loadError}
-          </p>
-        ) : triggers.length === 0 ? (
-          <p className="m-0 px-[14px] py-[28px] text-center font-['Inter'] text-[12px] font-medium text-[#64748b]">
-            No triggers yet - you can create them later from Trigger Intelligence.
-          </p>
-        ) : (
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="border-b border-[#e2e8f0] text-left">
-                {["Trigger", "Signal Match", "Status"].map((heading) => (
-                  <th
-                    className="px-[12px] py-[11px] font-['Inter'] text-[11px] font-bold leading-[16px] text-[#0f1f6f]"
-                    key={heading}
-                  >
-                    {heading}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {triggers.map((trigger) => {
-                const style =
-                  TRIGGER_CATEGORY_STYLES[trigger.signal_categories?.[0] ?? ""] ?? DEFAULT_TRIGGER_STYLE;
-                const Icon = style.icon;
-                const categoryPart = (trigger.signal_categories ?? []).map(humanizeEnumValue).join(", ");
-                const scorePart = trigger.min_event_score > 0 ? ` (score ${trigger.min_event_score}+)` : "";
-                const signalMatch = categoryPart ? `${categoryPart}${scorePart}` : "—";
-                const isEnabled = enabled[trigger.trigger_id] ?? true;
-
-                return (
-                  <tr className="border-b border-[#f1f5f9] last:border-b-0" key={trigger.trigger_id}>
-                    <td className="px-[12px] py-[9px]">
-                      <div className="flex items-center gap-[10px]">
-                        <span
-                          className={`flex size-[32px] shrink-0 items-center justify-center rounded-[8px] ${style.className}`}
-                        >
-                          <Icon aria-hidden="true" className="size-[18px]" />
-                        </span>
-                        <span className="font-['Inter'] text-[11px] font-bold leading-[16px] text-[#0f1f6f]">
-                          {trigger.name || "Untitled Trigger"}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="max-w-[300px] px-[12px] py-[9px] font-['Inter'] text-[11px] font-medium leading-[17px] text-[#0f1f6f]">
-                      {signalMatch}
-                    </td>
-                    <td className="px-[12px] py-[9px]">
-                      <button
-                        aria-label={`${trigger.name || "Trigger"} ${isEnabled ? "enabled" : "disabled"}`}
-                        className={`relative h-[20px] w-[36px] rounded-full transition-colors ${
-                          isEnabled ? "bg-gradient-to-r from-[#7c3aed] to-[#4f46e5]" : "bg-[#e2e8f0]"
-                        }`}
-                        onClick={() =>
-                          setEnabled((prev) => ({
-                            ...prev,
-                            [trigger.trigger_id]: !isEnabled,
-                          }))
-                        }
-                        type="button"
-                      >
-                        <span
-                          className={`absolute top-[2px] size-[16px] rounded-full bg-white shadow-sm transition-all ${
-                            isEnabled ? "right-[2px]" : "left-[2px]"
-                          }`}
-                        />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {!loading && !loadError && triggers.length > 0 && (
-        <p className="m-0 font-['Inter'] text-[12px] font-medium leading-[18px] text-[#64748b]">
-          Showing {triggers.length} of {triggers.length} triggers
-        </p>
-      )}
     </div>
   );
 }
@@ -1521,7 +1059,7 @@ function AiBusinessDiscoveryForm({ uploadStats }: { uploadStats: "idle" | "uploa
 function GoLiveForm() {
   return (
     <div className="flex flex-col gap-[14px]">
-      <div className="grid grid-cols-1 gap-[14px] xl:grid-cols-[1fr_0.62fr]">
+      <div className="grid grid-cols-1 gap-[14px] xl:grid-cols-[minmax(0,1fr)_minmax(0,0.62fr)]">
         <div className="overflow-hidden rounded-[12px] border border-[#e2e8f0] bg-white">
           <div className="flex flex-col gap-[16px] border-b border-[#e2e8f0] p-[18px] md:flex-row md:items-center">
             <img
@@ -1711,7 +1249,7 @@ function OnboardingCard() {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  // Business Discovery (step 8) shows the REAL result of the Excel upload
+  // Business Discovery shows the REAL result of the Excel upload
   // pipeline triggered from the Offering & Prospect Data step, not fake "AI
   // is analyzing" content - "idle" (nothing uploaded yet), "uploading"
   // (ingestion + buying-evidence research running server-side), or the real
@@ -1720,7 +1258,7 @@ function OnboardingCard() {
   const [uploadStats, setUploadStats] = useState<"idle" | "uploading" | ImportBatchOut>("idle");
 
   // Scoring runs in the background after the upload responds - poll until
-  // this specific batch flips to "complete" so step 8 updates itself
+  // this specific batch flips to "complete" so Business Discovery updates
   // instead of staying stuck showing "Scoring In Progress" forever.
   useEffect(() => {
     if (uploadStats === "idle" || uploadStats === "uploading" || uploadStats.scoring_status === "complete" || !workspaceId) {
@@ -1764,11 +1302,9 @@ function OnboardingCard() {
   const isOrganizationStep = activeStep === 0;
   const isWorkspaceStep = activeStep === 1;
   const isTeamStep = activeStep === 2;
-  const isDataSourceStep = activeStep === 3;
-  const isTriggerStep = activeStep === 4;
-  const isOfferingStep = activeStep === 5;
-  const isAiBusinessStep = activeStep === 6;
-  const isGoLiveStep = activeStep === 7;
+  const isOfferingStep = activeStep === 3;
+  const isAiBusinessStep = activeStep === 4;
+  const isGoLiveStep = activeStep === LAST_STEP;
   const stepperStep = activeStep;
   // Flexes to fill whatever space is left after the fixed-size stepper/
   // title/footer chrome, instead of a fixed pixel height - that fixed
@@ -1891,7 +1427,7 @@ function OnboardingCard() {
     // No ICP-creation gate (brief item 1) - the Offering & Prospect Data
     // step's upload button is always usable once a workspace exists, so
     // Continue just advances normally.
-    setActiveStep((step) => Math.min(step + 1, 7));
+    setActiveStep((step) => Math.min(step + 1, LAST_STEP));
   };
 
   const handleSecondaryAction = () => {
@@ -1920,15 +1456,11 @@ function OnboardingCard() {
             ? "Analysis in Progress"
             : isOfferingStep
               ? "Offering & Prospect Data"
-              : isTriggerStep
-                ? "Your Triggers"
-                : isDataSourceStep
-                  ? "Connect Your Data Sources"
-                  : isTeamStep
-                    ? "Invite Team Members"
-                    : isOrganizationStep
-                      ? "Organization Information"
-                      : "Workspace Information"}
+              : isTeamStep
+                ? "Invite Team Members"
+                : isOrganizationStep
+                  ? "Organization Information"
+                  : "Workspace Information"}
         </h2>
         <p className="m-0 mt-[2px] font-['Inter'] text-[14px] font-normal leading-[21px] text-[#64748b]">
           {isGoLiveStep
@@ -1937,15 +1469,11 @@ function OnboardingCard() {
             ? "We're analyzing your business to build a powerful foundation for personalized insights."
             : isOfferingStep
               ? "Review what XSparks sells, then upload your prospect data - no ICP required."
-              : isTriggerStep
-                ? "Triggers matched against your signal data to flag high-intent moments."
-                : isDataSourceStep
-                  ? "Connect external data sources to enrich profiles, detect buying signals, and power AI insights."
-                  : isTeamStep
-                    ? "Add your teammates by email and assign appropriate roles."
-                    : isOrganizationStep
-                      ? "Tell us about your organization so we can personalize your XSparks experience."
-                      : "This will be your organization's dedicated workspace in XSparks."}
+              : isTeamStep
+                ? "Add your teammates by email and assign appropriate roles."
+                : isOrganizationStep
+                  ? "Tell us about your organization so we can personalize your XSparks experience."
+                  : "This will be your organization's dedicated workspace in XSparks."}
         </p>
       </div>
 
@@ -1963,12 +1491,6 @@ function OnboardingCard() {
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <TeamInvitationsForm />
-          </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <DataSourceSetupForm />
-          </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <TriggerGenerationForm workspaceId={workspaceId} />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <OfferingAndProspectDataForm

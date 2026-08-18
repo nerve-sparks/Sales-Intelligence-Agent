@@ -162,7 +162,7 @@ function OverviewCard({ trigger, events }: { trigger: TriggerEventsOut["trigger"
 
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="grid grid-cols-1 gap-[28px] lg:grid-cols-[1.25fr_1fr]">
+      <div className="grid grid-cols-1 gap-[28px] lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
         <div>
           <h2 className="m-0 text-[17px] font-bold text-[#0f172a]">Trigger Overview</h2>
           <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">

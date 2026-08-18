@@ -42,6 +42,26 @@ BASE_STRENGTH = {
     "explicit_ai_tool_adoption": 50,
     "relevant_ai_hiring": 50,              # v1 35 - building an AI team = active intent
     "plant_expansion": 50,                 # v1 40 - expansion = scaling pain + budget
+    # M&A: post-deal integration is real, budgeted work for a solutions partner -
+    # consolidating systems, migrating data, reconciling two tech stacks. Same
+    # tier as plant_expansion for the same reason (scaling pain + fresh mandate).
+    #
+    # Added because the extraction prompt explicitly tells the LLM that "a
+    # funding round, new senior leader, acquisition/merger, expansion, or
+    # significant hiring IS an acceptable event", but the taxonomy had no bucket
+    # for two of those five. With nowhere to put an acquisition the model fell
+    # back to company_identity_update, which is base 0 - so Inseego's
+    # revenue-DOUBLING Nokia acquisition (Nokia taking an ~11% stake) scored
+    # literally nothing, while the same company's earnings miss scored 45 as an
+    # operational_inefficiency. Confirmed reproducible on a single extraction
+    # call, not a one-off.
+    "acquisition_or_merger": 50,
+    # A new CTO/CIO/CDO/Chief AI officer arrives with a mandate and a budget -
+    # one of the strongest prospecting moments there is. Sits at funding's tier
+    # rather than M&A's because it signals intent without necessarily carrying
+    # integration work with it. An irrelevant appointment (new CMO, new CFO)
+    # gets discounted by xsparks_relevance rather than needing its own type.
+    "leadership_change": 45,
     "funding_without_buying_evidence": 45, # v1 20 - capital raised = budget + modernise mandate
     "operational_inefficiency": 45,
     "quality_control_problem": 45,

@@ -1018,7 +1018,7 @@ export function DashboardPage() {
             <LeadTrend signalStats={signalStats} />
           </div>
 
-          <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[1.35fr_1fr]">
+          <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
             <TopPriorityProspects prospects={prospects} />
             <RecentSignals signals={recentSignals} />
           </div>

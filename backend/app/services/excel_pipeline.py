@@ -240,9 +240,9 @@ async def score_companies_in_background(
 
             failures = research_summary.get("failed", 0)
             if failures:
-                warnings.append(f"{failures} company(ies) failed research (Tavily/LLM unavailable)")
-            if research_summary.get("tavily_not_configured"):
-                warnings.append("Tavily not configured - no external evidence gathered")
+                warnings.append(f"{failures} company(ies) failed research (web search/LLM unavailable)")
+            if research_summary.get("search_not_configured"):
+                warnings.append("Web search not configured - no external evidence gathered")
             status = "complete_with_warnings" if warnings else "complete"
 
             await session.execute(

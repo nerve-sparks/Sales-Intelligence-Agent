@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from app.routes import (
     workspaces,
 )
 from app.services.job_recovery import stop_interrupted_jobs
+from app.services.langfuse_cost import ensure_langfuse_model_prices
 
 configure_logging()
 
@@ -33,6 +35,10 @@ async def lifespan(_app: FastAPI):
     # still-in-flight companies) as stopped/retryable instead - see
     # job_recovery.py.
     await stop_interrupted_jobs()
+    # Registers priced Gemini aliases so Langfuse can infer USD cost on new
+    # generations. Failures are swallowed inside the helper - Langfuse being
+    # down must not block the API from serving.
+    await asyncio.to_thread(ensure_langfuse_model_prices)
     yield
 
 

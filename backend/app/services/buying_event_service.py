@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scoring_config as cfg
 from app.models import BuyingEvent
-from app.services import llm_client, tavily_client
+from app.services import llm_client, you_client
 
 CHUNK_SIZE = 8
 MAX_CONCURRENCY = 6
@@ -199,10 +199,24 @@ def _build_prompt(company: dict, offering_profile: dict, items: list[dict], now:
         "amount, else null. NEVER use unrelated funding rounds, company valuation, revenue, or "
         "contract totals as a budget. budget_currency (e.g. 'USD') and budget_confidence "
         "(high|medium|low) only when public_budget_usd is set.\n"
-        "canonical_subject/action/object are short normalised phrases identifying the real-world "
-        "event so duplicate articles about the SAME event can be matched.\n\n"
+        "canonical_subject/action/object identify the REAL-WORLD EVENT, not this article's angle on "
+        "it, so that separate articles about one event collapse into one scored event instead of "
+        "several. Describe what happened in the most neutral, generic phrasing you can, and phrase "
+        "it IDENTICALLY for every result covering that same happening - ignore which detail each "
+        "headline chose to lead on. Worked example: 'Acme falls after weak guidance', 'Acme Q3 "
+        "earnings call transcript' and 'Acme expects $155M revenue as delays bite' are ONE event, "
+        "and all three must emit exactly subject='Acme', action='reported', object='Q3 2026 "
+        "earnings' - NOT 'falls after', 'held earnings call', 'expects $155M', which would read as "
+        "three unrelated events. Reuse the same object wording rather than inventing a per-article "
+        "variant.\n\n"
         f"Web results:\n{item_lines}\n\n"
-        "Respond with ONLY a JSON array, one object per result index, no prose or markdown:\n"
+        "Respond with ONLY a JSON array, no prose or markdown. Emit ONE OBJECT PER DISTINCT REAL "
+        "EVENT, with `index` naming the web result it came from. IMPORTANT: a single result often "
+        "covers MANY separate events - a newsroom or press-release listing page can carry dozens - "
+        "and each one needs its own object, all sharing that result's index. Do not stop after the "
+        "first event you find in a result, and do not merge several events from one result into a "
+        "single object. Conversely, do not split one event into several objects just because a "
+        "result describes it at length.\n"
         '[{"index":0,"is_real_company_event":true,"event_type":"vendor_evaluation",'
         '"event_category":"buying_stage","event_summary":"","event_status":"active",'
         '"event_date":"2026-01-21","is_action":true,"xsparks_relevance":0.9,'
@@ -210,11 +224,18 @@ def _build_prompt(company: dict, offering_profile: dict, items: list[dict], now:
         '"extraction_confidence":0.88,"is_negative":false,"negative_type":null,'
         '"public_budget_usd":null,"budget_currency":null,"budget_confidence":null,'
         '"canonical_subject":"","canonical_action":"","canonical_object":""}]\n'
-        "Set is_real_company_event=false for anything you reject; still include its index."
+        "A result carrying no real event at all still gets exactly one object, with "
+        "is_real_company_event=false. Every index must appear at least once."
     )
 
 
-def _parse(raw: str) -> dict[int, dict]:
+def _parse(raw: str) -> dict[int, list[dict]]:
+    """Groups the model's classification objects by the evidence index they
+    came from. A LIST per index, not one object: a single web result routinely
+    describes several distinct events (a newsroom or press-release listing page
+    carries dozens), and the previous one-object-per-index mapping silently
+    discarded all but the last of them - so the richest source in a result set
+    could only ever yield a single event no matter how much it contained."""
     start, end = raw.find("["), raw.rfind("]")
     if start == -1 or end == -1:
         return {}
@@ -222,11 +243,11 @@ def _parse(raw: str) -> dict[int, dict]:
         parsed = json.loads(raw[start : end + 1])
     except json.JSONDecodeError:
         return {}
-    out: dict[int, dict] = {}
+    out: dict[int, list[dict]] = {}
     if isinstance(parsed, list):
         for obj in parsed:
             if isinstance(obj, dict) and isinstance(obj.get("index"), int):
-                out[obj["index"]] = obj
+                out.setdefault(obj["index"], []).append(obj)
     return out
 
 
@@ -279,9 +300,10 @@ async def _classify_chunk(
     if not parsed:
         print(f"[LLM] <<< UNPARSEABLE response for '{company_name}' - treating as failure, not zero-events")
         return {}, False  # invalid / unparseable response
-    accepted_ct = sum(1 for v in parsed.values() if v.get("is_real_company_event"))
-    print(f"[LLM] <<< Parsed {len(parsed)} classification(s) for '{company_name}': "
-          f"{accepted_ct} accepted as real events, {len(parsed) - accepted_ct} rejected")
+    flat = [c for classes in parsed.values() for c in classes]
+    accepted_ct = sum(1 for c in flat if c.get("is_real_company_event"))
+    print(f"[LLM] <<< Parsed {len(flat)} classification(s) across {len(parsed)} result(s) for "
+          f"'{company_name}': {accepted_ct} accepted as real events, {len(flat) - accepted_ct} rejected")
     return parsed, True
 
 
@@ -343,22 +365,27 @@ async def extract_events(
             chunks_failed += 1
             continue
         for i, item in enumerate(chunk):
-            cls = classes.get(i)
-            if not cls or not cls.get("is_real_company_event"):
-                continue
+            # One evidence item can yield SEVERAL events (see _parse) - e.g. a
+            # newsroom page listing an acquisition, a leadership hire and a
+            # product launch. Each becomes its own candidate event, all sharing
+            # this item as their source evidence; canonical grouping downstream
+            # is what collapses any that turn out to be the same real event.
+            for cls in classes.get(i, ()):
+                if not cls.get("is_real_company_event"):
+                    continue
 
-            forced_reason = _forced_negative_reason(item)
-            if forced_reason and not cls.get("is_negative"):
-                print(f"[SAFETY-NET] Overriding LLM: '{item.get('title')}' contains distress "
-                      f"phrase {forced_reason!r} but was classified non-negative - forcing "
-                      f"is_negative=True, negative_type=severe_financial_distress")
-                cls = {**cls, "is_negative": True, "negative_type": "severe_financial_distress"}
+                forced_reason = _forced_negative_reason(item)
+                if forced_reason and not cls.get("is_negative"):
+                    print(f"[SAFETY-NET] Overriding LLM: '{item.get('title')}' contains distress "
+                          f"phrase {forced_reason!r} but was classified non-negative - forcing "
+                          f"is_negative=True, negative_type=severe_financial_distress")
+                    cls = {**cls, "is_negative": True, "negative_type": "severe_financial_distress"}
 
-            event_type = cls.get("event_type")
-            relevance = _clamp01(cls.get("xsparks_relevance"))
-            if relevance <= 0.0 and not cls.get("is_negative"):
-                continue  # irrelevant to XSparks and not a negative -> drop
-            accepted.append({"cls": cls, "evidence": item, "event_type": event_type, "relevance": relevance})
+                event_type = cls.get("event_type")
+                relevance = _clamp01(cls.get("xsparks_relevance"))
+                if relevance <= 0.0 and not cls.get("is_negative"):
+                    continue  # irrelevant to XSparks and not a negative -> drop
+                accepted.append({"cls": cls, "evidence": item, "event_type": event_type, "relevance": relevance})
     return accepted, {"chunks_total": len(chunks), "chunks_failed": chunks_failed}
 
 
@@ -721,28 +748,28 @@ async def research_company(
 
     # ONE Tavily Advanced Search call per company - a single broad query
     # covers both third-party coverage and the company's own site content
-    # (see tavily_client module docstring), so this is one round trip per
+    # (see you_client module docstring), so this is one round trip per
     # company, not two, which matters multiplied by however many companies
     # run concurrently in search_signal_ingest.py.
     research_failed = False
     raw_results: list[dict] = []
     try:
-        raw_results = await tavily_client.search(domain, company.get("company_name"))
+        raw_results = await you_client.search(domain, company.get("company_name"))
     except Exception:
         research_failed = True
 
-    query = tavily_client.build_query(domain, company.get("company_name"))
+    query = you_client.build_query(domain, company.get("company_name"))
     evidence_items = []
     seen_urls = set()
     for item in raw_results:
         link = item.get("link")
         if not link or link in seen_urls:
             continue
-        if not tavily_client.is_relevant(domain, company.get("company_name"), item):
+        if not you_client.is_relevant(domain, company.get("company_name"), item):
             continue
         seen_urls.add(link)
-        ev = tavily_client.to_evidence(item, query, "web", retrieved_at, company_domain=domain)
-        ev["company_match"] = tavily_client.match_confidence(domain, company.get("company_name"), item)
+        ev = you_client.to_evidence(item, query, "web", retrieved_at, company_domain=domain)
+        ev["company_match"] = you_client.match_confidence(domain, company.get("company_name"), item)
         evidence_items.append(ev)
 
     accepted, stats = await extract_events(company, offering_profile, evidence_items, now, research_run_id)

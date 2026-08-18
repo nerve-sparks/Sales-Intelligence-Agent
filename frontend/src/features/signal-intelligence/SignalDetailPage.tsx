@@ -631,7 +631,7 @@ export function SignalDetailPage() {
           ) : (
             <div className="mt-[24px] grid grid-cols-1 gap-[24px] xl:grid-cols-[minmax(0,1fr)_340px]">
               <div className="flex flex-col gap-[24px]">
-                <div className="grid grid-cols-1 gap-[24px] lg:grid-cols-[1.45fr_1fr]">
+                <div className="grid grid-cols-1 gap-[24px] lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
                   <ExtractionDetailsCard signal={signal} />
                   <ScoreBreakdownCard signal={signal} />
                 </div>

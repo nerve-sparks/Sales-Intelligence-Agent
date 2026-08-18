@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.db import async_session_maker
 from app.models import Company, Organisation
-from app.services import buying_event_service, company_batch_status, tavily_client
+from app.services import buying_event_service, company_batch_status, you_client
 from app.services.offering_profile_service import profile_for_scoring
 
 RESEARCH_REFRESH_DAYS = 10  # reuse research newer than this; refresh older (brief section 9)
@@ -137,11 +137,11 @@ async def research_companies(
     missing or stale. Each company runs concurrently up to
     settings.research_concurrency (RESEARCH_CONCURRENCY env var - see
     config.py). Returns a rich summary (item 7) distinguishing successes from
-    Tavily/LLM failures so the caller can set complete vs complete_with_warnings."""
-    if not tavily_client.is_configured():
+    search/LLM failures so the caller can set complete vs complete_with_warnings."""
+    if not you_client.is_configured():
         return {
             "researched": 0, "successful": 0, "failed": 0, "research_failures": 0,
-            "llm_failures": 0, "events_stored": 0, "tavily_not_configured": True,
+            "llm_failures": 0, "events_stored": 0, "search_not_configured": True,
         }
 
     org = await session.get(Organisation, organisation_id)

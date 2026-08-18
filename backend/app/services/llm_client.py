@@ -1,64 +1,96 @@
-"""LLM client with three providers, tried in order until one succeeds:
+"""LLM client. SINGLE provider by explicit instruction: BridgeLLM (a LiteLLM
+proxy at BRIDGE_BASE_URL) routed to BRIDGE_MODEL, auth via LLM_API_KEY. There
+is deliberately NO fallback - if this provider fails, the call fails.
 
-1. BridgeLLM (primary) - an OpenAI-compatible proxy routed to
-   gemini/gemini-2.5-flash-lite (the only model LLM_API_KEY has access to -
-   gemini-2.5-flash itself 403s on this key), auth via LLM_API_KEY. Measured
-   ~21s/call avg and noticeably less selective at rejecting non-events than
-   DeepSeek was (see conversation history: an extraction-quality comparison
-   found it accepted ~100% of evidence items vs DeepSeek being selective,
-   which drove a real dedup double-counting bug - since fixed in
-   buying_event_service._merge_similar_groups/_stem, which now stems verb
-   tense/plural variance so a less-consistent model's paraphrasing of the SAME
-   real event ("acquired" vs "acquires") still merges instead of being
-   counted twice). Made primary per explicit instruction despite the slower/
-   less-selective tradeoffs vs DeepSeek.
-2. DeepSeek (fallback) - deepseek-chat (currently resolves to
-   deepseek-v4-flash server-side), auth via DEEPSEEK_API_KEY. Fast, cheap, and
-   genuinely serves concurrent requests - measured at ~3.5s/call, versus
-   Ollama's ~68-214s/call on this deployment.
-3. Ollama (last-resort fallback) - a self-hosted server, OLLAMA_BASE_URL/
-   OLLAMA_MODEL in .env. No per-request cost, but slow and effectively
-   single-threaded on this deployment - kept only as a free safety net if
-   BOTH paid providers are ever unavailable, not because it's fast.
+Which of the proxy's models actually work
+-----------------------------------------
+The key lists 29 models; only 8 serve a request, all of them Gemini. Probed
+live, one request each ("reply with exactly: ok", max_tokens=400):
 
-Each tier is attempted only if it's actually configured, and only after the
-previous tier has raised. If every configured tier fails, the FIRST failure
-(from the primary/BridgeLLM, if it was attempted) is what propagates, since
-that's the most diagnostically useful one - a fallback failing too is
-expected noise, not new information. LLMNotConfiguredError is raised up
-front only when NONE of the three are configured at all.
+    WORKING                     latency  out  thinking
+    gemini-flash-lite-latest      1.00s    1     0     <- plain, fastest
+    gemini-3.1-flash-lite         0.94s    1     0     <- plain
+    gemini-2.5-flash              1.18s   15    14
+    gemini-flash-latest           1.90s   74    73     <- ACTIVE (BRIDGE_MODEL)
+    gemini-3.7-flash              2.70s   75    74
+    gemini-2.5-pro                3.03s  159   158
+    gemini-pro                    2.97s  161   160
+    gemini-3.6-flash              4.28s  126   125
 
-Every call is traced in Langfuse (LANGFUSE_PUBLIC_KEY/SECRET_KEY/BASE_URL in
-.env) via the `langfuse.openai` drop-in client wrapper - this is why
-`AsyncOpenAI` is imported from `langfuse.openai` below instead of `openai`
-directly (see app.core.config's load_dotenv() ordering note). The wrapper
-auto-captures model name, token usage (and DeepSeek's cache-hit/miss token
-split), and full input/output on every call with no extra code at the
-`.create()` site beyond the `name=`/`metadata=` kwargs added here - callers
-just keep passing generation_name/trace_id/trace_user_id as before, and this
-module maps them onto Langfuse's session_id/user_id/tags. See
-.claude/skills/langfuse/references/instrumentation.md for the instrumentation
-best practices this follows.
+    BROKEN (22)
+    all 14 gpt-* models           401  proxy has no OPENAI_API_KEY configured
+    all 3 claude-* models         400  proxy's Anthropic account out of credits
+    gemini-flash                  404  alias -> gemini-2.0-flash (retired)
+    gemini-3-pro                  404  alias -> gemini-3-pro-preview (retired)
+    gemini-3-flash                404  alias misrouted upstream
+    gemini-2.5-flash-lite         404  same
+
+Every failure is a provisioning problem ON THE PROXY - no client-side change
+fixes any of them, and adding model NAMES does not fix them either: the
+catalogue grew 9 -> 29 in one session while the two underlying credential
+problems (no OpenAI key, unfunded Anthropic account) stayed exactly as they
+were, so all 17 new gpt-*/claude-* entries are dead aliases.
+
+Before switching BRIDGE_MODEL to something that looks better on paper, PROBE
+it. /v1/models advertising a name has repeatedly proved to be no guarantee it
+serves: an earlier catalogue listed exactly one model
+(gemini/gemini-2.5-flash-lite) that 400'd on every call because it was a
+wildcard route with no deployment behind it - /model/info returned {"data": []}
+at the time, and that emptiness was the tell.
+
+Also note the proxy went fully down mid-session (502 from nginx on every path
+including /health/readiness and /v1/models, which need no model routing at
+all). If every call suddenly 502s, check the proxy is up before suspecting
+anything here.
+
+Because there is no fallback, a BRIDGE_MODEL that stops serving means
+buying_event_service / signal_llm degrade to their non-LLM paths and no
+BuyingEvents get extracted at all. The DeepSeek and Ollama client factories
+below are retained precisely so restoring a fallback is a small, local edit to
+complete() rather than a rewrite - nothing calls them today.
+
+Every call is traced in Langfuse (LANGFUSE_PUBLIC_KEY/SECRET_KEY/BASE_URL
+in .env). Config is imported first so load_dotenv() has already run
+before Langfuse is touched (common mistake per the instrumentation
+skill). Tracing is done explicitly in complete() rather than via the
+`langfuse.openai` drop-in: that wrapper copies usage from
+response.usage.__dict__, which is empty on openai>=2 pydantic models, so
+Langfuse was recording 0 tokens and $0 cost. We also register a priced
+model definition for this proxy's Gemini aliases - see langfuse_cost.py.
 """
 
 import uuid
 
 # Config must be imported (and load_dotenv() must have already run, which it
-# does at app.core.config import time) BEFORE langfuse.openai, or Langfuse
-# initializes with missing/wrong credentials (common mistake per the
-# instrumentation skill).
+# does at app.core.config import time) BEFORE any Langfuse client is
+# constructed inside complete() / langfuse_cost.
 from app.core.config import get_settings  # noqa: E402  (import-order matters, see above)
-from langfuse.openai import AsyncOpenAI  # noqa: E402
+from openai import AsyncOpenAI  # noqa: E402
+
+from app.services.langfuse_cost import finish_llm_generation, trace_llm_generation
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
 BRIDGE_BASE_URL = "https://llm.bridgellm.nervesparks.com"
-# LLM_API_KEY is scoped to flash-lite only - confirmed live: a direct call
-# with "gemini/gemini-2.5-flash" 403s ("key not allowed to access model. This
-# key can only access models=['gemini/gemini-2.5-flash-lite']"). That meant
-# this whole fallback tier was silently dead - any time DeepSeek failed,
-# BridgeLLM would 403 too instead of actually catching the failure.
-BRIDGE_MODEL = "gemini/gemini-2.5-flash-lite"
+# The active model. A `-latest` alias on purpose: four of this proxy's static
+# Gemini aliases (gemini-flash, gemini-3-flash, gemini-3-pro,
+# gemini-2.5-flash-lite) already 404 because they point at upstream models
+# Google has since retired, so a pinned name here is a future outage.
+#
+# This is a REASONING model - measured 74 output tokens of which 73 were
+# reasoning, to answer "reply with exactly: ok" (1.9s). Consequence to
+# remember: never send a tight max_tokens. Thinking is budgeted from the same
+# completion allowance, so a small cap returns an EMPTY string with
+# finish_reason="stop" rather than an error - which _parse() in
+# buying_event_service reads as "no events found", not "the call failed", and
+# the company gets silently stamped researched-with-no-evidence. complete()
+# therefore passes no max_tokens at all, letting the model default apply.
+#
+# gemini-flash-lite-latest and gemini-3.1-flash-lite are the only working
+# NON-reasoning options if that overhead ever needs removing (~1.0s/call, zero
+# thinking tokens), at the cost of a smaller model doing the extraction
+# judgement.
+BRIDGE_MODEL = "gemini-flash-latest"
 
 # The SDK's own default (read=600s, i.e. 10 minutes, with its own 2 hidden
 # retries) turns one stalled call into a slot held for up to ~30 minutes -
@@ -84,11 +116,16 @@ class LLMNotConfiguredError(Exception):
 
 
 def is_configured() -> bool:
-    """Whether ANY provider is usable - lets callers (e.g. signal_llm) fail
-    fast and fall back to non-LLM behaviour instead of firing a request
-    that's certain to raise LLMNotConfiguredError."""
-    settings = get_settings()
-    return bool(settings.deepseek_api_key or settings.llm_api_key or settings.ollama_base_url)
+    """Whether the single configured provider (BridgeLLM) is usable - lets
+    callers (e.g. signal_llm) fail fast and fall back to non-LLM behaviour
+    instead of firing a request that's certain to raise
+    LLMNotConfiguredError.
+
+    Checks LLM_API_KEY only. It deliberately does NOT consider
+    DEEPSEEK_API_KEY / OLLAMA_BASE_URL: those are still present in .env but
+    unreachable from complete(), so counting them would report the LLM as
+    available when every call is guaranteed to fail."""
+    return bool(get_settings().llm_api_key)
 
 
 def _get_deepseek_client() -> AsyncOpenAI:
@@ -139,22 +176,6 @@ def _get_ollama_client() -> AsyncOpenAI:
     return _ollama_client
 
 
-def _langfuse_metadata(trace_id: str | None, trace_user_id: str | None, generation_name: str) -> dict:
-    """Maps this module's existing trace_id/trace_user_id params onto
-    Langfuse's session_id/user_id, plus an auto-derived tag from
-    generation_name (satisfies the instrumentation skill's "feature tag"
-    guidance with zero extra params needed at call sites). Only non-None
-    values are included - Langfuse ignores absent keys rather than treating
-    them as "no session"/"no user" the same way an explicit None would in
-    some SDKs, so we omit rather than pass None."""
-    metadata: dict = {"langfuse_tags": [generation_name]}
-    if trace_id:
-        metadata["langfuse_session_id"] = trace_id
-    if trace_user_id:
-        metadata["langfuse_user_id"] = trace_user_id
-    return metadata
-
-
 async def complete(
     messages: list[dict],
     *,
@@ -176,7 +197,7 @@ async def complete(
     pass, an organisation_id as the user for per-tenant cost attribution).
     generation_id/trace_id/trace_user_id are ALSO still attached to
     BridgeLLM's own proprietary metadata (extra_body.metadata), separate from
-    the Langfuse wrapper.
+    the Langfuse generation recorded around this call.
 
     temperature, when given, is forwarded to the model - callers that need
     reproducible output (e.g. the lead-scoring judge) pass 0.
@@ -191,25 +212,24 @@ async def complete(
     if temperature is not None:
         kwargs["temperature"] = temperature
 
-    langfuse_metadata = _langfuse_metadata(trace_id, trace_user_id, generation_name)
-
     settings = get_settings()
-    if not settings.deepseek_api_key and not settings.llm_api_key and not settings.ollama_base_url:
-        raise LLMNotConfiguredError(
-            "No LLM provider is configured (DEEPSEEK_API_KEY / LLM_API_KEY / OLLAMA_BASE_URL)"
-        )
+    if not settings.llm_api_key:
+        raise LLMNotConfiguredError("LLM_API_KEY is not set in the environment")
 
-    first_error: Exception | None = None
-
-    if settings.llm_api_key:
+    print(f"[LLM-PROVIDER] Calling BridgeLLM ({BRIDGE_MODEL}) for '{generation_name}'...")
+    client = _get_bridge_client()
+    with trace_llm_generation(
+        name=generation_name,
+        model=BRIDGE_MODEL,
+        messages=messages,
+        session_id=trace_id,
+        user_id=trace_user_id,
+        tags=[generation_name],
+    ) as observation:
         try:
-            print(f"[LLM-PROVIDER] Trying PRIMARY: BridgeLLM ({BRIDGE_MODEL}) for '{generation_name}'...")
-            client = _get_bridge_client()
             response = await client.chat.completions.create(
                 model=BRIDGE_MODEL,
                 messages=messages,
-                name=generation_name,
-                metadata=langfuse_metadata,
                 extra_body={
                     "metadata": {
                         "generation_name": generation_name,
@@ -220,49 +240,16 @@ async def complete(
                 },
                 **kwargs,
             )
-            print(f"[LLM-PROVIDER] SUCCESS via BridgeLLM ({BRIDGE_MODEL})")
-            return response.choices[0].message.content or ""
         except Exception as exc:
-            print(f"[LLM-PROVIDER] BridgeLLM FAILED: {type(exc).__name__}: {exc} -> falling back to DeepSeek")
-            first_error = exc
+            # No fallback by design (see module docstring). A 400 "Invalid model
+            # name" here is the proxy having no deployment registered for
+            # BRIDGE_MODEL - a server-side fix, not a code one.
+            print(f"[LLM-PROVIDER] !!! BridgeLLM FAILED for '{generation_name}' "
+                  f"- {type(exc).__name__}: {exc}")
+            finish_llm_generation(observation, output="", usage=None, error=str(exc))
+            raise
 
-    if settings.deepseek_api_key:
-        try:
-            print(f"[LLM-PROVIDER] Trying FALLBACK: DeepSeek ({DEEPSEEK_MODEL}) for '{generation_name}'...")
-            client = _get_deepseek_client()
-            response = await client.chat.completions.create(
-                model=DEEPSEEK_MODEL,
-                messages=messages,
-                name=generation_name,
-                metadata=langfuse_metadata,
-                **kwargs,
-            )
-            print(f"[LLM-PROVIDER] SUCCESS via DeepSeek ({DEEPSEEK_MODEL})")
-            return response.choices[0].message.content or ""
-        except Exception as exc:
-            print(f"[LLM-PROVIDER] DeepSeek FAILED: {type(exc).__name__}: {exc} -> falling back to Ollama")
-            if first_error is None:
-                first_error = exc
-
-    if settings.ollama_base_url:
-        try:
-            print(f"[LLM-PROVIDER] Trying LAST-RESORT: Ollama ({settings.ollama_model}) for '{generation_name}'...")
-            client = _get_ollama_client()
-            response = await client.chat.completions.create(
-                model=settings.ollama_model,
-                messages=messages,
-                name=generation_name,
-                metadata=langfuse_metadata,
-                **kwargs,
-            )
-            print(f"[LLM-PROVIDER] SUCCESS via Ollama ({settings.ollama_model})")
-            return response.choices[0].message.content or ""
-        except Exception as exc:
-            print(f"[LLM-PROVIDER] Ollama FAILED: {type(exc).__name__}: {exc} -> ALL PROVIDERS EXHAUSTED")
-            if first_error is None:
-                first_error = exc
-
-    # Every configured provider failed - surface the primary's own failure,
-    # the most diagnostically relevant one (see module docstring).
-    print(f"[LLM-PROVIDER] !!! ALL PROVIDERS FAILED for '{generation_name}' - raising {type(first_error).__name__}")
-    raise first_error
+        text = response.choices[0].message.content or ""
+        finish_llm_generation(observation, output=text, usage=getattr(response, "usage", None))
+        print(f"[LLM-PROVIDER] SUCCESS via BridgeLLM ({BRIDGE_MODEL})")
+        return text

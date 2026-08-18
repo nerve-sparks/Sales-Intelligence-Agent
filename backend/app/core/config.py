@@ -19,6 +19,13 @@ class Settings:
     scraper_service_url: str | None
     scraper_api_key: str | None
     tavily_api_key: str | None
+    # you.com Search (api.you.com/v1/search) - the active web-research
+    # provider, replacing Tavily. Chosen for two things Tavily's API does not
+    # give: a separate `news` result bucket, and real `page_age` publish dates
+    # (measured on the same query: you.com 16/20 results dated, Tavily 0/20 -
+    # and an undated result is what made the scorer stamp events "today" and
+    # award full freshness to static marketing pages).
+    you_api_key: str | None
     # Concurrent companies researched at once (search_signal_ingest.py) - the
     # real throughput lever for "how long does a 500-company upload take".
     # Tunable via env without a redeploy since the right number depends on
@@ -58,6 +65,7 @@ def get_settings() -> Settings:
         scraper_service_url=os.environ.get("SCRAPER_SERVICE_URL"),
         scraper_api_key=os.environ.get("SCRAPER_API_KEY"),
         tavily_api_key=os.environ.get("TAVILY_API_KEY"),
+        you_api_key=os.environ.get("YOU_API_KEY"),
         research_concurrency=research_concurrency,
         # Default headroom: research_concurrency's worth of long-lived
         # research sessions, plus scoring's own chunk concurrency (3) and

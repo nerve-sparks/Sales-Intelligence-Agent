@@ -94,9 +94,13 @@ const toneClass: Record<string, string> = {
   gray: "bg-[#f1f5f9] text-[#64748b]",
 };
 
+/* shrink-0 + whitespace-nowrap: badges sit in flex rows beside truncating
+ * text (see CompanySignals), so without these the row squashes the badge and
+ * wraps its label ("Urgency And Catalysts") over two or three lines instead of
+ * letting the neighbouring text truncate, which is what min-w-0 is there for. */
 function Badge({ label, tone }: { label: string; tone: string }) {
   return (
-    <span className={cn("inline-flex items-center rounded-[6px] px-[8px] py-[3px] text-[11px] font-semibold", toneClass[tone])}>
+    <span className={cn("inline-flex shrink-0 items-center whitespace-nowrap rounded-[6px] px-[8px] py-[3px] text-[11px] font-semibold", toneClass[tone])}>
       {label}
     </span>
   );
@@ -516,7 +520,7 @@ export function EnterpriseDetailPage() {
             <LeadScoreSummary companyId={companyId} score={score} />
           </div>
 
-          <div className="mt-[20px] grid grid-cols-1 gap-[20px] lg:grid-cols-[1fr_1.3fr]">
+          <div className="mt-[20px] grid grid-cols-1 gap-[20px] lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
             <BuyingCommittee company={company} companyId={companyId} />
             <CompanySignals signals={signals} />
           </div>
