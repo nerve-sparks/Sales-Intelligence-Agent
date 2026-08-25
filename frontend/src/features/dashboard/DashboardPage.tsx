@@ -3,7 +3,6 @@ import {
   ChevronDown,
   DollarSign,
   Flame,
-  Mail,
   Radio,
   Target,
 } from "lucide-react";
