@@ -2,7 +2,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Filter,
-  Info,
   Lightbulb,
   Upload,
 } from "lucide-react";
@@ -10,6 +9,7 @@ import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { Donut, smoothPath } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
+import { InfoTooltip } from "../../components/ui/InfoTooltip";
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -177,7 +177,7 @@ function ScoreOverTime() {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-[12px]">
-        <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Score Over Time <Info className="size-[14px] text-[#cbd5e1]" /></h2>
+        <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Score Over Time <InfoTooltip text="Lead Score at each re-scoring run. A score can fall without anything going wrong - evidence ages out through the freshness bands even when no new negative signal appears." /></h2>
         <div className="flex items-center gap-[8px]">
           <div className="flex items-center gap-[2px] rounded-[10px] border border-[#e9edf5] bg-white p-[3px]">
             {ranges.map((r) => (
@@ -246,7 +246,7 @@ function changeColor(dir: string) {
 function ScoreChangeLog() {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Score Change Log <Info className="size-[14px] text-[#cbd5e1]" /></h2>
+      <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Score Change Log <InfoTooltip text="Every recorded movement in this company's score, with what drove it - new evidence, evidence going stale, a contact change, or a negative event." /></h2>
 
       <div className="mt-[14px] overflow-x-auto">
         <div className="min-w-[860px]">
@@ -289,12 +289,12 @@ function ScoreChangeLog() {
 /* Right rail                                                          */
 /* ------------------------------------------------------------------ */
 
-const summaryRows: { label: string; value: ReactValue; sub?: string; badge?: boolean; tone?: string; info?: boolean }[] = [
+const summaryRows: { label: string; value: ReactValue; sub?: string; badge?: boolean; tone?: string; info?: string }[] = [
   { label: "Highest Score", value: "82", sub: "May 18, 2025" },
   { label: "Lowest Score", value: "61", sub: "Apr 25, 2025" },
   { label: "Score Change", value: "+8", sub: "Apr 20 – May 20, 2025", tone: "up" },
   { label: "Average Score", value: "72" },
-  { label: "Volatility", value: "Low", info: true },
+  { label: "Volatility", value: "Low", info: "How much this company's score swings between research runs. High volatility usually means thin evidence that ages in and out, not a genuinely changing company." },
   { label: "Consistency", value: "Good", badge: true, tone: "green" },
 ];
 type ReactValue = string;
@@ -308,7 +308,7 @@ function ScoreSummary() {
           <div className="flex items-center justify-between gap-[10px]" key={r.label}>
             <span className="flex items-center gap-[6px] text-[13px] text-[#64748b]">
               {r.label}
-              {r.info && <Info className="size-[13px] text-[#cbd5e1]" />}
+              {r.info && <InfoTooltip text={r.info} />}
             </span>
             <span className="flex items-center gap-[10px] text-right">
               {r.badge ? (
@@ -336,7 +336,7 @@ const distribution = [
 function ScoreDistribution() {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 flex items-center gap-[8px] text-[15px] font-bold text-[#0f172a]">Score Distribution <span className="text-[12px] font-normal text-[#94a3b8]">(90 Days)</span> <Info className="size-[13px] text-[#cbd5e1]" /></h2>
+      <h2 className="m-0 flex items-center gap-[8px] text-[15px] font-bold text-[#0f172a]">Score Distribution <span className="text-[12px] font-normal text-[#94a3b8]">(90 Days)</span> <InfoTooltip text="How this company's scores were spread over the last 90 days - useful for telling a steady score from one that swings on every research pass." /></h2>
       <div className="mt-[14px] flex items-center gap-[16px]">
         <div className="relative size-[108px] shrink-0">
           <Donut segments={distribution.map((d) => ({ value: d.value, color: d.color }))} size={108} thickness={16} />
@@ -371,7 +371,7 @@ const drivers = [
 function ScoreDrivers() {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 flex items-center gap-[8px] text-[15px] font-bold text-[#0f172a]">Score Change Drivers <span className="text-[12px] font-normal text-[#94a3b8]">(90 Days)</span> <Info className="size-[13px] text-[#cbd5e1]" /></h2>
+      <h2 className="m-0 flex items-center gap-[8px] text-[15px] font-bold text-[#0f172a]">Score Change Drivers <span className="text-[12px] font-normal text-[#94a3b8]">(90 Days)</span> <InfoTooltip text="Which factors moved this company's score over the last 90 days - new intent evidence, fit changes, engagement, and negative events that pulled it down." /></h2>
       <div className="mt-[14px] flex flex-col gap-[13px]">
         {drivers.map((d) => (
           <div key={d.label}>

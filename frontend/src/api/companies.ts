@@ -57,6 +57,13 @@ export type CountryLeadScoreOut = {
   max_lead_score: number;
 };
 
+export type SectorCountOut = {
+  sector: string;
+  companies: number;
+  scored: number;
+  sales_ready: number;
+};
+
 export type CompanyStatsOut = {
   total: number;
   scored: number;
@@ -69,13 +76,31 @@ export type CompanyStatsOut = {
   high_confidence: number;
   provisional_pipeline_value: number;
   by_country: CountryLeadScoreOut[];
+  /* Industry SECTORS with counts, rolled up server-side from
+   * Company.primary_industry (backend/app/core/industry_sectors.py). Sent from
+   * the API rather than mapped here so the taxonomy lives in exactly one place -
+   * the raw industry column is far too skewed to filter on directly ("Software"
+   * alone is ~73% of classified companies). */
+  by_sector: SectorCountOut[];
 };
 
 /* importBatchId narrows every count to companies from one specific Excel
  * upload (Dashboard timeline picker) instead of everything ever ingested. */
-export function getCompanyStats(organisationId: string, importBatchId?: string): Promise<CompanyStatsOut> {
-  const qs = importBatchId ? `?import_batch_id=${importBatchId}` : "";
-  return apiGet<CompanyStatsOut>(`/organisations/${organisationId}/companies/stats${qs}`);
+export function getCompanyStats(
+  organisationId: string,
+  importBatchId?: string,
+  sector?: string,
+): Promise<CompanyStatsOut> {
+  const params = new URLSearchParams();
+  if (importBatchId) params.set("import_batch_id", importBatchId);
+  /* `sector` narrows by_country (so the globe actually re-colours) but NOT
+   * by_sector, so the dropdown keeps listing every sector with its real total
+   * instead of collapsing to whichever one is selected. */
+  if (sector) params.set("sector", sector);
+  const qs = params.toString();
+  return apiGet<CompanyStatsOut>(
+    `/organisations/${organisationId}/companies/stats${qs ? `?${qs}` : ""}`,
+  );
 }
 
 export type CompanyInsightOut = {

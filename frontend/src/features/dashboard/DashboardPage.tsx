@@ -3,22 +3,20 @@ import {
   ChevronDown,
   DollarSign,
   Flame,
-  Info,
   Mail,
-  Maximize2,
   Radio,
-  Send,
   Target,
 } from "lucide-react";
 import { lazy, Suspense } from "react";
 import earthImage from "../../assets/earth.png";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Delta, FLAT_LINE, Sparkline, UpTriangle, smoothPath } from "../../components/ui/dataviz";
+import { Delta, FLAT_LINE, Sparkline, TrendLineChart, UpTriangle } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
+import { InfoTooltip } from "../../components/ui/InfoTooltip";
 import { useEffect, useRef, useState } from "react";
 import { getRankedScores, type RankedLeadScoreOut } from "../../api/scores";
-import { getCompanyStats, type CompanyStatsOut } from "../../api/companies";
+import { getCompanyStats, type CompanyStatsOut, type SectorCountOut } from "../../api/companies";
 import { getSignalStats, listSignals, type SignalStatsOut, type SignalWithCompanyOut } from "../../api/signals";
 import { listImportBatches, type ImportBatchOut } from "../../api/icp";
 import { listWorkspaceMembers } from "../../api/workspaces";
@@ -132,10 +130,9 @@ function relativeTime(iso: string | null): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-/* RankedLeadScoreOut has no revenue/next-best-action - those are UI-only
- * concepts (revenue would need a join the ranked-scores endpoint doesn't
- * do; "next best action" has no backend concept at all). Real
- * name/score/sales_status come from the API. */
+/* RankedLeadScoreOut has no revenue - that would need a join the ranked-scores
+ * endpoint doesn't do. "Next best action" Contact Now / mail use the strongest
+ * DecisionMaker email when present, otherwise open Buying Committee. */
 function toProspect(row: RankedLeadScoreOut) {
   const score = row.lead_score !== null ? Math.round(row.lead_score) : 0;
   const initials = row.company_name
@@ -147,6 +144,9 @@ function toProspect(row: RankedLeadScoreOut) {
   const status = row.sales_status ?? "Low Priority";
   const strong = status === "Sales Ready" || status === "High Priority";
   return {
+    companyId: row.company_id,
+    contactEmail: row.primary_contact_email,
+    contactName: row.primary_contact_name,
     initials: initials || "?",
     company: row.company_name,
     revenue: row.best_offering ?? "—",
@@ -155,6 +155,26 @@ function toProspect(row: RankedLeadScoreOut) {
     score,
     ring: score >= 75 ? "green" : "orange",
   };
+}
+
+function openProspectContact(row: {
+  companyId: string;
+  company: string;
+  contactEmail: string | null;
+  contactName: string | null;
+}) {
+  if (row.contactEmail) {
+    const subject = encodeURIComponent(`Following up with ${row.company}`);
+    const body = encodeURIComponent(
+      row.contactName
+        ? `Hi ${row.contactName.split(" ")[0]},\n\n`
+        : "Hi,\n\n",
+    );
+    window.location.href = `mailto:${row.contactEmail}?subject=${subject}&body=${body}`;
+    return;
+  }
+  // No email on file - open the buying committee so the rep can pick a contact.
+  window.location.href = `/buying-committee?id=${row.companyId}`;
 }
 
 /* Same company-color-hash approach as SignalFeedPage's LOGO_COLORS/hashString
@@ -248,28 +268,9 @@ function ScoreRing({ score, tone }: { score: number; tone: string }) {
 const emptyTrend: SignalStatsOut["trend"] = [];
 
 /* Real SignalStatsOut.trend (see api/signals.ts) - one point per day with
- * high/medium/low confidence-tier counts, exactly the 3-series shape this
- * chart already drew with fake data. */
+ * high/medium/low relevance-tier counts. Dense windows are week-bucketed by
+ * TrendLineChart so the x-axis stays readable. */
 function TrendChart({ trend }: { trend: SignalStatsOut["trend"] }) {
-  const w = 580;
-  const h = 250;
-  const left = 34;
-  const right = w - 14;
-  const top = 14;
-  const bottom = 205;
-
-  const series = [
-    { color: "#7c3aed", values: trend.map((t) => t.high) },
-    { color: "#f97316", values: trend.map((t) => t.medium) },
-    { color: "#2563eb", values: trend.map((t) => t.low) },
-  ];
-  const labels = trend.map((t) => new Date(t.date).toLocaleDateString(undefined, { month: "short", day: "numeric" }));
-  const yMax = Math.max(10, ...trend.map((t) => t.high), ...trend.map((t) => t.medium), ...trend.map((t) => t.low)) * 1.15;
-  const gridValues = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(yMax * f));
-
-  const xOf = (i: number) => left + (i * (right - left)) / Math.max(1, labels.length - 1);
-  const yOf = (v: number) => bottom - (v / yMax) * (bottom - top);
-
   if (trend.length === 0) {
     return (
       <div className="flex h-[250px] items-center justify-center text-[13px] text-[#94a3b8]">
@@ -278,59 +279,14 @@ function TrendChart({ trend }: { trend: SignalStatsOut["trend"] }) {
     );
   }
 
-  return (
-    <svg className="w-full" viewBox={`0 0 ${w} ${h}`}>
-      <defs>
-        {series.map((s, i) => (
-          <linearGradient id={`trend-${i}`} key={i} x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor={s.color} stopOpacity="0.14" />
-            <stop offset="100%" stopColor={s.color} stopOpacity="0" />
-          </linearGradient>
-        ))}
-      </defs>
+  const labels = trend.map((t) => t.date);
+  const series = [
+    { label: "High", color: "#7c3aed", values: trend.map((t) => t.high) },
+    { label: "Medium", color: "#f97316", values: trend.map((t) => t.medium) },
+    { label: "Low", color: "#2563eb", values: trend.map((t) => t.low) },
+  ];
 
-      {gridValues.map((v) => (
-        <g key={v}>
-          <line stroke="#eef2f7" strokeWidth="1" x1={left} x2={right} y1={yOf(v)} y2={yOf(v)} />
-          <text fill="#94a3b8" fontSize="11" textAnchor="end" x={left - 8} y={yOf(v) + 4}>
-            {v}
-          </text>
-        </g>
-      ))}
-
-      {series.map((s, i) => {
-        const pts = s.values.map((v, idx) => ({ x: xOf(idx), y: yOf(v) }));
-        const line = smoothPath(pts);
-        // smoothPath returns "" for fewer than 2 points (nothing to draw a
-        // line between) - closing that into an area path would start with
-        // "L" instead of "M", which is invalid SVG and throws at render time.
-        const area = pts.length > 1 ? `${line} L ${pts[pts.length - 1].x} ${bottom} L ${pts[0].x} ${bottom} Z` : "";
-
-        return (
-          <g key={i}>
-            <path d={area} fill={`url(#trend-${i})`} />
-            <path d={line} fill="none" stroke={s.color} strokeLinecap="round" strokeWidth="2.5" />
-            {pts.map((p, idx) => (
-              <circle cx={p.x} cy={p.y} fill="#ffffff" key={idx} r="3.4" stroke={s.color} strokeWidth="2" />
-            ))}
-          </g>
-        );
-      })}
-
-      {labels.map((label, i) => (
-        <text
-          fill="#94a3b8"
-          fontSize="11"
-          key={`${label}-${i}`}
-          textAnchor={i === 0 ? "start" : i === labels.length - 1 ? "end" : "middle"}
-          x={xOf(i)}
-          y={bottom + 26}
-        >
-          {label}
-        </text>
-      ))}
-    </svg>
-  );
+  return <TrendLineChart height={280} labels={labels} series={series} width={580} />;
 }
 
 /* Real signalStats.trend daily totals, normalized to bar heights - replaces
@@ -487,14 +443,100 @@ const globeFallback = (
   />
 );
 
+/* Industry filter for the globe. The "View by: Lead Score" control that used to
+ * sit beside it was removed - it was a dead button with no state, no handler and
+ * no menu, and the globe has only ever coloured by lead score, so it offered no
+ * alternative to switch to. */
+function SectorFilter({
+  sectors,
+  value,
+  onChange,
+}: {
+  sectors: SectorCountOut[];
+  value: string | null;
+  onChange: (sector: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const total = sectors.reduce((sum, s) => sum + s.companies, 0);
+  const label = value ?? "All Industries";
+
+  return (
+    <div className="relative">
+      <div className="rounded-[10px] border border-white/10 bg-white/5 px-[12px] py-[8px] backdrop-blur-sm">
+        <p className="m-0 text-[10px] text-[#94a3b8]">Industry:</p>
+        <button
+          aria-expanded={open}
+          className="mt-[2px] flex items-center gap-[8px] whitespace-nowrap text-[13px] font-semibold text-white"
+          onClick={() => setOpen((o) => !o)}
+          type="button"
+        >
+          {label}
+          <ChevronDown
+            className={cn("size-[14px] text-[#94a3b8] transition-transform", open && "rotate-180")}
+          />
+        </button>
+      </div>
+
+      {open && (
+        // Opens UPWARD: this control sits at the bottom edge of the globe card,
+        // so a downward menu would be clipped by the card's overflow-hidden.
+        <div className="absolute bottom-[calc(100%+6px)] right-0 z-20 max-h-[260px] w-[230px] overflow-y-auto rounded-[10px] border border-white/10 bg-[#0f1729] p-[6px] shadow-[0px_12px_28px_rgba(0,0,0,0.45)]">
+          <button
+            className={cn(
+              "flex w-full items-center justify-between rounded-[7px] px-[10px] py-[7px] text-left text-[12px]",
+              value === null ? "bg-white/10 font-semibold text-white" : "text-[#cbd5e1] hover:bg-white/5",
+            )}
+            onClick={() => {
+              onChange(null);
+              setOpen(false);
+            }}
+            type="button"
+          >
+            All Industries
+            <span className="text-[11px] text-[#94a3b8]">{total.toLocaleString()}</span>
+          </button>
+          {sectors.length === 0 ? (
+            <p className="m-0 px-[10px] py-[8px] text-[11px] text-[#94a3b8]">No industry data yet.</p>
+          ) : (
+            sectors.map((s) => (
+              <button
+                className={cn(
+                  "flex w-full items-center justify-between rounded-[7px] px-[10px] py-[7px] text-left text-[12px]",
+                  value === s.sector ? "bg-white/10 font-semibold text-white" : "text-[#cbd5e1] hover:bg-white/5",
+                )}
+                key={s.sector}
+                onClick={() => {
+                  onChange(s.sector);
+                  setOpen(false);
+                }}
+                type="button"
+              >
+                <span className="truncate">{s.sector}</span>
+                <span className="ml-[8px] shrink-0 text-[11px] text-[#94a3b8]">
+                  {s.companies.toLocaleString()}
+                  {s.sales_ready > 0 && <span className="text-[#22c55e]"> - {s.sales_ready} ready</span>}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LeadOpportunityMap({
   companyStats,
   signalStats,
   topProspect,
+  sector,
+  onSectorChange,
 }: {
   companyStats: CompanyStatsOut;
   signalStats: SignalStatsOut;
   topProspect: ReturnType<typeof toProspect> | null;
+  sector: string | null;
+  onSectorChange: (sector: string | null) => void;
 }) {
   return (
     <section className="relative flex min-h-[420px] flex-col overflow-hidden rounded-[18px] bg-[#0a1020] p-[24px] text-white">
@@ -506,7 +548,7 @@ function LeadOpportunityMap({
 
       <div className="relative z-10 flex items-center gap-[8px]">
         <h2 className="m-0 text-[18px] font-bold">Lead Opportunity Map</h2>
-        <Info className="size-[15px] text-[#94a3b8]" />
+        <InfoTooltip text="Countries shaded by the HIGHEST Lead Score found there, not the average - an average hides real opportunity inside a large mixed market. Use the Industry filter to narrow by sector." tone="dark" />
       </div>
       <p className="relative z-10 m-0 mt-[6px] max-w-[280px] text-[12px] leading-[18px] text-[#94a3b8]">
         Real-time view of high-potential leads globally based on signal intensity
@@ -544,11 +586,8 @@ function LeadOpportunityMap({
             Lead Score <span className="font-bold text-white">{topProspect.score}</span> •{" "}
             <span className="text-[#f97316]">Top Match</span>
           </p>
-          <div className="mt-[10px] flex items-center justify-between">
+          <div className="mt-[10px]">
             <span className="text-[11px] text-[#94a3b8]">{topProspect.action}</span>
-            <span className="flex size-[26px] items-center justify-center rounded-full bg-gradient-to-r from-[#f5417f] to-[#c531d6] text-white">
-              <Send className="size-[13px]" />
-            </span>
           </div>
         </div>
       )}
@@ -565,33 +604,7 @@ function LeadOpportunityMap({
         </div>
 
         <div className="flex items-end gap-[8px]">
-          <div className="rounded-[10px] border border-white/10 bg-white/5 px-[12px] py-[8px] backdrop-blur-sm">
-            <p className="m-0 text-[10px] text-[#94a3b8]">View by:</p>
-            <button
-              className="mt-[2px] flex items-center gap-[8px] text-[13px] font-semibold text-white"
-              type="button"
-            >
-              Lead Score
-              <ChevronDown className="size-[14px] text-[#94a3b8]" />
-            </button>
-          </div>
-          <div className="rounded-[10px] border border-white/10 bg-white/5 px-[12px] py-[8px] backdrop-blur-sm">
-            <p className="m-0 text-[10px] text-[#94a3b8]">Industry:</p>
-            <button
-              className="mt-[2px] flex items-center gap-[8px] text-[13px] font-semibold text-white"
-              type="button"
-            >
-              All Industries
-              <ChevronDown className="size-[14px] text-[#94a3b8]" />
-            </button>
-          </div>
-          <button
-            aria-label="Expand map"
-            className="flex size-[40px] items-center justify-center rounded-[10px] border border-white/10 bg-white/5 text-white backdrop-blur-sm"
-            type="button"
-          >
-            <Maximize2 className="size-[16px]" />
-          </button>
+          <SectorFilter onChange={onSectorChange} sectors={companyStats.by_sector} value={sector} />
         </div>
       </div>
     </section>
@@ -617,6 +630,9 @@ function LeadTrend({ signalStats }: { signalStats: SignalStatsOut }) {
   return (
     <section className="flex flex-col rounded-[18px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <h2 className="m-0 text-[18px] font-bold text-[#0f172a]">Signal Trends</h2>
+      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">
+        Y-axis: number of signals · X-axis: date published
+      </p>
 
       <div className="mt-[14px] flex items-center gap-[10px]">
         <span className="text-[26px] font-bold leading-none text-[#0f172a]">{signalStats.total}</span>
@@ -658,6 +674,9 @@ function LeadTrend({ signalStats }: { signalStats: SignalStatsOut }) {
 
 const dummyProspects = [
   {
+    companyId: "",
+    contactEmail: null as string | null,
+    contactName: null as string | null,
     initials: "ABC",
     company: "ABC Accounting Group",
     revenue: "$12M Revenue",
@@ -667,6 +686,9 @@ const dummyProspects = [
     ring: "green",
   },
   {
+    companyId: "",
+    contactEmail: null as string | null,
+    contactName: null as string | null,
     initials: "TA",
     company: "Thomson & Associates",
     revenue: "$64M Revenue",
@@ -676,6 +698,9 @@ const dummyProspects = [
     ring: "green",
   },
   {
+    companyId: "",
+    contactEmail: null as string | null,
+    contactName: null as string | null,
     initials: "JL",
     company: "Johnson Lambert LLP",
     revenue: "$99M Revenue",
@@ -685,6 +710,9 @@ const dummyProspects = [
     ring: "orange",
   },
   {
+    companyId: "",
+    contactEmail: null as string | null,
+    contactName: null as string | null,
     initials: "WBC",
     company: "Williams & Co. LLP",
     revenue: "$60M Revenue",
@@ -694,6 +722,9 @@ const dummyProspects = [
     ring: "orange",
   },
   {
+    companyId: "",
+    contactEmail: null as string | null,
+    contactName: null as string | null,
     initials: "BT",
     company: "Baker Tilly US",
     revenue: "$350M Revenue",
@@ -727,16 +758,23 @@ function TopPriorityProspects({ prospects }: { prospects: typeof dummyProspects 
         {prospects.map((row, i) => (
           <div
             className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-[16px] py-[12px]"
-            key={`${row.company}-${i}`}
+            key={`${row.companyId || row.company}-${i}`}
           >
             <div className="flex min-w-0 items-center gap-[12px]">
               <span className="flex size-[38px] shrink-0 items-center justify-center rounded-full bg-[#0f172a] text-[11px] font-bold text-white">
                 {row.initials}
               </span>
               <div className="min-w-0">
-                <p className="m-0 truncate text-[14px] font-bold text-[#0f172a]">
-                  {row.company}
-                </p>
+                {row.companyId ? (
+                  <a
+                    className="m-0 block truncate text-[14px] font-bold text-[#0f172a] no-underline hover:text-[#2563eb]"
+                    href={`/enterprise-detail?id=${row.companyId}`}
+                  >
+                    {row.company}
+                  </a>
+                ) : (
+                  <p className="m-0 truncate text-[14px] font-bold text-[#0f172a]">{row.company}</p>
+                )}
                 <p className="m-0 text-[12px] text-[#94a3b8]">{row.revenue}</p>
                 <span className="mt-[5px] inline-flex">
                   <Tag label={row.action} tone={row.tone} />
@@ -751,17 +789,16 @@ function TopPriorityProspects({ prospects }: { prospects: typeof dummyProspects 
             </div>
             <div className="flex items-center gap-[8px]">
               <button
-                className="whitespace-nowrap text-[13px] font-semibold text-[#2563eb]"
+                className="whitespace-nowrap text-[13px] font-semibold text-[#2563eb] hover:underline"
+                onClick={() => openProspectContact(row)}
+                title={
+                  row.contactEmail
+                    ? `Email ${row.contactName || row.contactEmail}`
+                    : "Open buying committee to find a contact"
+                }
                 type="button"
               >
                 Contact Now
-              </button>
-              <button
-                aria-label={`Email ${row.company}`}
-                className="flex size-[30px] items-center justify-center rounded-[8px] border border-[#e9edf5] text-[#64748b]"
-                type="button"
-              >
-                <Mail className="size-[15px]" />
               </button>
             </div>
           </div>
@@ -887,7 +924,7 @@ function RecentSignals({ signals }: { signals: typeof dummyRecentSignals }) {
 /* Page                                                                */
 /* ------------------------------------------------------------------ */
 
-const emptyCompanyStats: CompanyStatsOut = { total: 0, scored: 0, unscored: 0, sales_ready: 0, high_priority: 0, warm: 0, monitor: 0, low_priority: 0, high_confidence: 0, provisional_pipeline_value: 0, by_country: [] };
+const emptyCompanyStats: CompanyStatsOut = { total: 0, scored: 0, unscored: 0, sales_ready: 0, high_priority: 0, warm: 0, monitor: 0, low_priority: 0, high_confidence: 0, provisional_pipeline_value: 0, by_country: [], by_sector: [] };
 const emptySignalStats: SignalStatsOut = {
   total: 0,
   high_relevance: 0,
@@ -913,6 +950,10 @@ export function DashboardPage() {
   const [signalStats, setSignalStats] = useState<SignalStatsOut>(emptySignalStats);
   const [importBatches, setImportBatches] = useState<ImportBatchOut[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
+  /* null = every sector. Drives the globe's Industry filter; a change
+     refetches company stats so by_country - and therefore the map's
+     colouring - narrows to that sector. */
+  const [sector, setSector] = useState<string | null>(null);
 
   // Same "workspace owner" lookup as TopBar's UserMenu (see OnboardingPage's
   // Workspace Setup step: addWorkspaceMember(..., { role: "owner" })) - just
@@ -970,7 +1011,7 @@ export function DashboardPage() {
       .catch(() => {
         // No backend/org yet - keep the dummy rows.
       });
-    getCompanyStats(organisationId, batchId)
+    getCompanyStats(organisationId, batchId, sector ?? undefined)
       .then(setCompanyStats)
       .catch(() => {
         // No backend/org yet - keep the empty stats.
@@ -980,7 +1021,7 @@ export function DashboardPage() {
       .catch(() => {
         // No backend/org yet - keep the empty stats.
       });
-  }, [selectedBatchId]);
+  }, [selectedBatchId, sector]);
 
   const topProspect = prospects !== dummyProspects ? prospects[0] ?? null : null;
 
@@ -1014,7 +1055,13 @@ export function DashboardPage() {
           </div>
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
-            <LeadOpportunityMap companyStats={companyStats} signalStats={signalStats} topProspect={topProspect} />
+            <LeadOpportunityMap
+              companyStats={companyStats}
+              onSectorChange={setSector}
+              sector={sector}
+              signalStats={signalStats}
+              topProspect={topProspect}
+            />
             <LeadTrend signalStats={signalStats} />
           </div>
 

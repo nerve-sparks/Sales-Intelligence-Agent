@@ -2,7 +2,6 @@ import {
   Activity,
   Building2,
   Gauge,
-  Info,
   PieChart,
   Target,
   Users,
@@ -11,10 +10,11 @@ import { lazy, Suspense, useEffect, useState, type ComponentType, type ReactNode
 import type { Data, ISOCode } from "react-svg-worldmap";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Donut, smoothPath } from "../../components/ui/dataviz";
+import { Donut, TrendLineChart } from "../../components/ui/dataviz";
 import { getSignalStats, type SignalStatsOut } from "../../api/signals";
 import { getOrganisationId } from "../../lib/session";
 import { CATEGORY_COLORS, categoryLabel } from "../../lib/signalCategories";
+import { InfoTooltip } from "../../components/ui/InfoTooltip";
 
 const pageBackground =
   "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
@@ -84,17 +84,18 @@ function KpiCards({ kpis }: { kpis: Kpi[] }) {
 function CardHead({
   title,
   action,
-  info = true,
+  info,
 }: {
   title: string;
   action?: ReactNode;
-  info?: boolean;
+  /* Tooltip copy. Was a boolean that rendered a bare icon explaining nothing. */
+  info?: string;
 }) {
   return (
     <div className="flex items-center justify-between gap-[12px]">
       <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">
         {title}
-        {info && <Info className="size-[14px] text-[#cbd5e1]" />}
+        {info && <InfoTooltip text={info} />}
       </h2>
       {action}
     </div>
@@ -107,80 +108,17 @@ function CardHead({
 
 type TrendSeries = { label: string; color: string; values: number[] };
 
-function niceStep(maxValue: number): number {
-  const rough = maxValue / 4;
-  const magnitude = 10 ** Math.floor(Math.log10(rough || 1));
-  const normalized = rough / magnitude;
-  // Round the step UP so the 4 gridline intervals always cover maxValue with a
-  // little headroom. (Rounding down let the tallest bar overshoot the top of
-  // the chart, clipping its value label — e.g. max 86 gave a yMax of only 80.)
-  const nice = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 ? 2.5 : normalized <= 5 ? 5 : 10;
-  return Math.max(1, Math.ceil(nice * magnitude));
-}
-
-function formatTick(v: number): string {
-  return v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}K` : String(v);
-}
-
-function SignalsOverTimeChart({ labels, series }: { labels: string[]; series: TrendSeries[] }) {
-  const w = 560;
-  const h = 250;
-  const left = 40;
-  const right = w - 14;
-  const top = 14;
-  const bottom = 205;
-
-  const maxSeriesValue = Math.max(1, ...series.flatMap((s) => s.values));
-  const step = niceStep(maxSeriesValue);
-  const yMax = step * 4;
-  const grid = [0, step, step * 2, step * 3, step * 4].map((v) => ({ v, label: formatTick(v) }));
-
-  const xOf = (i: number) => left + (labels.length > 1 ? (i * (right - left)) / (labels.length - 1) : 0);
-  const yOf = (v: number) => bottom - (v / yMax) * (bottom - top);
-
-  return (
-    <svg className="w-full" viewBox={`0 0 ${w} ${h}`}>
-      {grid.map((g) => (
-        <g key={g.v}>
-          <line stroke="#eef2f7" strokeWidth="1" x1={left} x2={right} y1={yOf(g.v)} y2={yOf(g.v)} />
-          <text fill="#94a3b8" fontSize="11" textAnchor="end" x={left - 8} y={yOf(g.v) + 4}>
-            {g.label}
-          </text>
-        </g>
-      ))}
-
-      {series.map((s) => {
-        const pts = s.values.map((v, i) => ({ x: xOf(i), y: yOf(v) }));
-        return (
-          <g key={s.label}>
-            <path d={smoothPath(pts)} fill="none" stroke={s.color} strokeLinecap="round" strokeWidth="2.5" />
-            {pts.map((p, i) => (
-              <circle cx={p.x} cy={p.y} fill={s.color} key={i} r="3.6" />
-            ))}
-          </g>
-        );
-      })}
-
-      {labels.map((label, i) => (
-        <text
-          fill="#94a3b8"
-          fontSize="11"
-          key={label}
-          textAnchor={i === 0 ? "start" : i === labels.length - 1 ? "end" : "middle"}
-          x={xOf(i)}
-          y={bottom + 26}
-        >
-          {label}
-        </text>
-      ))}
-    </svg>
-  );
-}
-
 function SignalsOverTimeCard({ labels, series, hasData }: { labels: string[]; series: TrendSeries[]; hasData: boolean }) {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <CardHead title="Signals Over Time" />
+      <CardHead
+        info="Signal counts over the last 90 days by published date. Dense history is shown weekly so the chart stays readable. High / Medium / Low follow the same xsparks_relevance tiers used in the Signal Feed."
+        title="Signals Over Time"
+      />
+      <p className="m-0 mt-[4px] text-[12px] text-[#94a3b8]">
+        Y-axis: number of signals · X-axis: date published
+        {labels.length > 28 ? " (shown by week)" : ""}
+      </p>
       {!hasData ? (
         <div className="py-[60px] text-center text-[13px] text-[#94a3b8]">
           Not enough day-over-day history to chart yet.
@@ -196,7 +134,7 @@ function SignalsOverTimeCard({ labels, series, hasData }: { labels: string[]; se
             ))}
           </div>
           <div className="mt-[10px]">
-            <SignalsOverTimeChart labels={labels} series={series} />
+            <TrendLineChart height={280} labels={labels} series={series} width={560} />
           </div>
         </>
       )}
@@ -223,7 +161,10 @@ function toCategorySegments(data: SignalStatsOut): CategorySegment[] {
 function CategoryCard({ segments, total }: { segments: CategorySegment[]; total: number }) {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <CardHead title="Signals by Category" />
+      <CardHead
+        info="Share of active buying events by signal category (funding, hiring, tech mandate, and so on). Negative events are excluded from this chart."
+        title="Signals by Category"
+      />
       {segments.length === 0 ? (
         <div className="py-[60px] text-center text-[13px] text-[#94a3b8]">No signals yet.</div>
       ) : (
@@ -241,12 +182,14 @@ function CategoryCard({ segments, total }: { segments: CategorySegment[]; total:
         </div>
         <div className="flex w-full min-w-0 flex-1 flex-col gap-[9px]">
           {segments.map((s) => (
-            <div className="flex items-center justify-between gap-[8px]" key={s.label}>
-              <span className="flex min-w-0 items-center gap-[8px]">
-                <span className="size-[9px] shrink-0 rounded-full" style={{ backgroundColor: s.color }} />
-                <span className="truncate text-[11px] font-medium text-[#334155]">{s.label}</span>
+            <div className="flex items-start justify-between gap-[10px]" key={s.label}>
+              <span className="flex min-w-0 items-start gap-[8px]">
+                <span className="mt-[4px] size-[9px] shrink-0 rounded-full" style={{ backgroundColor: s.color }} />
+                <span className="text-[12px] font-medium leading-[16px] text-[#334155] break-words">
+                  {s.label}
+                </span>
               </span>
-              <span className="whitespace-nowrap text-[11px] text-[#94a3b8]">
+              <span className="shrink-0 whitespace-nowrap pt-[1px] text-[11px] text-[#94a3b8]">
                 <span className="font-semibold text-[#0f172a]">{s.value.toLocaleString()}</span>{" "}
                 ({s.pct})
               </span>
@@ -264,6 +207,19 @@ function CategoryCard({ segments, total }: { segments: CategorySegment[]; total:
 /* ------------------------------------------------------------------ */
 
 type HistogramBar = { label: string; value: number };
+
+function niceStep(maxValue: number): number {
+  const rough = maxValue / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(rough || 1));
+  const normalized = rough / magnitude;
+  const nice =
+    normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 ? 2.5 : normalized <= 5 ? 5 : 10;
+  return Math.max(1, Math.ceil(nice * magnitude));
+}
+
+function formatTick(v: number): string {
+  return v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}K` : String(v);
+}
 
 function toDistributionBars(data: SignalStatsOut): HistogramBar[] {
   return data.histogram.map((b) => ({ label: b.bucket, value: b.count }));
@@ -332,7 +288,10 @@ function DistributionChart({ bars }: { bars: HistogramBar[] }) {
 function DistributionCard({ bars }: { bars: HistogramBar[] }) {
   return (
     <section className="flex flex-col rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <CardHead title="Relevance Score Distribution" />
+      <CardHead
+        info="Histogram of extraction confidence across all active signals. Confidence is how sure the extractor was that the event is real - separate from relevance and event score."
+        title="Relevance Score Distribution"
+      />
       {bars.every((b) => b.value === 0) ? (
         <div className="flex flex-1 items-center justify-center py-[60px] text-center text-[13px] text-[#94a3b8]">No signals yet.</div>
       ) : (
@@ -367,7 +326,10 @@ function RelevanceLevelCard({ segments, total }: { segments: RelevanceSegment[];
 
   return (
     <section className="flex flex-col rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <CardHead title="Signals by Relevance Level" />
+      <CardHead
+        info="High / Medium / Low buckets from xsparks_relevance (0.65 / 0.40 thresholds). This is relevance to your offering, not how confident the extraction was."
+        title="Signals by Relevance Level"
+      />
       <div className="mt-[16px] flex flex-1 flex-col items-center gap-[20px] sm:flex-row">
         <div className="relative size-[160px] shrink-0">
           <Donut
@@ -476,7 +438,10 @@ function WorldMap({ geoData }: { geoData: Data }) {
 function GeographicCard({ countries, geoData }: { countries: CountryRow[]; geoData: Data }) {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <CardHead title="Geographic Distribution" />
+      <CardHead
+        info="Where signal volume concentrates by company country. Intensity is count of active signals, not lead score."
+        title="Geographic Distribution"
+      />
       <div className="mt-[16px] flex flex-col gap-[16px]">
         <div className="w-full overflow-hidden rounded-[12px] bg-[#f7f5ff] px-[10px] py-[8px]">
           <WorldMap geoData={geoData} />

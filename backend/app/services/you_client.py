@@ -102,15 +102,26 @@ def _headers() -> dict:
     return {"X-API-Key": settings.you_api_key}
 
 
-def build_query(domain: str, company_name: str | None = None) -> str:
+def build_query(
+    domain: str | None, company_name: str | None = None, location: str | None = None
+) -> str:
     """Deliberately short. Tavily needed a dense buying-signal keyword list
     stuffed into one query because it had no news channel; you.com has a
     `news` bucket, and live probes showed the keyword-stuffed query actively
     BREAKS it - the long form returned a single result about an unrelated
     company (an AAON earnings report), while a bare "Inseego news" returned
     ten real, dated Inseego items including its Q2 2026 earnings call. Short
-    query, better recall."""
+    query, better recall.
+
+    The company NAME is the anchor, not the domain - which is why a company
+    with no website is still perfectly researchable. `location` is appended
+    only when there is no domain to disambiguate with, since a bare generic
+    name ("Apex", "Summit Partners") otherwise pulls in the wrong company."""
     subject = company_name or domain
+    if not subject:
+        return ""
+    if location and not domain:
+        return f"{subject} {location} news"
     return f"{subject} news"
 
 
@@ -129,7 +140,42 @@ def _snippet_of(item: dict) -> str:
     return "\n".join(p for p in parts if p)
 
 
-async def search(domain: str, company_name: str | None = None, num: int = MAX_RESULTS) -> list[dict]:
+async def search_query(query: str, num: int = MAX_RESULTS) -> list[dict]:
+    """Runs an arbitrary query and returns results in the pipeline's shape.
+
+    Split out of search() so callers with their own query needs - company
+    enrichment resolving a name to a website, for instance - reuse this
+    transport (auth, bucket merge, page_age -> date) instead of duplicating
+    the HTTP call and drifting from it."""
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        response = await client.get(SEARCH_URL, params={"query": query}, headers=_headers())
+    if response.status_code != 200:
+        raise YouError(f"you.com search failed ({response.status_code}): {response.text}")
+
+    buckets = response.json().get("results") or {}
+    merged: list[dict] = []
+    for bucket in ("news", "web"):
+        items = buckets.get(bucket)
+        if isinstance(items, list):
+            merged.extend(items)
+    return [
+        {
+            "link": item.get("url"),
+            "title": item.get("title"),
+            "snippet": _snippet_of(item),
+            "date": item.get("page_age"),
+            "position": i,
+        }
+        for i, item in enumerate(merged[:num])
+    ]
+
+
+async def search(
+    domain: str | None,
+    company_name: str | None = None,
+    num: int = MAX_RESULTS,
+    location: str | None = None,
+) -> list[dict]:
     """The single research call for one company. Merges the `news` and `web`
     buckets into one list shaped like { link, title, snippet, date, position } -
     the same shape the rest of the pipeline (is_relevant / to_evidence)
@@ -138,8 +184,8 @@ async def search(domain: str, company_name: str | None = None, num: int = MAX_RE
     News comes first: those results are both genuinely news and the ones that
     actually carry `page_age`, so they lead the chunk the LLM reads.
     """
-    query = build_query(domain, company_name)
-    print(f"[YOU] >>> Calling you.com Search for '{company_name}' ({domain})")
+    query = build_query(domain, company_name, location)
+    print(f"[YOU] >>> Calling you.com Search for '{company_name}' ({domain or 'no domain'})")
     print(f"[YOU]     query: {query!r}")
     async with httpx.AsyncClient(timeout=45.0) as client:
         response = await client.get(SEARCH_URL, params={"query": query}, headers=_headers())
@@ -182,11 +228,17 @@ async def search(domain: str, company_name: str | None = None, num: int = MAX_RE
 _DOMAIN_LABEL_RE = re.compile(r"[^a-z0-9]+")
 
 
-def _domain_label(domain: str) -> str:
+def _domain_label(domain: str | None) -> str:
     """The registrable-name portion of a domain, lowercased and stripped of
     punctuation, for relevance matching - "provenir.com" -> "provenir",
-    "21stcenturyvitamins.com" -> "21stcenturyvitamins"."""
-    host = domain.lower().split("/")[0]
+    "21stcenturyvitamins.com" -> "21stcenturyvitamins".
+
+    Returns "" for a missing domain: a company with no website is still
+    researched by name, and every caller already falls back to the company-name
+    match when the label is empty."""
+    if not domain:
+        return ""
+    host = str(domain).lower().split("/")[0]
     parts = host.split(".")
     label = parts[-2] if len(parts) >= 2 else parts[0]
     return _DOMAIN_LABEL_RE.sub("", label)

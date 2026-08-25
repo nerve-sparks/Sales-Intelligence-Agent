@@ -89,6 +89,9 @@ class RankedLeadScoreOut(BaseModel):
     expected_deal_max_usd: float | None = None
     expected_deal_value_usd: float | None = None
     scored_at: datetime | None = None
+    # Strongest reachable DecisionMaker - powers Dashboard "Contact Now" / mail.
+    primary_contact_email: str | None = None
+    primary_contact_name: str | None = None
 
 
 class NotScoredOut(BaseModel):

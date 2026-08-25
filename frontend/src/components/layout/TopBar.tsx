@@ -5,6 +5,7 @@ import {
   NotificationBell,
   UserMenu,
 } from "./TopActions";
+import { GuideButton } from "../guide/PlatformGuide";
 import { listWorkspaces, type WorkspaceOut } from "../../api/workspaces";
 import { getOrganisationId, getWorkspaceId, setWorkspaceId } from "../../lib/session";
 import { useCurrentUser } from "../../lib/CurrentUserContext";
@@ -95,6 +96,7 @@ function WorkspaceSwitcher() {
 export function TopBar({
   detectionIcon = Scan,
   showDetection = true,
+  showGuide = true,
   showNotificationBell = true,
   showWorkspaceSwitcher = false,
 }: {
@@ -103,6 +105,7 @@ export function TopBar({
   searchPlaceholder?: string;
   detectionIcon?: ComponentType<{ className?: string }>;
   showDetection?: boolean;
+  showGuide?: boolean;
   showNotificationBell?: boolean;
   showWorkspaceSwitcher?: boolean;
 }) {
@@ -119,6 +122,7 @@ export function TopBar({
         {showDetection && (
           <DetectionPill className="hidden xl:flex" icon={detectionIcon} />
         )}
+        {showGuide && <GuideButton />}
         {showNotificationBell && <NotificationBell />}
         <UserMenu {...(user ?? {})} />
       </div>

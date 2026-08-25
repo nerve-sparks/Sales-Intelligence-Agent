@@ -61,6 +61,9 @@ async def _process_company(
         "company_name": company_row.company_name,
         "company_domain": company_row.company_domain,
         "industry": (company_row.industries or [None])[0] if company_row.industries else None,
+        # Only used to disambiguate the search query for a company with no
+        # domain (see you_client.build_query).
+        "location": ", ".join(p for p in (company_row.city, company_row.country) if p) or None,
         # Carried through to buying_event_service's LLM calls for Langfuse
         # per-tenant cost attribution (langfuse_user_id) - not a company
         # attribute, just riding along on the dict that's already threaded
@@ -150,11 +153,21 @@ async def research_companies(
     research_run_id = uuid.uuid4()
     stale_before = now - timedelta(days=RESEARCH_REFRESH_DAYS)
 
+    # NO company_domain filter. Research is anchored on the company NAME, not
+    # its website - you_client.build_query has always preferred company_name and
+    # only fell back to the domain. Requiring a domain therefore excluded
+    # perfectly researchable companies for no reason: one upload produced 2,573
+    # companies of which 2,552 had no website column, and all 2,552 were skipped
+    # entirely rather than searched by name.
+    #
+    # City/country are selected so build_query can disambiguate a generic name
+    # when there is no domain to do it - "Apex" alone pulls in the wrong company.
     stmt = select(
-        Company.company_id, Company.company_name, Company.company_domain, Company.industries
+        Company.company_id, Company.company_name, Company.company_domain,
+        Company.industries, Company.city, Company.country,
     ).where(
         Company.organisation_id == organisation_id,
-        Company.company_domain.isnot(None),
+        Company.company_name.isnot(None),
     )
     if company_ids is not None:
         stmt = stmt.where(Company.company_id.in_(company_ids))
@@ -170,35 +183,23 @@ async def research_companies(
             session, list(company_ids), import_batch_id, "researching", stamp_started=True
         )
 
-        # Companies with no domain can never be researched - a permanent
-        # validation failure (brief: never retry these). The targets query
-        # above already excludes them via company_domain.isnot(None), so
-        # they need to be identified and flagged separately here rather than
-        # silently falling into "skipped as already fresh" below.
-        no_domain_ids = (
-            await session.execute(
-                select(Company.company_id).where(
-                    Company.company_id.in_(company_ids), Company.company_domain.is_(None),
-                )
-            )
-        ).scalars().all()
-        for company_id in no_domain_ids:
-            await company_batch_status.mark_failed(
-                session, company_id, import_batch_id, "No company domain to research.", permanent=True,
-            )
-        if no_domain_ids:
-            logger.warning(
-                "%d company(ies) skipped: no domain",
-                len(no_domain_ids),
-                extra={"job_id": str(import_batch_id), "stage": "research"},
-            )
+        # A missing domain is NOT a reason to skip research. This used to mark
+        # every domain-less company needs_review and never search for it, on the
+        # assumption that the domain was the search anchor - it never was.
+        # you_client.build_query has always keyed on the company NAME and only
+        # fell back to the domain, so a company with just a name is perfectly
+        # researchable. The rule excluded 2,552 of one upload's 2,573 companies
+        # from research entirely.
+        #
+        # The domain still helps where it exists: match_confidence scores a
+        # domain-label hit 0.95 against a name-only hit 0.8, so evidence for a
+        # domain-less company is weighted lower rather than trusted equally.
 
-        # Companies in scope but skipped this pass (already fresh, and not
-        # missing a domain) go straight to 'scoring' - they still get a fresh
-        # Lead Score from their existing evidence, just no new Tavily/LLM call.
+        # Companies in scope but skipped this pass (already fresh) go straight
+        # to 'scoring' - they still get a fresh Lead Score from their existing
+        # evidence, just no new search/LLM call.
         target_ids = {row.company_id for row in targets}
-        no_domain_id_set = set(no_domain_ids)
-        skipped_ids = [cid for cid in company_ids if cid not in target_ids and cid not in no_domain_id_set]
+        skipped_ids = [cid for cid in company_ids if cid not in target_ids]
         await company_batch_status.mark_bulk_stage(session, skipped_ids, import_batch_id, "scoring")
         await session.commit()
 

@@ -4,6 +4,7 @@ import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { cn } from "../../lib/cn";
 import { listSignals, type SignalWithCompanyOut } from "../../api/signals";
+import { getCompanyStats } from "../../api/companies";
 import { getOrganisationId } from "../../lib/session";
 import { categoryLabel, SIGNAL_CATEGORY_OPTIONS } from "../../lib/signalCategories";
 
@@ -83,23 +84,100 @@ function RelevanceBadge({ level }: { level: string }) {
 }
 
 /* signal_category is the only filter dimension backed by a real column, wired
- * to the /signals list endpoint's ?category= param. */
-function CategoryFilter({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+ * to the /signals list endpoint's ?category= param. Every control below is
+ * backed by a real column and a real query param - nothing here is decorative,
+ * which is what the previous "fake filter buttons" comment referred to. */
+function Select({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string }[];
+}) {
   return (
-    <div className="relative flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-medium text-[#334155]">
+    <div className="relative flex items-center rounded-[10px] border border-[#e9edf5] bg-white pl-[14px] pr-[30px] py-[10px] text-[14px] font-medium text-[#334155]">
+      <span className="mr-[6px] shrink-0 text-[12px] text-[#94a3b8]">{label}</span>
       <select
-        className="cursor-pointer appearance-none bg-transparent pr-[18px] outline-none"
+        aria-label={label}
+        className="cursor-pointer appearance-none bg-transparent outline-none"
         onChange={(e) => onChange(e.target.value)}
         value={value}
       >
-        <option value="">All Categories</option>
-        {SIGNAL_CATEGORY_OPTIONS.map((option) => (
-          <option key={option} value={option}>
-            {categoryLabel(option)}
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
           </option>
         ))}
       </select>
-      <ChevronDown className="pointer-events-none absolute right-[14px] size-[15px] text-[#94a3b8]" />
+      <ChevronDown className="pointer-events-none absolute right-[12px] size-[15px] text-[#94a3b8]" />
+    </div>
+  );
+}
+
+/* Sort options are all descending - see listSignals. "Company" is A-Z by name
+ * with newest-first inside each company, which is the only ordering where
+ * ascending is the useful direction. */
+const SORT_OPTIONS = [
+  { value: "date", label: "Newest first" },
+  { value: "score", label: "Highest score" },
+  { value: "company", label: "Company A-Z" },
+];
+
+const MIN_SCORE_OPTIONS = [
+  { value: "", label: "Any score" },
+  { value: "10", label: "10+" },
+  { value: "20", label: "20+" },
+  { value: "30", label: "30+" },
+  { value: "40", label: "40+" },
+];
+
+function FilterBar({
+  category,
+  onCategory,
+  sector,
+  onSector,
+  minScore,
+  onMinScore,
+  sort,
+  onSort,
+  sectors,
+}: {
+  category: string;
+  onCategory: (v: string) => void;
+  sector: string;
+  onSector: (v: string) => void;
+  minScore: string;
+  onMinScore: (v: string) => void;
+  sort: string;
+  onSort: (v: string) => void;
+  sectors: string[];
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-[10px]">
+      <Select
+        label="Category"
+        onChange={onCategory}
+        options={[
+          { value: "", label: "All Categories" },
+          ...SIGNAL_CATEGORY_OPTIONS.map((o) => ({ value: o, label: categoryLabel(o) })),
+        ]}
+        value={category}
+      />
+      <Select
+        label="Industry"
+        onChange={onSector}
+        options={[
+          { value: "", label: "All Industries" },
+          ...sectors.map((s) => ({ value: s, label: s })),
+        ]}
+        value={sector}
+      />
+      <Select label="Min score" onChange={onMinScore} options={MIN_SCORE_OPTIONS} value={minScore} />
+      <Select label="Sort" onChange={onSort} options={SORT_OPTIONS} value={sort} />
     </div>
   );
 }
@@ -291,6 +369,10 @@ function Pagination({ page, total, onPageChange }: { page: number; total: number
 export function SignalFeedPage() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [category, setCategory] = useState(getCategoryFromUrl);
+  const [sector, setSector] = useState("");
+  const [minScore, setMinScore] = useState("");
+  const [sort, setSort] = useState("date");
+  const [sectors, setSectors] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
 
@@ -303,13 +385,38 @@ export function SignalFeedPage() {
     if (!organisationId) {
       return;
     }
-    listSignals(organisationId, { page, page_size: PAGE_SIZE, category: category || undefined })
+    listSignals(organisationId, {
+      page,
+      page_size: PAGE_SIZE,
+      category: category || undefined,
+      sector: sector || undefined,
+      min_score: minScore ? Number(minScore) : undefined,
+      sort: sort as "date" | "score" | "company",
+    })
       .then((res) => {
         setTotal(res.total);
         setSignals(res.items.map(toSignal));
       })
       .catch(() => setSignals([]));
-  }, [category, page]);
+  }, [category, sector, minScore, sort, page]);
+
+  /* Sector list comes from the API's own rollup so this page never carries a
+     second copy of the industry->sector mapping. */
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    if (!organisationId) {
+      return;
+    }
+    getCompanyStats(organisationId)
+      .then((stats) => setSectors(stats.by_sector.map((s) => s.sector)))
+      .catch(() => setSectors([]));
+  }, []);
+
+  /* Any filter change invalidates the current page number - staying on page 7
+     of a narrower result set shows an empty table. */
+  useEffect(() => {
+    setPage(1);
+  }, [category, sector, minScore, sort]);
 
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
@@ -334,7 +441,17 @@ export function SignalFeedPage() {
           </p>
 
           <div className="mt-[22px]">
-            <CategoryFilter onChange={setCategory} value={category} />
+            <FilterBar
+              category={category}
+              minScore={minScore}
+              onCategory={setCategory}
+              onMinScore={setMinScore}
+              onSector={setSector}
+              onSort={setSort}
+              sector={sector}
+              sectors={sectors}
+              sort={sort}
+            />
           </div>
 
           <div className="mt-[18px]">

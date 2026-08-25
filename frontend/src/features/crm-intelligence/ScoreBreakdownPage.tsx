@@ -1,8 +1,9 @@
-import { ChevronRight, ExternalLink, Info, Mail, Phone } from "lucide-react";
+import { ChevronRight, ExternalLink, Mail, Phone } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { cn } from "../../lib/cn";
+import { InfoTooltip } from "../../components/ui/InfoTooltip";
 import { getCompany, listDecisionMakers } from "../../api/companies";
 import type { CompanyOut, DecisionMakerOut } from "../../api/icp";
 import { getScore, isScored, type BuyingEventOut, type ScoreDetailOut, type NotScoredOut } from "../../api/scores";
@@ -21,6 +22,15 @@ function getCompanyIdFromUrl(): string | null {
 }
 
 const pageBackground = "linear-gradient(180deg, rgb(246, 247, 251) 0%, rgb(242, 244, 250) 100%)";
+
+/* Equal-height cards with internal scroll (scrollbar hidden) - same pattern as
+ * Signal Detail's Event Details / Sources / Similar Companies row. */
+const EQUAL_CARD =
+  "flex h-auto max-h-[420px] min-h-0 flex-col overflow-hidden rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)] xl:h-[360px] xl:max-h-[360px]";
+const EQUAL_CARD_BODY =
+  "mt-[16px] min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden";
+const EQUAL_CARD_TALL =
+  "flex h-auto max-h-[520px] min-h-0 flex-col overflow-hidden rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)] xl:h-[420px] xl:max-h-[420px]";
 
 function formatUsd(n: number | null | undefined): string {
   if (n === null || n === undefined) return "—";
@@ -196,17 +206,19 @@ function Composition({ score }: { score: ScoreDetailOut }) {
     },
   ];
   return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Lead Score <Info className="size-[14px] text-[#cbd5e1]" /></h2>
-      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Buying Evidence + Contact Access − Negative Evidence, clamped to 0–100.</p>
-      <div className="mt-[16px] flex flex-col gap-[12px]">
+    <section className={EQUAL_CARD}>
+      <div className="shrink-0">
+        <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Lead Score <InfoTooltip text="Buying Evidence + Contact Access - Negative Evidence, clamped to 0-100. Revenue, funding and headcount deliberately do not affect it - they only set Expected Deal Value." /></h2>
+        <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Buying Evidence + Contact Access − Negative Evidence, clamped to 0–100.</p>
+      </div>
+      <div className={`${EQUAL_CARD_BODY} flex flex-col gap-[12px]`}>
         {rows.map((r) => (
           <div key={r.label}>
             <div className="flex items-center justify-between gap-[10px]">
               <span className="text-[13px] font-medium text-[#334155]">{r.label}</span>
-              <span className={cn("text-[14px] font-bold", r.tone)}>{r.sign} {Math.round(r.value)} <span className="text-[12px] font-normal text-[#94a3b8]">{r.max}</span></span>
+              <span className={cn("shrink-0 text-[14px] font-bold", r.tone)}>{r.sign} {Math.round(r.value)} <span className="text-[12px] font-normal text-[#94a3b8]">{r.max}</span></span>
             </div>
-            <p className="m-0 mt-[2px] text-[11px] text-[#94a3b8]">{r.detail}</p>
+            <p className="m-0 mt-[2px] text-[11px] leading-[16px] text-[#94a3b8]">{r.detail}</p>
           </div>
         ))}
         <div className="mt-[4px] flex items-center justify-between gap-[10px] border-t border-[#f1f5f9] pt-[12px]">
@@ -222,16 +234,18 @@ function Composition({ score }: { score: ScoreDetailOut }) {
 function ContactAccessCard({ score, contacts }: { score: ScoreDetailOut; contacts: DecisionMakerOut[] }) {
   const achievedScore = Math.round(score.contact_access_score ?? 0);
   return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Contact Access <Info className="size-[14px] text-[#cbd5e1]" /></h2>
-      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">
-        Scored once, from the single strongest reachable contact - never summed across contacts.
-      </p>
+    <section className={EQUAL_CARD}>
+      <div className="shrink-0">
+        <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Contact Access <InfoTooltip text="Scored once per company from the single strongest reachable contact - never summed across contacts. An economic buyer with a verified email is worth 20; a generic company contact, 3." /></h2>
+        <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">
+          Scored once, from the single strongest reachable contact - never summed across contacts.
+        </p>
+      </div>
 
       {contacts.length === 0 ? (
         <p className="m-0 mt-[16px] text-[13px] text-[#94a3b8]">No contacts found for this company yet.</p>
       ) : (
-        <div className="mt-[14px] flex flex-col gap-[8px]">
+        <div className={`${EQUAL_CARD_BODY} flex flex-col gap-[8px]`}>
           {contacts.map((c) => {
             const tier = contactTier(c);
             const counted = tier.score === achievedScore && tier.score === Math.max(...contacts.map((x) => contactTier(x).score));
@@ -262,7 +276,7 @@ function ContactAccessCard({ score, contacts }: { score: ScoreDetailOut; contact
         </div>
       )}
 
-      <div className="mt-[16px] border-t border-[#f1f5f9] pt-[12px]">
+      <div className="mt-[12px] shrink-0 border-t border-[#f1f5f9] pt-[12px]">
         <p className="m-0 text-[11px] font-semibold text-[#94a3b8]">Scoring tiers</p>
         <div className="mt-[6px] flex flex-col gap-[3px]">
           {CONTACT_TIERS.map((t) => (
@@ -280,20 +294,22 @@ function ContactAccessCard({ score, contacts }: { score: ScoreDetailOut; contact
 /* ---- Deal potential ---- */
 function DealPotential({ score }: { score: ScoreDetailOut }) {
   return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Deal Potential <Info className="size-[14px] text-[#cbd5e1]" /></h2>
-      <div className="mt-[16px] grid grid-cols-2 gap-[14px]">
-        <Metric label="Expected Range" value={`${formatUsd(score.expected_deal_min_usd)} – ${formatUsd(score.expected_deal_max_usd)}`} />
-        <Metric label="Midpoint" value={formatUsd(score.expected_deal_value_usd)} />
-        <Metric label="Basis" value={titleize(score.deal_value_basis)} />
-        <Metric label="Deal Confidence" value={score.deal_value_confidence ?? "—"} />
-        <Metric label="Provisional Weighted Value" value={formatUsd(score.expected_revenue_usd)} />
-        <Metric label="Commercially Viable" value={score.commercially_viable ? "Yes" : "No"} />
+    <section className={EQUAL_CARD}>
+      <h2 className="m-0 flex shrink-0 items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Deal Potential <InfoTooltip text="Expected Deal Value, banded from company revenue. Recent, relevant funding can lift it one band at most. Unknown revenue falls to the most conservative band." /></h2>
+      <div className={`${EQUAL_CARD_BODY} flex flex-col`}>
+        <div className="grid grid-cols-2 gap-[14px]">
+          <Metric label="Expected Range" value={`${formatUsd(score.expected_deal_min_usd)} – ${formatUsd(score.expected_deal_max_usd)}`} />
+          <Metric label="Midpoint" value={formatUsd(score.expected_deal_value_usd)} />
+          <Metric label="Basis" value={titleize(score.deal_value_basis)} />
+          <Metric label="Deal Confidence" value={score.deal_value_confidence ?? "—"} />
+          <Metric label="Provisional Weighted Value" value={formatUsd(score.expected_revenue_usd)} />
+          <Metric label="Commercially Viable" value={score.commercially_viable ? "Yes" : "No"} />
+        </div>
+        <p className="m-0 mt-[14px] rounded-[8px] bg-[#f8fafc] p-[10px] text-[12px] leading-[18px] text-[#94a3b8]">
+          Provisional weighted value = Lead Score ÷ 100 × deal midpoint. This is not yet calibrated from
+          historical conversion outcomes - it is a provisional proxy.
+        </p>
       </div>
-      <p className="m-0 mt-[14px] rounded-[8px] bg-[#f8fafc] p-[10px] text-[12px] text-[#94a3b8]">
-        Provisional weighted value = Lead Score ÷ 100 × deal midpoint. This is not yet calibrated from
-        historical conversion outcomes - it is a provisional proxy.
-      </p>
     </section>
   );
 }
@@ -311,9 +327,9 @@ function Metric({ label, value }: { label: string; value: string }) {
 function Recommendation({ score }: { score: ScoreDetailOut }) {
   const risks = score.events.filter((e) => e.is_negative);
   return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Sales Recommendation</h2>
-      <div className="mt-[14px] flex flex-col gap-[12px]">
+    <section className={`${EQUAL_CARD_TALL} h-full`}>
+      <h2 className="m-0 shrink-0 text-[16px] font-bold text-[#0f172a]">Sales Recommendation</h2>
+      <div className={`${EQUAL_CARD_BODY} flex flex-col gap-[12px]`}>
         <Field label="Why now" value={score.why_now} />
         <Field label="Best XSparks offering" value={score.best_offering} />
         <Field label="Recommended action" value={score.recommended_action} />
@@ -334,7 +350,7 @@ function Field({ label, value }: { label: string; value: string | null }) {
   return (
     <div>
       <p className="m-0 text-[12px] font-semibold text-[#94a3b8]">{label}</p>
-      <p className="m-0 mt-[3px] text-[13px] text-[#334155]">{value || "—"}</p>
+      <p className="m-0 mt-[3px] break-words text-[13px] leading-[19px] text-[#334155]">{value || "—"}</p>
     </div>
   );
 }
@@ -523,13 +539,15 @@ function EvidenceEvents({ events }: { events: BuyingEventOut[] }) {
   const weightIndexById = new Map(positive.map((e, i) => [e.buying_event_id, i < 3 ? i : null]));
   const sorted = [...positive, ...negative];
   return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Evidence Events <Info className="size-[14px] text-[#cbd5e1]" /></h2>
-      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Every real signal we found, strongest first. Duplicate articles about the same event are combined into one. Only your top 3 signals actually count toward the score below.</p>
+    <section className={`${EQUAL_CARD_TALL} h-full`}>
+      <div className="shrink-0">
+        <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">Evidence Events <InfoTooltip text="Only the strongest three independent events contribute, weighted 1.0 / 0.6 / 0.4 and capped at 80. Several articles about one event count once, with the extra sources raising confidence instead." /></h2>
+        <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Every real signal we found, strongest first. Duplicate articles about the same event are combined into one. Only your top 3 signals actually count toward the score below.</p>
+      </div>
       {events.length === 0 ? (
         <p className="m-0 mt-[16px] text-[13px] text-[#94a3b8]">No buying events found for this company yet.</p>
       ) : (
-        <div className="mt-[16px] flex flex-col gap-[12px]">
+        <div className={`${EQUAL_CARD_BODY} flex flex-col gap-[12px]`}>
           {sorted.map((e) => (
             <EvidenceEvent event={e} key={e.buying_event_id} weightIndex={weightIndexById.get(e.buying_event_id) ?? null} />
           ))}
@@ -567,16 +585,18 @@ export function ScoreBreakdownPage() {
             <p className="mt-[22px] text-[14px] text-[#94a3b8]">Not scored yet. Upload prospect data and let research + scoring run.</p>
           ) : (
             <>
-              <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-3">
+              <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-3 xl:items-stretch">
                 <Composition score={s} />
                 <ContactAccessCard contacts={contacts} score={s} />
                 <DealPotential score={s} />
               </div>
-              <div className="mt-[20px] grid grid-cols-1 gap-[20px] xl:grid-cols-3">
-                <div className="xl:col-span-2">
+              <div className="mt-[20px] grid grid-cols-1 gap-[20px] xl:grid-cols-3 xl:items-stretch">
+                <div className="min-h-0 xl:col-span-2">
                   <EvidenceEvents events={s.events} />
                 </div>
-                <Recommendation score={s} />
+                <div className="min-h-0">
+                  <Recommendation score={s} />
+                </div>
               </div>
             </>
           )}

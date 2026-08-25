@@ -16,7 +16,7 @@ import re
 from collections import Counter
 from uuid import UUID
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import BuyingEvent, Company, CompanyImportBatch, DecisionMaker
@@ -49,6 +49,12 @@ def _base_stmt(organisation_id: UUID, include_stale: bool = False):
     return stmt
 
 
+# Sort keys the feed offers. Every one is DESCENDING - a signal feed is read
+# newest/strongest first, and an ascending option would only ever surface the
+# stalest or weakest evidence.
+SORT_KEYS = ("date", "score", "company")
+
+
 async def list_events(
     session: AsyncSession,
     organisation_id: UUID,
@@ -56,27 +62,49 @@ async def list_events(
     page_size: int,
     category: str | None = None,
     import_batch_id: UUID | None = None,
+    event_type: str | None = None,
+    min_score: float | None = None,
+    sector: str | None = None,
+    sort: str = "date",
 ):
     stmt = _base_stmt(organisation_id)
     if category:
         stmt = stmt.where(BuyingEvent.category == category)
     if import_batch_id is not None:
         stmt = stmt.where(_in_batch(import_batch_id))
+    if event_type:
+        stmt = stmt.where(BuyingEvent.event_type == event_type)
+    if min_score is not None:
+        stmt = stmt.where(BuyingEvent.event_score >= min_score)
+    if sector:
+        # Reuses the single industry->sector mapping rather than restating it.
+        from app.services.company_directory import _sector_condition
+
+        condition = _sector_condition(sector)
+        if condition is not None:
+            stmt = stmt.where(condition)
 
     total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
 
-    # Ordered by the real-world event date (published_at) - what the feed's
-    # "Detected" column actually shows - not created_at (when OUR research
-    # happened to discover it). Those can diverge (a re-research pass can
-    # discover an old article days after it was published), which made the
-    # feed's displayed dates look out of order despite technically having a
-    # sort. Events with no known date sort last, tie-broken by created_at so
-    # they're still in a stable, deterministic order rather than scattered.
-    stmt = (
-        stmt.order_by(BuyingEvent.published_at.desc().nulls_last(), BuyingEvent.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+    # Future published_at values are extraction mistakes (LLM guessed a year),
+    # not upcoming events. Treat them like unknown dates for ordering so they
+    # don't float to the top of "Newest first".
+    published = case(
+        (BuyingEvent.published_at > func.now(), None),
+        else_=BuyingEvent.published_at,
     )
+
+    # Every ordering keeps published desc as the final tie-break so equal
+    # scores (or equal company names) still read newest-first rather than in
+    # whatever order the planner returns.
+    if sort == "score":
+        order = (BuyingEvent.event_score.desc().nulls_last(), published.desc().nulls_last())
+    elif sort == "company":
+        order = (Company.company_name.asc(), published.desc().nulls_last())
+    else:
+        order = (published.desc().nulls_last(), BuyingEvent.created_at.desc())
+
+    stmt = stmt.order_by(*order).offset((page - 1) * page_size).limit(page_size)
     rows = (await session.execute(stmt)).all()
     return rows, total
 
@@ -166,13 +194,38 @@ async def org_totals(session: AsyncSession, organisation_id: UUID, import_batch_
     }
 
 
+# Trend window. published_at spans years of real event dates (296 distinct days
+# in the live data), and plotting all of them puts ~300 points on a 580px chart -
+# unreadable, and dominated by history nobody is acting on. 90 days is the
+# window a rep actually works.
+TREND_WINDOW_DAYS = 90
+
+
 async def trend_by_day(session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None):
     tier = _relevance_tier()
-    day = func.date(BuyingEvent.created_at)
+    # published_at, NOT created_at. created_at is when WE inserted the row, so a
+    # single research run stamps every event with the same day and the chart
+    # collapses to one point - "Signal Trend Over Time" then showed a flat dot
+    # on the dashboard and an empty state on Signal Intelligence (which requires
+    # >= 2 points), despite 8+ distinct days of real event dates in the data.
+    #
+    # Events with no published_at are excluded rather than bucketed: an undated
+    # event cannot be placed on a timeline, and defaulting it to today is what
+    # produced the false "all activity happened today" picture in the first place.
+    day = func.date(BuyingEvent.published_at)
     stmt = (
         select(day.label("day"), tier.label("tier"), func.count())
         .join(Company, Company.company_id == BuyingEvent.company_id)
-        .where(Company.organisation_id == organisation_id, BuyingEvent.is_negative.is_(False), BuyingEvent.is_stale.is_(False))
+        .where(
+            Company.organisation_id == organisation_id,
+            BuyingEvent.is_negative.is_(False),
+            BuyingEvent.is_stale.is_(False),
+            BuyingEvent.published_at.isnot(None),
+            BuyingEvent.published_at >= func.now() - text(f"interval '{TREND_WINDOW_DAYS} days'"),
+            # Cap at "now" so future-dated extraction mistakes (2030-01-01 etc.)
+            # do not stretch the x-axis past today and flatten recent activity.
+            BuyingEvent.published_at <= func.now(),
+        )
         .group_by(day, tier)
         .order_by(day)
     )

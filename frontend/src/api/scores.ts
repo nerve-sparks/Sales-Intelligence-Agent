@@ -87,6 +87,8 @@ export type RankedLeadScoreOut = {
   expected_deal_max_usd: number | null;
   expected_deal_value_usd: number | null;
   scored_at: string | null;
+  primary_contact_email: string | null;
+  primary_contact_name: string | null;
 };
 
 export type ScoreRunResult = {

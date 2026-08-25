@@ -149,3 +149,199 @@ export function Sparkline({
     </svg>
   );
 }
+
+/* ------------------------------------------------------------------ */
+/* Multi-series trend chart                                            */
+/* ------------------------------------------------------------------ */
+
+export type TrendLineSeries = { label: string; color: string; values: number[] };
+
+/** Evenly spaced indices for x-axis labels - never more than maxTicks. */
+export function pickTickIndices(length: number, maxTicks = 6): number[] {
+  if (length <= 0) return [];
+  if (length <= maxTicks) return Array.from({ length }, (_, i) => i);
+  const out = new Set<number>([0, length - 1]);
+  for (let t = 1; t < maxTicks - 1; t += 1) {
+    out.add(Math.round((t * (length - 1)) / (maxTicks - 1)));
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+export function formatChartDate(iso: string): string {
+  const d = new Date(iso.includes("T") ? iso : `${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function weekStartKey(iso: string): string {
+  const d = new Date(iso.includes("T") ? iso : `${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  const day = d.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + mondayOffset);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+/**
+ * When a daily series is denser than ~a month of points, roll up to calendar
+ * weeks so the chart stays readable. Below that threshold the raw days are
+ * kept - sparse real data should not be artificially bucketed.
+ */
+export function bucketTrendForChart(
+  labels: string[],
+  series: TrendLineSeries[],
+  dailyLimit = 28,
+): { labels: string[]; series: TrendLineSeries[] } {
+  if (labels.length <= dailyLimit) {
+    return {
+      labels: labels.map(formatChartDate),
+      series,
+    };
+  }
+
+  const buckets: { key: string; sums: number[] }[] = [];
+  const indexByKey = new Map<string, number>();
+
+  labels.forEach((label, i) => {
+    const key = weekStartKey(label);
+    let idx = indexByKey.get(key);
+    if (idx === undefined) {
+      idx = buckets.length;
+      indexByKey.set(key, idx);
+      buckets.push({ key, sums: series.map(() => 0) });
+    }
+    series.forEach((s, si) => {
+      buckets[idx!].sums[si] += s.values[i] ?? 0;
+    });
+  });
+
+  return {
+    labels: buckets.map((b) => formatChartDate(b.key)),
+    series: series.map((s, si) => ({
+      ...s,
+      values: buckets.map((b) => b.sums[si]),
+    })),
+  };
+}
+
+function niceYStep(maxValue: number): number {
+  const rough = maxValue / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(rough || 1));
+  const normalized = rough / magnitude;
+  const nice =
+    normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 ? 2.5 : normalized <= 5 ? 5 : 10;
+  return Math.max(1, Math.ceil(nice * magnitude));
+}
+
+function formatYTick(v: number): string {
+  if (v >= 1000) return `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}K`;
+  return String(v);
+}
+
+/** Clean multi-line trend: week-bucketed when dense, sparse x labels, smooth
+ * strokes, dots only when the series is short enough to stay uncluttered. */
+export function TrendLineChart({
+  labels,
+  series,
+  width = 640,
+  height = 300,
+  xAxisLabel = "Date published",
+  yAxisLabel = "Number of signals",
+}: {
+  labels: string[];
+  series: TrendLineSeries[];
+  width?: number;
+  height?: number;
+  /** Plain-language label for the horizontal axis. */
+  xAxisLabel?: string;
+  /** Plain-language label for the vertical axis. */
+  yAxisLabel?: string;
+}) {
+  const prepared = bucketTrendForChart(labels, series);
+  const chartLabels = prepared.labels;
+  const chartSeries = prepared.series;
+  const n = chartLabels.length;
+  const isWeekly = labels.length > 28;
+  const xLabel = isWeekly && xAxisLabel === "Date published" ? "Week published" : xAxisLabel;
+
+  const left = 58;
+  const right = width - 16;
+  const top = 18;
+  const bottom = height - 48;
+
+  const maxSeriesValue = Math.max(1, ...chartSeries.flatMap((s) => s.values));
+  const step = niceYStep(maxSeriesValue);
+  const yMax = Math.max(step * 4, Math.ceil(maxSeriesValue / step) * step);
+  const gridValues = [0, step, step * 2, step * 3, step * 4]
+    .map((v) => Math.min(v, yMax))
+    .filter((v, i, arr) => arr.indexOf(v) === i);
+
+  const xOf = (i: number) => left + (n > 1 ? (i * (right - left)) / (n - 1) : 0);
+  const yOf = (v: number) => bottom - (v / yMax) * (bottom - top);
+  const tickIndices = pickTickIndices(n, 6);
+  const showDots = n <= 14;
+  const midX = (left + right) / 2;
+  const midY = (top + bottom) / 2;
+
+  return (
+    <svg className="w-full" viewBox={`0 0 ${width} ${height}`}>
+      {/* Y-axis title */}
+      <text
+        fill="#64748b"
+        fontSize="11"
+        fontWeight="600"
+        textAnchor="middle"
+        transform={`rotate(-90, 14, ${midY})`}
+        x={14}
+        y={midY}
+      >
+        {yAxisLabel}
+      </text>
+
+      {gridValues.map((v) => (
+        <g key={v}>
+          <line stroke="#eef2f7" strokeWidth="1" x1={left} x2={right} y1={yOf(v)} y2={yOf(v)} />
+          <text fill="#94a3b8" fontSize="11" textAnchor="end" x={left - 8} y={yOf(v) + 4}>
+            {formatYTick(v)}
+          </text>
+        </g>
+      ))}
+
+      {chartSeries.map((s) => {
+        const pts = s.values.map((v, i) => ({ x: xOf(i), y: yOf(v) }));
+        const line = smoothPath(pts);
+        return (
+          <g key={s.label}>
+            <path d={line} fill="none" stroke={s.color} strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" />
+            {showDots &&
+              pts.map((p, i) => (
+                <circle cx={p.x} cy={p.y} fill="#fff" key={i} r="3.2" stroke={s.color} strokeWidth="2" />
+              ))}
+          </g>
+        );
+      })}
+
+      {tickIndices.map((i) => (
+        <text
+          fill="#94a3b8"
+          fontSize="11"
+          key={`${chartLabels[i]}-${i}`}
+          textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"}
+          x={xOf(i)}
+          y={bottom + 20}
+        >
+          {chartLabels[i]}
+        </text>
+      ))}
+
+      {/* X-axis title */}
+      <text fill="#64748b" fontSize="11" fontWeight="600" textAnchor="middle" x={midX} y={height - 8}>
+        {xLabel}
+      </text>
+    </svg>
+  );
+}
+

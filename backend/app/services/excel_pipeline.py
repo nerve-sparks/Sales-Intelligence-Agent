@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 import openpyxl
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +17,7 @@ from app.models import (
     IcpImportBatch,
     LeadScore,
 )
-from app.services import evidence_scorer, search_signal_ingest
+from app.services import company_enrichment, evidence_scorer, search_signal_ingest
 from app.services import zoominfo_mapper as mapper
 from app.services.offering_profile_service import ensure_offering_profile
 
@@ -27,22 +27,56 @@ DM_UPDATE_COLS = [c for c in mapper.DECISION_MAKER_COLUMNS if c not in ("zi_pers
 logger = logging.getLogger(__name__)
 
 
+# A multi-row INSERT spends one bind parameter per column per row, and the
+# driver caps how many one statement may carry. Inserting every row at once
+# therefore breaks past a certain upload size - a 2,573-company file needs
+# 2573 x 33 = 84,909 parameters and the failure arrives as a multi-megabyte
+# dump of every placeholder.
+#
+# 32767, NOT PostgreSQL's documented 65535. asyncpg reports
+#
+#     asyncpg.exceptions._base.InterfaceError:
+#     the number of query arguments cannot exceed 32767
+#
+# because the wire protocol counts parameters in a SIGNED int16. Sizing to the
+# documented 65535 looks correct, passes a "under the limit?" check, and still
+# fails at runtime - which is exactly what happened here on the first attempt
+# at this fix.
+#
+# The limit was unreachable while only ZoomInfo exports could be ingested;
+# table_mapper made arbitrary spreadsheets ingestable and immediately exceeded
+# it on both tables at once - 8,338 contacts x 14 = 116,732.
+#
+# Chunk sizes are DERIVED from the column count rather than hardcoded, so
+# adding a column to either model cannot silently reintroduce this. The 90%
+# margin leaves room for the ON CONFLICT DO UPDATE clause's own parameters.
+PG_MAX_BIND_PARAMS = 32_767
+
+
+def _max_rows_per_insert(column_count: int) -> int:
+    return max(1, int(PG_MAX_BIND_PARAMS * 0.9) // column_count)
+
+
+COMPANY_INSERT_CHUNK = _max_rows_per_insert(len(mapper.COMPANY_COLUMNS))
+DM_INSERT_CHUNK = _max_rows_per_insert(len(mapper.DECISION_MAKER_COLUMNS))
+
+
 async def _upsert_companies(session: AsyncSession, company_rows: list[dict]) -> None:
-    if not company_rows:
-        return
-    stmt = pg_insert(Company).values(company_rows)
-    update_cols = {c: getattr(stmt.excluded, c) for c in COMPANY_UPDATE_COLS}
-    stmt = stmt.on_conflict_do_update(index_elements=["organisation_id", "zi_company_id"], set_=update_cols)
-    await session.execute(stmt)
+    for start in range(0, len(company_rows), COMPANY_INSERT_CHUNK):
+        chunk = company_rows[start : start + COMPANY_INSERT_CHUNK]
+        stmt = pg_insert(Company).values(chunk)
+        update_cols = {c: getattr(stmt.excluded, c) for c in COMPANY_UPDATE_COLS}
+        stmt = stmt.on_conflict_do_update(index_elements=["organisation_id", "zi_company_id"], set_=update_cols)
+        await session.execute(stmt)
 
 
 async def _upsert_decision_makers(session: AsyncSession, dm_rows: list[dict]) -> None:
-    if not dm_rows:
-        return
-    stmt = pg_insert(DecisionMaker).values(dm_rows)
-    update_cols = {c: getattr(stmt.excluded, c) for c in DM_UPDATE_COLS}
-    stmt = stmt.on_conflict_do_update(index_elements=["organisation_id", "zi_person_id"], set_=update_cols)
-    await session.execute(stmt)
+    for start in range(0, len(dm_rows), DM_INSERT_CHUNK):
+        chunk = dm_rows[start : start + DM_INSERT_CHUNK]
+        stmt = pg_insert(DecisionMaker).values(chunk)
+        update_cols = {c: getattr(stmt.excluded, c) for c in DM_UPDATE_COLS}
+        stmt = stmt.on_conflict_do_update(index_elements=["organisation_id", "zi_person_id"], set_=update_cols)
+        await session.execute(stmt)
 
 
 async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: list[dict]) -> dict[int, UUID]:
@@ -182,6 +216,36 @@ async def score_companies_in_background(
             print(f"[UPLOAD] Ensuring XSparks Offering Profile is fresh (auto-syncs from "
                   f"xsparks.ai if missing/stale)...")
             await ensure_offering_profile(session, organisation_id)
+            # Domain enrichment is deliberately NOT run here. company_enrichment
+            # still exists and is tested, but it made every upload block on one
+            # web search per domain-less company (2,552 on a single file) with
+            # no DB write until it finished, so the whole job looked frozen with
+            # every company stuck at 'queued'. Re-enable by calling
+            # enrich_missing_domains here - ideally after research rather than
+            # before it, so the visible stages start immediately.
+            #
+            # Consequence while it is off: research skips any company whose
+            # company_domain is NULL, so a spreadsheet with no website column
+            # scores on contact access alone. That is surfaced as a warning at
+            # ingest time (table_mapper.report_warnings) rather than hidden.
+            domainless = sum(
+                1 for row in (
+                    await session.execute(
+                        select(Company.company_id).where(
+                            Company.company_id.in_(company_id_list),
+                            Company.company_domain.is_(None),
+                        )
+                    )
+                ).all()
+            )
+            if domainless:
+                warnings.append(
+                    f"{domainless} of {len(company_id_list)} company(ies) have no website - "
+                    "research still runs on company name, but match confidence is lower without a domain"
+                )
+                print(f"[UPLOAD] {domainless}/{len(company_id_list)} companies have no domain - "
+                      f"research will use company name (domain enrichment is disabled)")
+
             print(f"[UPLOAD] Offering Profile ready. Handing off to research_companies() "
                   f"for {len(company_id_list)} companies...")
 
@@ -197,6 +261,24 @@ async def score_companies_in_background(
             print(f"[UPLOAD]   research_failures: {research_summary.get('research_failures', 0)} (Tavily)")
             print(f"[UPLOAD]   llm_failures:      {research_summary.get('llm_failures', 0)}")
             print(f"[UPLOAD]   events_stored:     {research_summary.get('events_stored', 0)}\n")
+
+            # Firmographics (industry / HQ / revenue / funding) from you.com.
+            # Runs AFTER buying-event research so the visible research stage
+            # starts immediately, and BEFORE scoring so Expected Deal Value can
+            # use a newly found revenue figure. Only NULL columns are written.
+            firmographic_start = datetime.now(timezone.utc)
+            firmographic_summary = await company_enrichment.enrich_missing_firmographics(
+                session, organisation_id, company_ids=company_id_list,
+            )
+            firmographic_elapsed = (datetime.now(timezone.utc) - firmographic_start).total_seconds()
+            print(f"[UPLOAD] === FIRMOGRAPHICS STAGE COMPLETE in {firmographic_elapsed:.1f}s ===")
+            print(f"[UPLOAD]   attempted: {firmographic_summary.get('attempted', 0)}")
+            print(f"[UPLOAD]   updated:   {firmographic_summary.get('updated', 0)}")
+            print(f"[UPLOAD]   failed:    {firmographic_summary.get('failed', 0)}\n")
+            if firmographic_summary.get("failed"):
+                warnings.append(
+                    f"{firmographic_summary['failed']} company(ies) failed firmographic enrichment"
+                )
 
             if await _cancel_requested(session, import_batch_id):
                 await session.execute(
@@ -350,6 +432,7 @@ async def record_import_batch(
     file_names: list[str],
     total_rows: int,
     zi_to_company_id: dict[int, UUID],
+    ingest_warnings: list[str] | None = None,
 ) -> IcpImportBatch:
     """Persists one prospect-upload event for the Settings prospect-data
     history (and Enterprise List's per-upload filter) - a permanent audit
@@ -374,6 +457,11 @@ async def record_import_batch(
         nurture_count=0,
         scoring_status="pending",
         research_status="pending",
+        # Recorded at creation, not at completion: a file whose rows were all
+        # unreadable finishes in milliseconds with nothing to research, so the
+        # warning has to be attached here or the batch reads "Complete" with no
+        # hint that 1,009 rows were discarded.
+        processing_warnings=ingest_warnings or None,
     )
     session.add(batch)
     await session.commit()
@@ -418,6 +506,24 @@ EXPORT_COLUMNS = [
     "Negative Penalty", "Best XSparks Offering", "Why Now", "Recommended Action",
     "Expected Deal Min", "Expected Deal Max", "Expected Deal Value", "Deal Value Basis",
     "Last Scored",
+    # Added so a row explains ITSELF. Previously a company with no domain
+    # exported as a name and a score of 20 with no indication that it scored low
+    # because it was never researched, rather than because it was researched and
+    # found uninteresting - two very different things for a rep working the sheet.
+    "Researched", "Why Not Researched", "Buying Events", "Top Event", "Evidence Summary",
+    "Contacts", "Primary Contact", "Primary Contact Title", "Primary Contact Email",
+    "Scoring Warnings",
+]
+
+CONTACT_COLUMNS = [
+    "Company Name", "First Name", "Last Name", "Job Title", "Department", "Persona",
+    "Email", "Phone", "Mobile", "LinkedIn",
+]
+
+EVENT_COLUMNS = [
+    "Company Name", "Event Type", "Category", "Title", "Summary", "Published",
+    "Event Score", "Base Strength", "Relevance", "Freshness", "Source Quality",
+    "Confidence", "Negative", "Penalty", "Best Offering", "Source URLs",
 ]
 
 
@@ -425,9 +531,88 @@ def _num(value) -> float | None:
     return float(value) if value is not None else None
 
 
-def build_company_export_workbook(rows: list[tuple[Company, LeadScore | None]]) -> bytes:
-    """Enterprise List "Export" - real company fields plus the evidence-based
-    score (None columns for a company not yet scored)."""
+def _contact_rank(contact) -> tuple:
+    """Sort key picking the contact a rep would actually call: a verified email
+    first, then seniority. Mirrors CONTACT_ACCESS in scoring_config, which
+    scores a company on its single strongest reachable contact."""
+    seniority = ("ceo", "coo", "cto", "cio", "chief", "founder", "president", "vp", "director")
+    title = (contact.job_title or "").lower()
+    rank = next((i for i, word in enumerate(seniority) if word in title), len(seniority))
+    return (0 if contact.email else 1, rank, contact.last_name or "")
+
+
+def _autosize(ws, max_width: int = 60) -> None:
+    """Column widths from the content. Without this every column is 8 characters
+    wide and the sheet is unreadable until the recipient resizes 30 of them."""
+    for column in ws.columns:
+        longest = max((len(str(c.value)) for c in column if c.value is not None), default=0)
+        ws.column_dimensions[column[0].column_letter].width = min(max(12, longest + 2), max_width)
+
+
+def _format_evidence_summary(value) -> str | None:
+    """LeadScore.evidence_summary is JSONB - a LIST of event dicts, not prose.
+    openpyxl raises "Cannot convert [...] to Excel" on a list, so it has to be
+    rendered here. One event per line, strongest first, in the same shape a rep
+    reads on the Score Breakdown page."""
+    if not value:
+        return None
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list):
+        return str(value)
+    lines = []
+    for item in value:
+        if not isinstance(item, dict):
+            lines.append(str(item))
+            continue
+        score = item.get("event_score")
+        parts = [f"[{float(score):.1f}]" if score is not None else "[-]"]
+        if item.get("event_type"):
+            parts.append(str(item["event_type"]))
+        text = item.get("title") or item.get("summary")
+        if text:
+            parts.append(str(text))
+        sources = item.get("sources")
+        if sources:
+            parts.append(f"({sources} source{'s' if sources != 1 else ''})")
+        lines.append(" ".join(parts))
+    return chr(10).join(lines) or None
+
+
+def _text_list(value) -> str | None:
+    """TEXT[] / list column rendered for a cell; tolerates a bare string."""
+    if not value:
+        return None
+    if isinstance(value, str):
+        return value
+    return "; ".join(str(v) for v in value)
+
+
+def build_company_export_workbook(
+    rows: list[tuple[Company, LeadScore | None]],
+    contacts: list | None = None,
+    events: list | None = None,
+) -> bytes:
+    """Enterprise List "Export" - three sheets, so the workbook carries the
+    whole picture rather than one score per company:
+
+      Companies     one row each, with the score AND why it is what it is
+      Contacts      every decision maker, with company
+      Buying Events every live event, with its full score breakdown
+
+    contacts/events are optional so existing callers keep working; when absent
+    only the Companies sheet is written."""
+    contacts = contacts or []
+    events = events or []
+
+    by_company_contacts: dict = {}
+    for contact, company_name in contacts:
+        by_company_contacts.setdefault(contact.company_id, []).append((contact, company_name))
+    by_company_events: dict = {}
+    for event, company_name in events:
+        if not event.is_negative:
+            by_company_events.setdefault(event.company_id, []).append(event)
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Companies"
@@ -441,7 +626,7 @@ def build_company_export_workbook(rows: list[tuple[Company, LeadScore | None]]) 
             location, company.employee_count, company.revenue_usd,
         ]
         if score is None:
-            score_values = [None] * (len(EXPORT_COLUMNS) - len(base))
+            score_values = [None] * 14
         else:
             score_values = [
                 _num(score.lead_score), score.sales_status, score.confidence_label,
@@ -452,8 +637,156 @@ def build_company_export_workbook(rows: list[tuple[Company, LeadScore | None]]) 
                 score.deal_value_basis,
                 score.scored_at.isoformat() if score.scored_at else None,
             ]
-        ws.append(base + score_values)
+
+        company_events = sorted(
+            by_company_events.get(company.company_id, []),
+            key=lambda e: float(e.event_score or 0), reverse=True,
+        )
+        researched = company.search_signals_fetched_at is not None
+        # The distinction that makes a low score readable: never researched vs
+        # researched and genuinely quiet.
+        if researched:
+            not_researched_reason = None
+        elif not company.company_domain:
+            not_researched_reason = "No website - research needs a domain"
+        else:
+            not_researched_reason = "Not yet researched"
+
+        ranked_contacts = sorted(
+            (c for c, _ in by_company_contacts.get(company.company_id, [])), key=_contact_rank
+        )
+        primary = ranked_contacts[0] if ranked_contacts else None
+
+        context_values = [
+            "Yes" if researched else "No",
+            not_researched_reason,
+            len(company_events),
+            company_events[0].title if company_events else None,
+            _format_evidence_summary(score.evidence_summary) if score is not None else None,
+            len(ranked_contacts),
+            " ".join(p for p in [primary.first_name, primary.last_name] if p) if primary else None,
+            primary.job_title if primary else None,
+            primary.email if primary else None,
+            _text_list(score.scoring_warnings) if score is not None else None,
+        ]
+        ws.append(base + score_values + context_values)
+    _autosize(ws)
+
+    if contacts:
+        cs = wb.create_sheet("Contacts")
+        cs.append(CONTACT_COLUMNS)
+        for contact, company_name in contacts:
+            cs.append([
+                company_name, contact.first_name, contact.last_name, contact.job_title,
+                contact.department, contact.persona, contact.email, contact.phone,
+                contact.mobile_phone, contact.linkedin_url,
+            ])
+        _autosize(cs)
+
+    if events:
+        es = wb.create_sheet("Buying Events")
+        es.append(EVENT_COLUMNS)
+        for event, company_name in events:
+            urls = [e.get("url") for e in (event.evidence or []) if isinstance(e, dict) and e.get("url")]
+            es.append([
+                company_name, event.event_type, event.category, event.title, event.summary,
+                event.published_at.isoformat() if event.published_at else None,
+                _num(event.event_score), _num(event.base_strength), _num(event.relevance),
+                _num(event.freshness), _num(event.source_quality), _num(event.extraction_confidence),
+                "Yes" if event.is_negative else "No", _num(event.penalty_value),
+                event.best_offering, "\n".join(urls) or None,
+            ])
+        _autosize(es)
 
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+async def delete_import_batch(
+    session: AsyncSession, workspace_id: UUID, import_batch_id: UUID
+) -> dict | None:
+    """Deletes one upload and the data it introduced. Returns counts, or None
+    when the batch does not exist in this workspace.
+
+    The correctness risk here is SHARED COMPANIES. company_import_batch is a
+    permanent many-to-many (brief item 5): a company that appeared in three
+    uploads has three membership rows, and 64 such rows exist today. Deleting
+    a batch must therefore remove only the companies whose ONLY membership is
+    this batch - anything also present in another upload keeps its row there
+    and must survive, or deleting an old upload would silently destroy
+    companies a newer one still relies on.
+
+    Everything hanging off a deleted company (buying_event, lead_score,
+    decision_maker, trigger_event, company_import_batch, and the legacy
+    intent/news/scoop/signal rows) is removed by ON DELETE CASCADE - see
+    migration d1a7f3c8e5b2, which closed the last two FKs that were still
+    NO ACTION and blocking exactly this.
+    """
+    batch = (
+        await session.execute(
+            select(IcpImportBatch).where(
+                IcpImportBatch.import_batch_id == import_batch_id,
+                IcpImportBatch.workspace_id == workspace_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if batch is None:
+        return None  # absent, or another workspace's - caller turns this into a 404
+
+    exclusive_ids = [
+        row[0]
+        for row in (
+            await session.execute(
+                text(
+                    """
+                    SELECT cib.company_id
+                    FROM company_import_batch cib
+                    WHERE cib.import_batch_id = :batch_id
+                      AND NOT EXISTS (
+                          SELECT 1 FROM company_import_batch other
+                          WHERE other.company_id = cib.company_id
+                            AND other.import_batch_id <> :batch_id
+                      )
+                    """
+                ),
+                {"batch_id": import_batch_id},
+            )
+        ).all()
+    ]
+
+    total_members = (
+        await session.execute(
+            select(func.count())
+            .select_from(CompanyImportBatch)
+            .where(CompanyImportBatch.import_batch_id == import_batch_id)
+        )
+    ).scalar_one()
+
+    events_removed = 0
+    if exclusive_ids:
+        events_removed = (
+            await session.execute(
+                select(func.count())
+                .select_from(BuyingEvent)
+                .where(BuyingEvent.company_id.in_(exclusive_ids))
+            )
+        ).scalar_one()
+        # Cascades do the rest. Chunked because a large upload can exceed the
+        # parameter limit of a single IN (...) statement.
+        for start in range(0, len(exclusive_ids), 500):
+            chunk = exclusive_ids[start : start + 500]
+            await session.execute(delete(Company).where(Company.company_id.in_(chunk)))
+
+    # Deleting the batch cascades its remaining company_import_batch rows,
+    # which is what detaches the shared companies without harming them.
+    await session.delete(batch)
+    await session.commit()
+
+    return {
+        "import_batch_id": str(import_batch_id),
+        "file_names": batch.file_names or [],
+        "companies_deleted": len(exclusive_ids),
+        "companies_kept": total_members - len(exclusive_ids),
+        "buying_events_deleted": events_removed,
+    }

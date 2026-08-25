@@ -5,7 +5,7 @@
  * general-purpose types several pages still import from here;
  * listImportBatches/ImportBatchOut back Onboarding/Settings' upload history,
  * which has no ICP dependency and hits backend/app/routes/icp_imports.py. */
-import { apiGet, apiPost } from "./client";
+import { apiDelete, apiGet, apiPost } from "./client";
 
 export type DecisionMakerOut = {
   decision_maker_id: string;
@@ -101,6 +101,28 @@ export type ImportBatchOut = {
  * filter. Workspace-scoped, no ICP (brief section 7). */
 export function listImportBatches(workspaceId: string): Promise<ImportBatchOut[]> {
   return apiGet<ImportBatchOut[]>(`/workspaces/${workspaceId}/imports`);
+}
+
+export type DeleteImportOut = {
+  import_batch_id: string;
+  file_names: string[];
+  companies_deleted: number;
+  /* Companies that ALSO belong to another upload and were therefore spared.
+   * company_import_batch is a permanent many-to-many, so deleting an older
+   * upload must not destroy companies a newer one still contains - surfacing
+   * this lets the UI say what actually happened instead of implying all of
+   * the batch's companies were removed. */
+  companies_kept: number;
+  buying_events_deleted: number;
+};
+
+/* Destructive and irreversible: deletes the upload AND the companies it
+ * introduced, along with their buying events, scores and contacts. */
+export function deleteImportBatch(
+  workspaceId: string,
+  importBatchId: string,
+): Promise<DeleteImportOut> {
+  return apiDelete<DeleteImportOut>(`/workspaces/${workspaceId}/imports/${importBatchId}`);
 }
 
 /* Per-company job monitoring for one upload (mirrors backend/app/schemas/job.py) -

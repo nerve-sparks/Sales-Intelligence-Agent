@@ -10,7 +10,7 @@ import {
 import { useEffect, useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Delta, FLAT_LINE, Sparkline } from "../../components/ui/dataviz";
+import { Delta, FLAT_LINE, Sparkline, TrendLineChart } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { getSignalStats, type SignalStatsOut, type SignalWithCompanyOut } from "../../api/signals";
 import { getOrganisationId } from "../../lib/session";
@@ -118,72 +118,15 @@ function StatCards({ stats }: { stats: StatCard[] }) {
 
 type TrendSeries = { label: string; color: string; values: number[] };
 
-function niceStep(maxValue: number): number {
-  const rough = maxValue / 4;
-  const magnitude = 10 ** Math.floor(Math.log10(rough || 1));
-  const normalized = rough / magnitude;
-  const step = normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1;
-  return step * magnitude;
-}
-
-function formatTick(v: number): string {
-  return v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}K` : String(v);
-}
-
-function TrendChart({ labels, series }: { labels: string[]; series: TrendSeries[] }) {
-  const w = 640;
-  const h = 300;
-  const left = 44;
-  const right = w - 16;
-  const top = 16;
-  const bottom = 250;
-
-  const maxSeriesValue = Math.max(1, ...series.flatMap((s) => s.values));
-  const step = niceStep(maxSeriesValue);
-  const yMax = step * 4;
-  const gridValues = [0, step, step * 2, step * 3, step * 4].map((v) => ({ v, label: formatTick(v) }));
-
-  const xOf = (i: number) => left + (labels.length > 1 ? (i * (right - left)) / (labels.length - 1) : 0);
-  const yOf = (v: number) => bottom - (v / yMax) * (bottom - top);
-
-  return (
-    <svg className="w-full" viewBox={`0 0 ${w} ${h}`}>
-      {gridValues.map((g) => (
-        <g key={g.v}>
-          <line stroke="#eef2f7" strokeWidth="1" x1={left} x2={right} y1={yOf(g.v)} y2={yOf(g.v)} />
-          <text fill="#94a3b8" fontSize="11" textAnchor="end" x={left - 8} y={yOf(g.v) + 4}>
-            {g.label}
-          </text>
-        </g>
-      ))}
-
-      {series.map((s) => {
-        const points = s.values.map((v, i) => `${xOf(i)},${yOf(v)}`).join(" ");
-        return (
-          <g key={s.label}>
-            <polyline fill="none" points={points} stroke={s.color} strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" />
-            {s.values.map((v, i) => (
-              <circle cx={xOf(i)} cy={yOf(v)} fill={s.color} key={i} r="3.4" />
-            ))}
-          </g>
-        );
-      })}
-
-      {labels.map((label, i) => (
-        <text fill="#94a3b8" fontSize="11" key={label} textAnchor={i === 0 ? "start" : i === labels.length - 1 ? "end" : "middle"} x={xOf(i)} y={bottom + 28}>
-          {label}
-        </text>
-      ))}
-    </svg>
-  );
-}
-
 function SignalTrendCard({ labels, series, hasData }: { labels: string[]; series: TrendSeries[]; hasData: boolean }) {
   return (
     <section className="flex flex-col rounded-[18px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div>
         <h2 className="m-0 text-[18px] font-bold text-[#0f172a]">Signal Trend Over Time</h2>
-        <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Signals detected per day, by confidence tier</p>
+        <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">
+          Y-axis: number of signals · X-axis: date published
+          {labels.length > 28 ? " (shown by week)" : ""} · split by relevance
+        </p>
       </div>
 
       {!hasData ? (
@@ -201,7 +144,7 @@ function SignalTrendCard({ labels, series, hasData }: { labels: string[]; series
             ))}
           </div>
           <div className="mt-[12px] flex-1">
-            <TrendChart labels={labels} series={series} />
+            <TrendLineChart labels={labels} series={series} />
           </div>
         </>
       )}

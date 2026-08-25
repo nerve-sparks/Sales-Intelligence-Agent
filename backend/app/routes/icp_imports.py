@@ -19,3 +19,8 @@ router.get("/{import_batch_id}", response_model=JobStatusOut)(icp_imports_contro
 router.get("/{import_batch_id}/items", response_model=JobItemsOut)(icp_imports_controller.list_items)
 router.post("/{import_batch_id}/retry-failed", response_model=RetryFailedOut)(icp_imports_controller.retry_failed)
 router.post("/{import_batch_id}/cancel", response_model=JobStatusOut)(icp_imports_controller.cancel)
+# Destructive: removes the upload AND the companies it introduced. Companies
+# also present in another upload are kept - see excel_pipeline.delete_import_batch.
+router.delete("/{import_batch_id}", response_model=icp_imports_controller.DeleteImportOut)(
+    icp_imports_controller.delete_import
+)

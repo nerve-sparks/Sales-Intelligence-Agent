@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import BackgroundTasks, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,7 +10,7 @@ from app.core.db import get_db
 from app.models import IcpImportBatch, Workspace
 from app.schemas.icp import ImportBatchOut
 from app.schemas.job import JobItemOut, JobItemsOut, JobStatusOut, RetryFailedOut
-from app.services import company_batch_status, excel_pipeline
+from app.services import company_batch_status, excel_pipeline, table_mapper
 from app.services.excel_pipeline import list_import_batches
 from app.services.zoominfo_mapper import read_rows
 
@@ -47,10 +48,26 @@ async def _ingest_and_schedule(
     if workspace is None:
         raise HTTPException(status_code=404, detail="workspace not found")
 
+    # Two readers. A real ZoomInfo export keeps the original path untouched;
+    # anything else goes through table_mapper, which resolves whatever headers
+    # the file happens to use and synthesises the BIGINT identity columns the
+    # schema requires. Before this, a file without a `ZoomInfo Company ID`
+    # column had EVERY row silently dropped by upsert_rows - a 1,009-row event
+    # attendee list ingested 0 companies, finished in 60ms and reported
+    # "Complete" with no warning.
     raw_rows: list[dict] = []
+    ingest_reports: list[dict] = []
     for upload in files:
         content = await upload.read()
-        raw_rows.extend(read_rows(upload.filename or "", content))
+        filename = upload.filename or ""
+        zi_rows = read_rows(filename, content)
+        if table_mapper.looks_like_zoominfo_export(zi_rows):
+            raw_rows.extend(zi_rows)
+            continue
+        mapped_rows, report = table_mapper.to_canonical_rows(filename, content)
+        report["file"] = filename
+        ingest_reports.append(report)
+        raw_rows.extend(mapped_rows)
 
     zi_to_company_id = await excel_pipeline.run_pipeline(db, workspace.organisation_id, raw_rows)
 
@@ -60,6 +77,7 @@ async def _ingest_and_schedule(
         file_names=[upload.filename or "" for upload in files],
         total_rows=len(raw_rows),
         zi_to_company_id=zi_to_company_id,
+        ingest_warnings=[w for r in ingest_reports for w in table_mapper.report_warnings(r)] or None,
     )
 
     # Runs after this response is sent (own DB session). Scoped to this batch's
@@ -170,3 +188,28 @@ async def cancel(workspace_id: UUID, import_batch_id: UUID, db: AsyncSession = D
     await db.commit()
     data = await company_batch_status.compute_job_status(db, import_batch_id)
     return JobStatusOut(**data)
+
+
+class DeleteImportOut(BaseModel):
+    import_batch_id: str
+    file_names: list[str]
+    companies_deleted: int
+    companies_kept: int
+    buying_events_deleted: int
+
+
+async def delete_import(
+    workspace_id: UUID, import_batch_id: UUID, db: AsyncSession = Depends(get_db)
+) -> DeleteImportOut:
+    """Deletes an upload and the data it introduced.
+
+    Companies that ALSO appear in another upload are kept, not deleted - the
+    membership table is many-to-many, so removing an older batch must not
+    destroy companies a newer one still contains. companies_kept reports how
+    many were spared that way, so the caller can show what actually happened
+    rather than implying everything went.
+    """
+    result = await excel_pipeline.delete_import_batch(db, workspace_id, import_batch_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="import batch not found")
+    return DeleteImportOut(**result)

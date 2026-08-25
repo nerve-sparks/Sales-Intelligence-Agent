@@ -113,6 +113,17 @@ class CountryLeadScoreOut(BaseModel):
     max_lead_score: float
 
 
+class SectorCountOut(BaseModel):
+    """One industry sector with its company counts - the Dashboard globe's
+    industry filter and Enterprise List segmentation both read this instead of
+    carrying their own copy of the industry->sector mapping."""
+
+    sector: str
+    companies: int
+    scored: int = 0
+    sales_ready: int = 0
+
+
 class CompanyStatsOut(BaseModel):
     """Evidence-based company stats (brief item 22) - sales-status bands, not
     high/medium/low intent tiers."""
@@ -128,6 +139,7 @@ class CompanyStatsOut(BaseModel):
     high_confidence: int = 0
     provisional_pipeline_value: float = 0.0
     by_country: list[CountryLeadScoreOut] = []
+    by_sector: list[SectorCountOut] = []
 
 
 class CompanyInsightOut(BaseModel):

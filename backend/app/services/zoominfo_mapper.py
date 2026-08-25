@@ -102,8 +102,22 @@ def normalize_domain(website) -> str | None:
 
 
 def parse_int(value) -> int | None:
+    """Integer from a spreadsheet cell, EXACTLY when the value already is one.
+
+    The int() attempt comes first because going straight through float() loses
+    precision above 2^53: table_mapper's synthetic BIGINT identities are ~19
+    digits, and int(float(3508682770938109839)) returns ...952. Those ids are
+    the (organisation_id, zi_company_id) unique key, so silently rounding them
+    corrupts company identity.
+
+    float() is still the fallback, because Excel hands back "1.0"/1.0 for whole
+    numbers and ZoomInfo's own id columns arrive that way."""
     if value is None or value == "":
         return None
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        pass
     try:
         return int(float(value))
     except (ValueError, TypeError):

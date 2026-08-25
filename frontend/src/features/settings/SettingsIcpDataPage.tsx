@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Building2, ChevronDown, ChevronUp, Pencil, X } from "lucide-react";
+import { Building2, ChevronDown, ChevronUp, Pencil, Trash2, X } from "lucide-react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { OfferingProfileCard } from "../../components/OfferingProfileCard";
@@ -7,6 +7,7 @@ import { cn } from "../../lib/cn";
 import { ApiError, BASE_URL } from "../../api/client";
 import {
   cancelJob,
+  deleteImportBatch,
   getJobItems,
   getJobStatus,
   listImportBatches,
@@ -964,6 +965,41 @@ export function SettingsIcpDataPage() {
   const [history, setHistory] = useState<ImportBatchOut[]>([]);
   const [uploadResult, setUploadResult] = useState<"idle" | "uploading" | ImportBatchOut>("idle");
   const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
+  /* Two-step delete: the trash icon arms it, a second click confirms. The
+     action is irreversible and removes companies, their buying events, scores
+     and contacts - too destructive for a single stray click, and a native
+     confirm() would be blocked in some embedded contexts. */
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
+
+  const handleDeleteBatch = async (importBatchId: string) => {
+    if (!workspaceId) {
+      return;
+    }
+    setDeletingId(importBatchId);
+    try {
+      const result = await deleteImportBatch(workspaceId, importBatchId);
+      // Reports kept companies explicitly: a company present in another upload
+      // survives, so "deleted N" alone would misrepresent what happened.
+      setDeleteNotice(
+        `Deleted ${result.file_names.join(", ") || "upload"} - removed ${result.companies_deleted} company(ies) ` +
+          `and ${result.buying_events_deleted} buying event(s)` +
+          (result.companies_kept > 0
+            ? `; kept ${result.companies_kept} that also belong to another upload.`
+            : "."),
+      );
+      if (expandedBatchId === importBatchId) {
+        setExpandedBatchId(null);
+      }
+      loadHistory();
+    } catch (err) {
+      setDeleteNotice(err instanceof ApiError ? `Delete failed: ${err.message}` : "Delete failed.");
+    } finally {
+      setDeletingId(null);
+      setConfirmingDeleteId(null);
+    }
+  };
 
   const loadHistory = () => {
     if (!workspaceId) {
@@ -1092,6 +1128,18 @@ export function SettingsIcpDataPage() {
 
               <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
                 <h2 className="m-0 font-['Inter'] text-[16px] font-bold text-[#0f172a]">Upload History</h2>
+                {deleteNotice && (
+                  <div className="mt-[10px] flex items-start justify-between gap-[10px] rounded-[8px] border border-[#e9edf5] bg-[#f8fafc] px-[12px] py-[8px]">
+                    <p className="m-0 font-['Inter'] text-[12px] text-[#334155]">{deleteNotice}</p>
+                    <button
+                      className="shrink-0 font-['Inter'] text-[11px] font-semibold text-[#64748b]"
+                      onClick={() => setDeleteNotice(null)}
+                      type="button"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
                 {history.length === 0 ? (
                   <p className="m-0 mt-[10px] font-['Inter'] text-[13px] text-[#64748b]">No uploads yet.</p>
                 ) : (
@@ -1159,11 +1207,54 @@ export function SettingsIcpDataPage() {
                                 <td className={cell}>{pending ? "—" : batch.monitor_count}</td>
                                 <td className={cell}>{pending ? "—" : batch.low_priority_count}</td>
                                 <td className="px-[8px] py-[8px]">
-                                  {expanded ? (
-                                    <ChevronUp className="size-[16px] text-[#64748b]" />
-                                  ) : (
-                                    <ChevronDown className="size-[16px] text-[#64748b]" />
-                                  )}
+                                  <div className="flex items-center justify-end gap-[6px]">
+                                    {/* stopPropagation throughout: the row itself
+                                        toggles the detail panel, and a delete
+                                        click must never also expand it. */}
+                                    {confirmingDeleteId === batch.import_batch_id ? (
+                                      <>
+                                        <button
+                                          className="rounded-[6px] bg-[#dc2626] px-[8px] py-[3px] font-['Inter'] text-[11px] font-semibold text-white disabled:opacity-60"
+                                          disabled={deletingId === batch.import_batch_id}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void handleDeleteBatch(batch.import_batch_id);
+                                          }}
+                                          type="button"
+                                        >
+                                          {deletingId === batch.import_batch_id ? "Deleting…" : "Confirm"}
+                                        </button>
+                                        <button
+                                          className="rounded-[6px] border border-[#e9edf5] px-[8px] py-[3px] font-['Inter'] text-[11px] font-semibold text-[#64748b]"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setConfirmingDeleteId(null);
+                                          }}
+                                          type="button"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <button
+                                        aria-label="Delete this upload and its data"
+                                        className="rounded-[6px] p-[4px] text-[#94a3b8] transition hover:bg-[#fee2e2] hover:text-[#dc2626]"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setConfirmingDeleteId(batch.import_batch_id);
+                                        }}
+                                        title="Delete this upload and the companies it added"
+                                        type="button"
+                                      >
+                                        <Trash2 className="size-[15px]" />
+                                      </button>
+                                    )}
+                                    {expanded ? (
+                                      <ChevronUp className="size-[16px] text-[#64748b]" />
+                                    ) : (
+                                      <ChevronDown className="size-[16px] text-[#64748b]" />
+                                    )}
+                                  </div>
                                 </td>
                               </tr>
                               {expanded && workspaceId && (

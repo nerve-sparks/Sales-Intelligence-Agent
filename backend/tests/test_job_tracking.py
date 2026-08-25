@@ -258,11 +258,25 @@ async def test_retry_failed_endpoint_only_touches_failed_companies(org_ctx, make
 # Permanent vs transient failure classification
 # ---------------------------------------------------------------------------
 
-async def test_no_domain_company_marked_needs_review_not_failed(org_ctx, make_company, monkeypatch):
+async def test_company_without_a_domain_is_still_researched(org_ctx, make_company, monkeypatch):
+    """A missing website used to mark a company needs_review and skip research
+    entirely, on the assumption that the domain was the search anchor. It never
+    was - you_client.build_query keys on the company NAME and only falls back to
+    the domain - and the rule excluded 2,552 of one upload's 2,573 companies.
+
+    The company must therefore reach a real research stage rather than being
+    parked as unresolvable."""
     organisation_id, workspace_id = org_ctx
     company = await make_company(company_domain=None)
     batch = await _make_batch(workspace_id, company)
     monkeypatch.setattr(you_client, "is_configured", lambda: True)
+
+    # Stub the search: now that a domain-less company IS researched, leaving
+    # this unpatched would fire a real you.com request from the test suite.
+    async def _search(_domain, _company_name=None, num=15, **_kwargs):
+        return []
+
+    monkeypatch.setattr(you_client, "search", _search)
 
     async with async_session_maker() as session:
         await search_signal_ingest.research_companies(
@@ -280,13 +294,13 @@ async def test_no_domain_company_marked_needs_review_not_failed(org_ctx, make_co
             )
         ).scalar_one()
 
-    assert row.status == "needs_review"
-    assert row.is_permanent_failure is True
-    # A needs_review company must never be returned by failed_company_ids -
-    # retrying a missing domain can't fix it.
-    async with async_session_maker() as session:
-        ids = await company_batch_status.failed_company_ids(session, batch.import_batch_id)
-    assert ids == []
+    assert row.status != "needs_review", (
+        "a company with no domain must be researched by name, not parked as unresolvable"
+    )
+    assert row.is_permanent_failure is not True, (
+        "a missing website is no longer a permanent failure - the search is anchored "
+        "on the company name, so there is nothing unresolvable about it"
+    )
 
 
 # ---------------------------------------------------------------------------

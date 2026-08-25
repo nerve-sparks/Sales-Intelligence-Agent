@@ -62,13 +62,29 @@ export function rescoreSignals(organisationId: string): Promise<SignalRescoreRes
 
 export function listSignals(
   organisationId: string,
-  params: { page?: number; page_size?: number; category?: string; import_batch_id?: string } = {},
+  /* Every sort is DESCENDING server-side (backend SORT_KEYS) - a signal feed is
+   * read strongest/newest first, so an ascending option would only ever surface
+   * the stalest or weakest evidence. */
+  params: {
+    page?: number;
+    page_size?: number;
+    category?: string;
+    import_batch_id?: string;
+    event_type?: string;
+    min_score?: number;
+    sector?: string;
+    sort?: "date" | "score" | "company";
+  } = {},
 ): Promise<SignalListOut> {
   const query = new URLSearchParams();
   if (params.page) query.set("page", String(params.page));
   if (params.page_size) query.set("page_size", String(params.page_size));
   if (params.category) query.set("category", params.category);
   if (params.import_batch_id) query.set("import_batch_id", params.import_batch_id);
+  if (params.event_type) query.set("event_type", params.event_type);
+  if (params.min_score !== undefined) query.set("min_score", String(params.min_score));
+  if (params.sector) query.set("sector", params.sector);
+  if (params.sort) query.set("sort", params.sort);
   const qs = query.toString();
   return apiGet<SignalListOut>(`/organisations/${organisationId}/signals${qs ? `?${qs}` : ""}`);
 }

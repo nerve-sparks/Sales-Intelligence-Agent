@@ -13,6 +13,7 @@ from app.schemas.company import (
     CompanyListItemOut,
     CompanyListOut,
     CompanyStatsOut,
+    SectorCountOut,
     CountryLeadScoreOut,
 )
 
@@ -63,11 +64,22 @@ async def list_companies(
     return CompanyListOut(items=items, total=total, page=page, page_size=page_size)
 
 
-async def stats(organisation_id: UUID, import_batch_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
+async def stats(
+    organisation_id: UUID,
+    import_batch_id: UUID | None = None,
+    sector: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     """Evidence-based company stats (brief items 22, 4): sales-status bands +
     confidence + provisional pipeline value, optionally batch-scoped."""
     summary = await company_directory.sales_status_summary(db, organisation_id, import_batch_id)
-    country_rows = await company_directory.lead_score_by_country(db, organisation_id, import_batch_id)
+    # by_country honours the sector filter (the globe re-colours); by_sector
+    # deliberately does NOT, so the dropdown keeps showing every sector with its
+    # true total rather than collapsing to the one already selected.
+    country_rows = await company_directory.lead_score_by_country(
+        db, organisation_id, import_batch_id, sector=sector
+    )
+    sector_rows = await company_directory.sector_breakdown(db, organisation_id, import_batch_id)
     return CompanyStatsOut(
         total=summary["total"],
         scored=summary["scored"],
@@ -85,6 +97,7 @@ async def stats(organisation_id: UUID, import_batch_id: UUID | None = None, db: 
             )
             for country, avg, count, max_score in country_rows
         ],
+        by_sector=[SectorCountOut(**row) for row in sector_rows],
     )
 
 
@@ -184,9 +197,10 @@ async def export(organisation_id: UUID, import_batch_id: UUID | None = None, db:
         )
         print(f"[EXPORT]     scoped to {len(company_ids)} companies from this batch's membership table")
 
-    rows = await company_directory.list_companies_for_export(db, organisation_id, company_ids)
-    print(f"[EXPORT]     pulled {len(rows)} row(s) to write into the workbook")
-    workbook_bytes = excel_pipeline.build_company_export_workbook(rows)
+    rows, contacts, events = await company_directory.export_bundle(db, organisation_id, company_ids)
+    print(f"[EXPORT]     pulled {len(rows)} company(ies), {len(contacts)} contact(s), "
+          f"{len(events)} buying event(s) to write into the workbook")
+    workbook_bytes = excel_pipeline.build_company_export_workbook(rows, contacts, events)
     print(f"[EXPORT] <<< Workbook built: {len(workbook_bytes)} bytes -> streaming to browser as "
           f"'companies_export.xlsx'\n")
 

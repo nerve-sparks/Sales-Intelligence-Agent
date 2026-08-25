@@ -288,12 +288,15 @@ def _fake_evidence_item(index: int, url: str | None = None) -> dict:
 
 
 def _patch_search_ok(monkeypatch, items: list[dict]):
-    async def _search(_domain, _company_name=None, num=15):
+    # **kwargs so a new optional argument on you_client.search (location, for
+    # researching a company that has no domain) cannot silently turn this fake
+    # into a TypeError that reads as a research failure.
+    async def _search(_domain, _company_name=None, num=15, **_kwargs):
         return [{"link": it["url"], **it} for it in items]
 
     monkeypatch.setattr(you_client, "is_configured", lambda: True)
     monkeypatch.setattr(you_client, "search", _search)
-    monkeypatch.setattr(you_client, "build_query", lambda domain, company_name=None: f"web:{domain}")
+    monkeypatch.setattr(you_client, "build_query", lambda domain, company_name=None, location=None: f"web:{domain}")
     monkeypatch.setattr(you_client, "is_relevant", lambda *_a, **_kw: True)
     monkeypatch.setattr(you_client, "match_confidence", lambda *_a, **_kw: 0.9)
 

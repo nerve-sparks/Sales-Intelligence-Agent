@@ -70,11 +70,21 @@ async def list_all(
     page_size: int = 25,
     category: str | None = None,
     import_batch_id: UUID | None = None,
+    event_type: str | None = None,
+    min_score: float | None = None,
+    sector: str | None = None,
+    sort: str = "date",
     db: AsyncSession = Depends(get_db),
 ):
+    """Signal Feed listing. Every sort is descending (see SORT_KEYS) - an
+    unknown value falls back to date rather than erroring, so a stale bookmark
+    still returns a sensible feed."""
     page_size = min(page_size, 100)
+    if sort not in buying_event_directory.SORT_KEYS:
+        sort = "date"
     rows, total = await buying_event_directory.list_events(
-        db, organisation_id, page, page_size, category, import_batch_id
+        db, organisation_id, page, page_size, category, import_batch_id,
+        event_type=event_type, min_score=min_score, sector=sector, sort=sort,
     )
     items = [_with_company(event, company_name) for event, company_name in rows]
     return SignalListOut(items=items, total=total, page=page, page_size=page_size)

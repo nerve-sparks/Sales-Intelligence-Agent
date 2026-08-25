@@ -48,7 +48,12 @@ def freshness_factor(published_at: datetime | None, now: datetime) -> float:
         published_at = published_at.replace(tzinfo=timezone.utc)
     age_days = (now - published_at).days
     if age_days < 0:
-        age_days = 0
+        # A future date is not fresh evidence, it is a date we cannot trust -
+        # almost always the extraction LLM inferring a year wrongly. Clamping to
+        # 0 handed these FULL freshness (1.0): 24 live events were dated ahead of
+        # today, one of them 2030-01-01, every one scoring as maximally fresh.
+        # Treated as an unknown date instead, which is what it effectively is.
+        return cfg.FRESHNESS_UNKNOWN_DATE
     for upper, factor in cfg.FRESHNESS_BANDS:
         if age_days <= upper:
             return factor
@@ -754,11 +759,13 @@ async def research_company(
     research_failed = False
     raw_results: list[dict] = []
     try:
-        raw_results = await you_client.search(domain, company.get("company_name"))
+        raw_results = await you_client.search(
+            domain, company.get("company_name"), location=company.get("location")
+        )
     except Exception:
         research_failed = True
 
-    query = you_client.build_query(domain, company.get("company_name"))
+    query = you_client.build_query(domain, company.get("company_name"), company.get("location"))
     evidence_items = []
     seen_urls = set()
     for item in raw_results:

@@ -4,7 +4,6 @@ import {
   Copy,
   Database,
   ExternalLink,
-  Info,
   Radio,
 } from "lucide-react";
 import { useEffect, useState, type ComponentType } from "react";
@@ -23,6 +22,7 @@ import { getCompany } from "../../api/companies";
 import type { CompanyOut } from "../../api/icp";
 import { getOrganisationId } from "../../lib/session";
 import { CATEGORY_DESCRIPTIONS, categoryLabel, categoryStyle } from "../../lib/signalCategories";
+import { InfoTooltip } from "../../components/ui/InfoTooltip";
 
 /* Signal Detail for the evidence-based pipeline (brief item 15) - backed by
  * BuyingEvent, not the legacy Signal table. "Intent"/"confidence-tier"
@@ -248,7 +248,7 @@ function ExtractionDetailsCard({ signal }: { signal: SignalWithCompanyOut | null
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <h2 className="m-0 flex items-center gap-[8px] text-[16px] font-bold text-[#0f172a]">
         Extraction Details
-        <Info className="size-[15px] text-[#94a3b8]" />
+        <InfoTooltip text="event_score = base strength x relevance x freshness x source quality x extraction confidence x status factor. Every multiplier is 0-1 except base strength, so one weak factor caps the whole event." />
       </h2>
       <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">How this event was identified and classified.</p>
 
@@ -280,38 +280,56 @@ function ScoreBreakdownCard({ signal }: { signal: SignalWithCompanyOut | null })
   ];
 
   return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
+    <section className="min-w-0 rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Score Breakdown</h2>
-      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">
-        Event Score = Base Strength × Relevance × Freshness × Source Quality × Extraction Confidence × Status.
+      <p className="m-0 mt-[6px] text-[12px] leading-[18px] text-[#64748b]">
+        Event Score = Base Strength × Relevance × Freshness
+        <br />
+        × Source Quality × Extraction Confidence × Status
       </p>
 
-      <div className="mt-[16px] flex flex-col items-center gap-[22px] sm:flex-row">
-        <div className="relative size-[170px] shrink-0">
-          <Donut segments={components.map((c) => ({ value: c.value || 0.01, color: c.color }))} size={170} thickness={24} />
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-[22px] font-bold leading-none text-[#0f172a]">
-              {score} <span className="text-[14px] text-[#94a3b8]">/ 100</span>
+      {/* Stacked layout: this card sits in a narrow grid column, so a side-by-side
+          donut + legend caused labels and multipliers to overlap. Vertical keeps
+          every row fully readable. */}
+      <div className="mt-[18px] flex flex-col items-center gap-[18px]">
+        <div className="relative size-[148px] shrink-0">
+          <Donut
+            segments={components.map((c) => ({ value: c.value || 0.01, color: c.color }))}
+            size={148}
+            thickness={22}
+          />
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+            <span className="text-[20px] font-bold leading-none text-[#0f172a]">
+              {score}
+              <span className="text-[13px] font-semibold text-[#94a3b8]"> / 100</span>
             </span>
-            <span className="mt-[4px] text-[12px]" style={{ color: tier.color }}>
+            <span className="mt-[5px] text-[12px] font-medium" style={{ color: tier.color }}>
               {tier.label}
             </span>
           </div>
         </div>
 
-        <div className="flex w-full flex-1 flex-col gap-[12px]">
+        <ul className="m-0 w-full list-none p-0">
           {components.map((c) => (
-            <div className="flex items-center justify-between gap-[12px]" key={c.label}>
-              <span className="flex items-center gap-[10px]">
-                <span className="size-[10px] rounded-full" style={{ backgroundColor: c.color }} />
-                <span className="text-[13px] font-medium text-[#334155]">{c.label}</span>
+            <li
+              className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-[12px] border-t border-[#f1f5f9] py-[10px] first:border-t-0 first:pt-0 last:pb-0"
+              key={c.label}
+            >
+              <span className="flex min-w-0 items-start gap-[8px]">
+                <span
+                  className="mt-[5px] size-[8px] shrink-0 rounded-full"
+                  style={{ backgroundColor: c.color }}
+                />
+                <span className="text-[13px] font-medium leading-[18px] text-[#334155]">
+                  {c.label}
+                </span>
               </span>
-              <span className="whitespace-nowrap text-[13px] font-semibold text-[#0f172a]">
+              <span className="pt-[1px] text-[13px] font-semibold tabular-nums text-[#0f172a]">
                 {c.value.toFixed(2)}×
               </span>
-            </div>
+            </li>
           ))}
-        </div>
+        </ul>
       </div>
     </section>
   );
@@ -320,6 +338,15 @@ function ScoreBreakdownCard({ signal }: { signal: SignalWithCompanyOut | null })
 /* ------------------------------------------------------------------ */
 /* Details / Sources / Related companies                               */
 /* ------------------------------------------------------------------ */
+
+/* Shared shell for the three side-by-side cards. Equal fixed height so a long
+ * Sources body no longer stretches Event Details / Similar Companies into a
+ * mostly blank column; overflow scrolls inside the card instead. */
+const EQUAL_CARD =
+  "flex h-auto max-h-[420px] min-h-0 flex-col overflow-hidden rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)] lg:h-[360px] lg:max-h-[360px]";
+/* Scroll without a visible scrollbar - content still scrolls via wheel/trackpad. */
+const EQUAL_CARD_BODY =
+  "mt-[16px] min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden";
 
 function SignalDetailsCard({ signal, company }: { signal: SignalWithCompanyOut | null; company: CompanyOut | null }) {
   if (!signal) return null;
@@ -340,14 +367,14 @@ function SignalDetailsCard({ signal, company }: { signal: SignalWithCompanyOut |
   const description = signal.summary ?? "No summary was extracted for this event.";
 
   return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Event Details</h2>
+    <section className={EQUAL_CARD}>
+      <h2 className="m-0 shrink-0 text-[16px] font-bold text-[#0f172a]">Event Details</h2>
 
-      <dl className="mt-[16px] flex flex-col gap-[12px]">
+      <dl className={`${EQUAL_CARD_BODY} m-0 flex flex-col gap-[12px]`}>
         {rows.map((row) => (
           <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-[12px]" key={row.label}>
             <dt className="text-[13px] text-[#94a3b8]">{row.label}</dt>
-            <dd className="m-0 text-[13px] font-medium text-[#334155]">{row.value}</dd>
+            <dd className="m-0 break-words text-[13px] font-medium text-[#334155]">{row.value}</dd>
           </div>
         ))}
 
@@ -362,7 +389,7 @@ function SignalDetailsCard({ signal, company }: { signal: SignalWithCompanyOut |
 
         <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-[12px]">
           <dt className="text-[13px] text-[#94a3b8]">Description</dt>
-          <dd className="m-0 text-[13px] leading-[20px] text-[#334155]">{description}</dd>
+          <dd className="m-0 break-words text-[13px] leading-[20px] text-[#334155]">{description}</dd>
         </div>
       </dl>
     </section>
@@ -377,15 +404,15 @@ function SourceSnippetCard({ signal }: { signal: SignalWithCompanyOut | null }) 
   const sources = signal.evidence ?? [];
 
   return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">
+    <section className={EQUAL_CARD}>
+      <h2 className="m-0 shrink-0 text-[16px] font-bold text-[#0f172a]">
         {sources.length > 1 ? `Sources (${sources.length})` : "Source"}
       </h2>
 
       {sources.length === 0 ? (
         <p className="m-0 mt-[16px] text-[13px] text-[#94a3b8]">No source captured for this event.</p>
       ) : (
-        <div className="mt-[16px] flex flex-col gap-[16px]">
+        <div className={`${EQUAL_CARD_BODY} flex flex-col gap-[16px]`}>
           {sources.slice(0, 5).map((src, i) => (
             <div key={i}>
               <div className="flex items-center gap-[10px]">
@@ -397,7 +424,9 @@ function SourceSnippetCard({ signal }: { signal: SignalWithCompanyOut | null }) 
                   <p className="m-0 text-[12px] text-[#94a3b8]">{src.published_date ?? "Date unknown"}</p>
                 </div>
               </div>
-              {src.snippet && <p className="m-0 mt-[8px] text-[13px] leading-[20px] text-[#64748b]">{src.snippet}</p>}
+              {src.snippet && (
+                <p className="m-0 mt-[8px] break-words text-[13px] leading-[20px] text-[#64748b]">{src.snippet}</p>
+              )}
               {src.url && (
                 <a
                   className="mt-[8px] flex w-fit items-center gap-[7px] text-[13px] font-semibold text-[#5b3df5] no-underline"
@@ -423,16 +452,18 @@ type RelatedCompany = { companyId: string; name: string; score: number };
  * similarity model in the backend, so "similar" = same category). */
 function SimilarCompaniesCard({ related, categoryName }: { related: RelatedCompany[]; categoryName: string }) {
   return (
-    <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Companies with Similar Events</h2>
-      <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Other companies with a {categoryName} event.</p>
+    <section className={EQUAL_CARD}>
+      <div className="shrink-0">
+        <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Companies with Similar Events</h2>
+        <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">Other companies with a {categoryName} event.</p>
+      </div>
 
       {related.length === 0 ? (
         <p className="m-0 mt-[16px] text-[13px] text-[#94a3b8]">
           No other companies have a {categoryName} event yet.
         </p>
       ) : (
-        <div className="mt-[16px] flex flex-col gap-[16px]">
+        <div className={`${EQUAL_CARD_BODY} flex flex-col gap-[16px]`}>
           {related.map((c) => (
             <div
               className="flex cursor-pointer items-center gap-[12px]"

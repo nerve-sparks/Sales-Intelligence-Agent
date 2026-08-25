@@ -59,7 +59,7 @@ function toStatCards(data: CompanyStatsOut): StatCard[] {
   ];
 }
 
-const emptyStats = toStatCards({ total: 0, scored: 0, unscored: 0, sales_ready: 0, high_priority: 0, warm: 0, monitor: 0, low_priority: 0, high_confidence: 0, provisional_pipeline_value: 0, by_country: [] });
+const emptyStats = toStatCards({ total: 0, scored: 0, unscored: 0, sales_ready: 0, high_priority: 0, warm: 0, monitor: 0, low_priority: 0, high_confidence: 0, provisional_pipeline_value: 0, by_country: [], by_sector: [] });
 
 function StatCards({ stats }: { stats: StatCard[] }) {
   return (
