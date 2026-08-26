@@ -42,6 +42,7 @@ def _event_fields(event: BuyingEvent) -> dict:
         title=event.title,
         summary=event.summary,
         published_at=event.published_at,
+        discovered_at=event.created_at,
         base_strength=float(event.base_strength) if event.base_strength is not None else None,
         relevance=float(event.relevance) if event.relevance is not None else None,
         freshness=float(event.freshness) if event.freshness is not None else None,
@@ -74,6 +75,7 @@ async def list_all(
     min_score: float | None = None,
     sector: str | None = None,
     sort: str = "date",
+    days: int | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Signal Feed listing. Every sort is descending (see SORT_KEYS) - an
@@ -84,7 +86,7 @@ async def list_all(
         sort = "date"
     rows, total = await buying_event_directory.list_events(
         db, organisation_id, page, page_size, category, import_batch_id,
-        event_type=event_type, min_score=min_score, sector=sector, sort=sort,
+        event_type=event_type, min_score=min_score, sector=sector, sort=sort, days=days,
     )
     items = [_with_company(event, company_name) for event, company_name in rows]
     return SignalListOut(items=items, total=total, page=page, page_size=page_size)
@@ -101,7 +103,9 @@ async def get_by_id(organisation_id: UUID, signal_id: UUID, db: AsyncSession = D
 async def stats(organisation_id: UUID, import_batch_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
     counts = await buying_event_directory.relevance_counts(db, organisation_id, import_batch_id)
     category_rows = await buying_event_directory.counts_by_category(db, organisation_id, import_batch_id)
-    trend_rows = await buying_event_directory.trend_by_day(db, organisation_id, import_batch_id)
+    trend_rows, trend_granularity = await buying_event_directory.trend_by_day(
+        db, organisation_id, import_batch_id
+    )
     top_rows = await buying_event_directory.top_events(db, organisation_id, import_batch_id=import_batch_id)
     totals = await buying_event_directory.org_totals(db, organisation_id, import_batch_id)
     histogram_rows = await buying_event_directory.confidence_histogram(db, organisation_id, import_batch_id)
@@ -128,6 +132,7 @@ async def stats(organisation_id: UUID, import_batch_id: UUID | None = None, db: 
             )
             for category, count, company_count, avg_confidence in category_rows
         ],
+        trend_granularity=trend_granularity,
         trend=[
             SignalTrendPoint(date=str(point["date"]), total=point["total"], high=point["high"], medium=point["medium"], low=point["low"])
             for point in trend_rows

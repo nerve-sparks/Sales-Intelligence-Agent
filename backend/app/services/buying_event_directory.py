@@ -14,6 +14,7 @@ via Score Breakdown, not "signals" in the feed sense.
 
 import re
 from collections import Counter
+from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import case, func, select, text
@@ -49,10 +50,12 @@ def _base_stmt(organisation_id: UUID, include_stale: bool = False):
     return stmt
 
 
-# Sort keys the feed offers. Every one is DESCENDING - a signal feed is read
-# newest/strongest first, and an ascending option would only ever surface the
-# stalest or weakest evidence.
-SORT_KEYS = ("date", "score", "company")
+# Sort keys the feed offers. Mostly descending - a signal feed is read
+# newest/strongest first - but "oldest" is deliberately included: it is how you
+# find evidence that is about to age out of the freshness bands (anything past
+# 545 days scores 0), and how you audit the far end of the backfill. Without it
+# the tail of the data is unreachable, since paging to it by hand is impractical.
+SORT_KEYS = ("date", "oldest", "score", "company")
 
 
 async def list_events(
@@ -66,6 +69,7 @@ async def list_events(
     min_score: float | None = None,
     sector: str | None = None,
     sort: str = "date",
+    days: int | None = None,
 ):
     stmt = _base_stmt(organisation_id)
     if category:
@@ -76,6 +80,13 @@ async def list_events(
         stmt = stmt.where(BuyingEvent.event_type == event_type)
     if min_score is not None:
         stmt = stmt.where(BuyingEvent.event_score >= min_score)
+    if days is not None:
+        # Filters on the real event date, so "last 30 days" means the event
+        # happened then - not that we happened to research it then.
+        stmt = stmt.where(
+            BuyingEvent.published_at.isnot(None),
+            BuyingEvent.published_at >= func.now() - text(f"interval '{int(days)} days'"),
+        )
     if sector:
         # Reuses the single industry->sector mapping rather than restating it.
         from app.services.company_directory import _sector_condition
@@ -97,7 +108,11 @@ async def list_events(
     # Every ordering keeps published desc as the final tie-break so equal
     # scores (or equal company names) still read newest-first rather than in
     # whatever order the planner returns.
-    if sort == "score":
+    if sort == "oldest":
+        # nulls_last on BOTH orderings: an undated event has no place at either
+        # end of a timeline, so it never masquerades as the oldest evidence.
+        order = (BuyingEvent.published_at.asc().nulls_last(), BuyingEvent.created_at.asc())
+    elif sort == "score":
         order = (BuyingEvent.event_score.desc().nulls_last(), published.desc().nulls_last())
     elif sort == "company":
         order = (Company.company_name.asc(), published.desc().nulls_last())
@@ -194,14 +209,28 @@ async def org_totals(session: AsyncSession, organisation_id: UUID, import_batch_
     }
 
 
-# Trend window. published_at spans years of real event dates (296 distinct days
-# in the live data), and plotting all of them puts ~300 points on a 580px chart -
-# unreadable, and dominated by history nobody is acting on. 90 days is the
-# window a rep actually works.
-TREND_WINDOW_DAYS = 90
+# Trend coverage.
+#
+# There is NO recency window. A fixed 90-day cap excluded 5,336 of 6,942 events
+# (77%) - the feed listed signals from 2024 and 2023 that simply did not appear
+# on the chart, which is the mismatch this replaced.
+#
+# Legibility is handled by BUCKET WIDTH instead of by throwing data away: the
+# span is measured first, then aggregated by day, week or month so the point
+# count stays readable whatever the range. Callers get the granularity back so
+# the axis can be labelled honestly rather than guessed at from point count.
+TREND_MAX_POINTS = 60
+# Floor for a plausible event date. published_at is LLM-extracted and the live
+# data contains 1883-01-01; without a floor one such row stretches the axis
+# across a century and flattens everything real into a single pixel.
+TREND_EARLIEST_YEAR = 2015
 
 
 async def trend_by_day(session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None):
+    """Signal activity over time, bucketed by real event date.
+
+    Returns (points, granularity) where granularity is "day" | "week" | "month".
+    """
     tier = _relevance_tier()
     # published_at, NOT created_at. created_at is when WE inserted the row, so a
     # single research run stamps every event with the same day and the chart
@@ -221,7 +250,7 @@ async def trend_by_day(session: AsyncSession, organisation_id: UUID, import_batc
             BuyingEvent.is_negative.is_(False),
             BuyingEvent.is_stale.is_(False),
             BuyingEvent.published_at.isnot(None),
-            BuyingEvent.published_at >= func.now() - text(f"interval '{TREND_WINDOW_DAYS} days'"),
+            BuyingEvent.published_at >= text(f"'{TREND_EARLIEST_YEAR}-01-01'::timestamptz"),
             # Cap at "now" so future-dated extraction mistakes (2030-01-01 etc.)
             # do not stretch the x-axis past today and flatten recent activity.
             BuyingEvent.published_at <= func.now(),
@@ -237,10 +266,46 @@ async def trend_by_day(session: AsyncSession, organisation_id: UUID, import_batc
     for day_value, tier_name, count in rows:
         bucket = by_day.setdefault(day_value, {"high": 0, "medium": 0, "low": 0})
         bucket[tier_name] = count
+    if not by_day:
+        return [], "day"
+
+    # Bucket width chosen from the ACTUAL span, so the chart adapts instead of
+    # either dropping data (a fixed window) or emitting 1,400 points (no
+    # window). Aggregated here rather than in SQL because the choice depends on
+    # the span, which is only known after the rows come back - a second query
+    # to measure it first would cost more than folding a few thousand dicts.
+    days_sorted = sorted(by_day)
+    span_days = (days_sorted[-1] - days_sorted[0]).days + 1
+
+    # Widen until the point count actually fits. The ladder previously stopped
+    # at "month", which still produced 133 points across an 11-year span - the
+    # cap has to be enforced, not just aimed at.
+    for granularity, bucket_days in (("day", 1), ("week", 7), ("month", 30), ("quarter", 91), ("year", 365)):
+        if span_days / bucket_days <= TREND_MAX_POINTS:
+            break
+
+    def bucket_key(value):
+        if granularity == "day":
+            return value
+        if granularity == "week":
+            return value - timedelta(days=value.weekday())   # Monday of that week
+        if granularity == "month":
+            return value.replace(day=1)
+        if granularity == "quarter":
+            return value.replace(month=((value.month - 1) // 3) * 3 + 1, day=1)
+        return value.replace(month=1, day=1)
+
+    merged: dict = {}
+    for day_value, counts in by_day.items():
+        target = merged.setdefault(bucket_key(day_value), {"high": 0, "medium": 0, "low": 0})
+        for tier_name in ("high", "medium", "low"):
+            target[tier_name] += counts[tier_name]
+
     return [
-        {"date": day_value, "high": b["high"], "medium": b["medium"], "low": b["low"], "total": b["high"] + b["medium"] + b["low"]}
-        for day_value, b in sorted(by_day.items())
-    ]
+        {"date": key, "high": b["high"], "medium": b["medium"], "low": b["low"],
+         "total": b["high"] + b["medium"] + b["low"]}
+        for key, b in sorted(merged.items())
+    ], granularity
 
 
 async def top_events(session: AsyncSession, organisation_id: UUID, limit: int = 5, import_batch_id: UUID | None = None):

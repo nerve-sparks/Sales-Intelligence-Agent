@@ -10,7 +10,16 @@ import { lazy, Suspense } from "react";
 import earthImage from "../../assets/earth.png";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Delta, FLAT_LINE, Sparkline, TrendLineChart, UpTriangle } from "../../components/ui/dataviz";
+import {
+  Delta,
+  FLAT_LINE,
+  Sparkline,
+  TrendLineChart,
+  UpTriangle,
+  formatChartDate,
+  spansMultipleYears,
+  type TrendGranularity,
+} from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { InfoTooltip } from "../../components/ui/InfoTooltip";
 import { useEffect, useRef, useState } from "react";
@@ -266,10 +275,17 @@ function ScoreRing({ score, tone }: { score: number; tone: string }) {
 
 const emptyTrend: SignalStatsOut["trend"] = [];
 
-/* Real SignalStatsOut.trend (see api/signals.ts) - one point per day with
- * high/medium/low relevance-tier counts. Dense windows are week-bucketed by
- * TrendLineChart so the x-axis stays readable. */
-function TrendChart({ trend }: { trend: SignalStatsOut["trend"] }) {
+/* Real SignalStatsOut.trend (see api/signals.ts) - one point per bucket with
+ * high/medium/low relevance-tier counts. The API picks the bucket width
+ * (trend_granularity) and reports it; pass it through so the axis labels the
+ * bucket rather than its first day. */
+function TrendChart({
+  trend,
+  granularity,
+}: {
+  trend: SignalStatsOut["trend"];
+  granularity: TrendGranularity;
+}) {
   if (trend.length === 0) {
     return (
       <div className="flex h-[250px] items-center justify-center text-[13px] text-[#94a3b8]">
@@ -285,7 +301,15 @@ function TrendChart({ trend }: { trend: SignalStatsOut["trend"] }) {
     { label: "Low", color: "#2563eb", values: trend.map((t) => t.low) },
   ];
 
-  return <TrendLineChart height={280} labels={labels} series={series} width={580} />;
+  return (
+    <TrendLineChart
+      granularity={granularity}
+      height={280}
+      labels={labels}
+      series={series}
+      width={580}
+    />
+  );
 }
 
 /* Real signalStats.trend daily totals, normalized to bar heights - replaces
@@ -614,11 +638,32 @@ function LeadOpportunityMap({
 /* Lead Trend                                                          */
 /* ------------------------------------------------------------------ */
 
+/* A percentage change measured off an opening bucket holding one or two signals
+ * is arithmetically correct and informationally empty - the live data rendered
+ * "+5550%" from a first bucket of 1. Below this baseline, state the absolute
+ * change instead. */
+const DELTA_MIN_BASELINE = 5;
+
 function LeadTrend({ signalStats }: { signalStats: SignalStatsOut }) {
   const trend = signalStats.trend;
+  const granularity = signalStats.trend_granularity as TrendGranularity;
   const firstTotal = trend[0]?.total ?? 0;
   const lastTotal = trend[trend.length - 1]?.total ?? 0;
-  const delta = firstTotal > 0 ? `${Math.round(((lastTotal - firstTotal) / firstTotal) * 100)}%` : null;
+  const showYear = spansMultipleYears(trend.map((t) => t.date));
+  const delta =
+    trend.length < 2
+      ? null
+      : firstTotal >= DELTA_MIN_BASELINE
+        ? `${Math.round(((lastTotal - firstTotal) / firstTotal) * 100)}%`
+        : `${lastTotal - firstTotal >= 0 ? "+" : ""}${lastTotal - firstTotal} signals`;
+  const period =
+    trend.length >= 2
+      ? `${formatChartDate(trend[0].date, granularity, showYear)} - ${formatChartDate(
+          trend[trend.length - 1].date,
+          granularity,
+          showYear,
+        )}`
+      : null;
 
   const trendBuckets = [
     { label: "High", value: String(signalStats.high_relevance), className: "bg-[#f5f3ff] text-[#7c3aed]" },
@@ -630,7 +675,8 @@ function LeadTrend({ signalStats }: { signalStats: SignalStatsOut }) {
     <section className="flex flex-col rounded-[18px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <h2 className="m-0 text-[18px] font-bold text-[#0f172a]">Signal Trends</h2>
       <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">
-        Y-axis: number of signals · X-axis: date published
+        Y-axis: number of signals · X-axis: date the event was published
+        {granularity !== "day" ? ` (grouped by ${granularity})` : ""}
       </p>
 
       <div className="mt-[14px] flex items-center gap-[10px]">
@@ -640,12 +686,12 @@ function LeadTrend({ signalStats }: { signalStats: SignalStatsOut }) {
       {delta && (
         <p className="m-0 mt-[8px] flex items-center gap-[8px] text-[12px] text-[#94a3b8]">
           <Delta value={delta} />
-          over this period
+          {period ? `first to last bucket, ${period}` : "over this period"}
         </p>
       )}
 
       <div className="mt-[10px] flex-1">
-        <TrendChart trend={trend} />
+        <TrendChart granularity={granularity} trend={trend} />
       </div>
 
       <div className="mt-[16px] grid grid-cols-3 gap-[14px]">
@@ -935,6 +981,7 @@ const emptySignalStats: SignalStatsOut = {
   actionable_count: 0,
   by_category: [],
   trend: emptyTrend,
+  trend_granularity: "day",
   top_signals: [],
   histogram: [],
   by_country: [],

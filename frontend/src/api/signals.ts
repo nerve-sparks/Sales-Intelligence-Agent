@@ -12,6 +12,12 @@ export type SignalOut = {
   title: string | null;
   summary: string | null;
   published_at: string | null;
+  /* When research FOUND the event, as opposed to when it happened. Always
+   * present, so a signal can always show a real date - 20% of events have no
+   * sourceable publish date. Never substituted for published_at: freshness is
+   * scored from that field, and treating discovery as publication would give
+   * events of unknown age full freshness credit. */
+  discovered_at: string | null;
   base_strength: number | null;
   relevance: number | null;
   freshness: number | null;
@@ -62,9 +68,9 @@ export function rescoreSignals(organisationId: string): Promise<SignalRescoreRes
 
 export function listSignals(
   organisationId: string,
-  /* Every sort is DESCENDING server-side (backend SORT_KEYS) - a signal feed is
-   * read strongest/newest first, so an ascending option would only ever surface
-   * the stalest or weakest evidence. */
+  /* Sorts are descending except "oldest", which exists to find evidence about
+   * to age out of the freshness bands (past 545 days it scores 0) and to audit
+   * the far end of the backfill - unreachable otherwise. */
   params: {
     page?: number;
     page_size?: number;
@@ -73,7 +79,10 @@ export function listSignals(
     event_type?: string;
     min_score?: number;
     sector?: string;
-    sort?: "date" | "score" | "company";
+    sort?: "date" | "oldest" | "score" | "company";
+    /* Period in days, filtered on the real event date - "last 30 days" means
+     * the event happened then, not that we researched it then. */
+    days?: number;
   } = {},
 ): Promise<SignalListOut> {
   const query = new URLSearchParams();
@@ -85,6 +94,7 @@ export function listSignals(
   if (params.min_score !== undefined) query.set("min_score", String(params.min_score));
   if (params.sector) query.set("sector", params.sector);
   if (params.sort) query.set("sort", params.sort);
+  if (params.days !== undefined) query.set("days", String(params.days));
   const qs = query.toString();
   return apiGet<SignalListOut>(`/organisations/${organisationId}/signals${qs ? `?${qs}` : ""}`);
 }
@@ -138,6 +148,11 @@ export type SignalStatsOut = {
   actionable_count: number;
   by_category: SignalCategoryCount[];
   trend: SignalTrendPoint[];
+  /* Bucket width the trend points are aggregated at: "day" | "week" |
+   * "month" | "quarter" | "year". Chosen server-side from the actual date
+   * span so the chart never exceeds a readable point count, and sent
+   * explicitly so the axis label is correct rather than inferred. */
+  trend_granularity: string;
   top_signals: SignalWithCompanyOut[];
   histogram: ConfidenceBucketCount[];
   by_country: CountryCount[];

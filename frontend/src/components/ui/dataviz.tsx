@@ -167,10 +167,55 @@ export function pickTickIndices(length: number, maxTicks = 6): number[] {
   return [...out].sort((a, b) => a - b);
 }
 
-export function formatChartDate(iso: string): string {
+/** Bucket width the API actually grouped by - SignalStatsOut.trend_granularity. */
+export type TrendGranularity = "day" | "week" | "month" | "quarter" | "year";
+
+/**
+ * True when the series crosses a calendar-year boundary, in which case the year
+ * MUST appear on every tick. Omitting it turned an ascending 2024-05 -> 2026-08
+ * series into "May 1, Nov 1, Apr 1, Oct 1, Mar 1, Aug 1", which reads as dates
+ * bouncing around inside a single year rather than 27 months of history.
+ */
+export function spansMultipleYears(isoLabels: string[]): boolean {
+  const years = new Set<number>();
+  for (const iso of isoLabels) {
+    const d = new Date(iso.includes("T") ? iso : `${iso}T00:00:00`);
+    if (!Number.isNaN(d.getTime())) years.add(d.getFullYear());
+  }
+  return years.size > 1;
+}
+
+/**
+ * Formats a bucket's start date at the precision the bucket actually carries.
+ * A month of signals labelled "May 1" claims to be one day; a quarter labelled
+ * "Jan 1" claims the same. Label the bucket, not its first instant.
+ */
+export function formatChartDate(
+  iso: string,
+  granularity: TrendGranularity = "day",
+  showYear = true,
+): string {
   const d = new Date(iso.includes("T") ? iso : `${iso}T00:00:00`);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+  switch (granularity) {
+    case "year":
+      return String(d.getFullYear());
+    case "quarter":
+      return `Q${Math.floor(d.getMonth() / 3) + 1} ${d.getFullYear()}`;
+    case "month":
+      return d.toLocaleDateString(
+        undefined,
+        showYear ? { month: "short", year: "numeric" } : { month: "long" },
+      );
+    default:
+      return d.toLocaleDateString(
+        undefined,
+        showYear
+          ? { month: "short", day: "numeric", year: "numeric" }
+          : { month: "short", day: "numeric" },
+      );
+  }
 }
 
 function weekStartKey(iso: string): string {
@@ -186,19 +231,30 @@ function weekStartKey(iso: string): string {
 }
 
 /**
- * When a daily series is denser than ~a month of points, roll up to calendar
+ * When a DAILY series is denser than ~a month of points, roll up to calendar
  * weeks so the chart stays readable. Below that threshold the raw days are
  * kept - sparse real data should not be artificially bucketed.
+ *
+ * Anything coarser than a day is returned untouched: the API has already
+ * bucketed it (trend_by_day picks day/week/month/quarter/year to stay under
+ * TREND_MAX_POINTS). Re-bucketing it here snapped each bucket's start to the
+ * preceding Monday - a 47-point quarterly series had "2015-01-01" relabelled
+ * "2014-12-29" and the axis retitled "Week published" for points holding three
+ * months of data each.
  */
 export function bucketTrendForChart(
   labels: string[],
   series: TrendLineSeries[],
+  granularity: TrendGranularity = "day",
   dailyLimit = 28,
-): { labels: string[]; series: TrendLineSeries[] } {
-  if (labels.length <= dailyLimit) {
+): { labels: string[]; series: TrendLineSeries[]; granularity: TrendGranularity } {
+  const showYear = spansMultipleYears(labels);
+
+  if (granularity !== "day" || labels.length <= dailyLimit) {
     return {
-      labels: labels.map(formatChartDate),
+      labels: labels.map((l) => formatChartDate(l, granularity, showYear)),
       series,
+      granularity,
     };
   }
 
@@ -219,11 +275,12 @@ export function bucketTrendForChart(
   });
 
   return {
-    labels: buckets.map((b) => formatChartDate(b.key)),
+    labels: buckets.map((b) => formatChartDate(b.key, "week", showYear)),
     series: series.map((s, si) => ({
       ...s,
       values: buckets.map((b) => b.sums[si]),
     })),
+    granularity: "week",
   };
 }
 
@@ -243,29 +300,41 @@ function formatYTick(v: number): string {
 
 /** Clean multi-line trend: week-bucketed when dense, sparse x labels, smooth
  * strokes, dots only when the series is short enough to stay uncluttered. */
+const X_AXIS_TITLE: Record<TrendGranularity, string> = {
+  day: "Date published",
+  week: "Week published",
+  month: "Month published",
+  quarter: "Quarter published",
+  year: "Year published",
+};
+
 export function TrendLineChart({
   labels,
   series,
+  granularity = "day",
   width = 640,
   height = 300,
-  xAxisLabel = "Date published",
+  xAxisLabel,
   yAxisLabel = "Number of signals",
 }: {
   labels: string[];
   series: TrendLineSeries[];
+  /** SignalStatsOut.trend_granularity. Drives both the tick format and the
+   *  axis title, which previously inferred "week" from the point count alone
+   *  and so mislabelled every month/quarter series. */
+  granularity?: TrendGranularity;
   width?: number;
   height?: number;
-  /** Plain-language label for the horizontal axis. */
+  /** Overrides the granularity-derived horizontal axis title. */
   xAxisLabel?: string;
   /** Plain-language label for the vertical axis. */
   yAxisLabel?: string;
 }) {
-  const prepared = bucketTrendForChart(labels, series);
+  const prepared = bucketTrendForChart(labels, series, granularity);
   const chartLabels = prepared.labels;
   const chartSeries = prepared.series;
   const n = chartLabels.length;
-  const isWeekly = labels.length > 28;
-  const xLabel = isWeekly && xAxisLabel === "Date published" ? "Week published" : xAxisLabel;
+  const xLabel = xAxisLabel ?? X_AXIS_TITLE[prepared.granularity];
 
   const left = 58;
   const right = width - 16;

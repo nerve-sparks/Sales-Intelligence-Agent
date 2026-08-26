@@ -35,6 +35,17 @@ function relativeTime(iso: string | null): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+/* The ACTUAL event date. relativeTime alone is useless past a few weeks -
+ * "612d ago" tells you nothing you can act on, and it hid genuinely broken
+ * dates in the data (an event dated 1883 reads as just another large number).
+ * Shown as the primary value with the relative form underneath. */
+function absoluteDate(iso: string | null): string {
+  if (!iso) return "No date";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Invalid date";
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
 function titleize(value: string): string {
   return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -123,8 +134,20 @@ function Select({
  * ascending is the useful direction. */
 const SORT_OPTIONS = [
   { value: "date", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
   { value: "score", label: "Highest score" },
   { value: "company", label: "Company A-Z" },
+];
+
+/* Filters on the real event date, not the research date. "Any time" includes
+   events with no date at all; every bounded option excludes them, since an
+   undated event cannot be placed inside a window. */
+const PERIOD_OPTIONS = [
+  { value: "", label: "Any time" },
+  { value: "7", label: "Last 7 days" },
+  { value: "30", label: "Last 30 days" },
+  { value: "90", label: "Last 90 days" },
+  { value: "365", label: "Last 12 months" },
 ];
 
 const MIN_SCORE_OPTIONS = [
@@ -144,6 +167,8 @@ function FilterBar({
   onMinScore,
   sort,
   onSort,
+  period,
+  onPeriod,
   sectors,
 }: {
   category: string;
@@ -154,6 +179,8 @@ function FilterBar({
   onMinScore: (v: string) => void;
   sort: string;
   onSort: (v: string) => void;
+  period: string;
+  onPeriod: (v: string) => void;
   sectors: string[];
 }) {
   return (
@@ -177,6 +204,7 @@ function FilterBar({
         value={sector}
       />
       <Select label="Min score" onChange={onMinScore} options={MIN_SCORE_OPTIONS} value={minScore} />
+      <Select label="Period" onChange={onPeriod} options={PERIOD_OPTIONS} value={period} />
       <Select label="Sort" onChange={onSort} options={SORT_OPTIONS} value={sort} />
     </div>
   );
@@ -191,6 +219,10 @@ type Signal = {
   relevance: string;
   score: number;
   detected: string;
+  detectedOn: string;
+  /* true when detectedOn is the DISCOVERY date, not the event's own publish
+     date - the two must never be presented as the same thing. */
+  dateIsDiscovery: boolean;
 };
 
 function toSignal(s: SignalWithCompanyOut): Signal {
@@ -207,7 +239,12 @@ function toSignal(s: SignalWithCompanyOut): Signal {
     ],
     relevance,
     score: Math.round((s.event_score ?? 0)),
-    detected: relativeTime(s.published_at),
+    // Every signal shows a date. When the publish date could not be sourced
+    // (20% of events), fall back to when research found it - clearly labelled,
+    // because an undated event is not a fresh one.
+    detected: relativeTime(s.published_at ?? s.discovered_at),
+    detectedOn: absoluteDate(s.published_at ?? s.discovered_at),
+    dateIsDiscovery: !s.published_at,
   };
 }
 
@@ -273,7 +310,24 @@ function SignalTable({ signals }: { signals: Signal[] }) {
                     <CheckCircle2 className="size-[17px] text-[#16a34a]" />
                   </div>
 
-                  <span className="text-[13px] text-[#64748b]">{signal.detected}</span>
+                  <span className="flex flex-col">
+                    <span
+                      className={cn(
+                        "text-[13px] font-medium",
+                        signal.dateIsDiscovery ? "text-[#94a3b8]" : "text-[#334155]",
+                      )}
+                      title={
+                        signal.dateIsDiscovery
+                          ? "No publish date could be sourced for this event - this is when research found it"
+                          : "Date the event was published"
+                      }
+                    >
+                      {signal.detectedOn}
+                    </span>
+                    <span className="text-[11px] text-[#94a3b8]">
+                      {signal.dateIsDiscovery ? `found ${signal.detected}` : signal.detected}
+                    </span>
+                  </span>
                 </div>
               ))}
             </div>
@@ -372,6 +426,7 @@ export function SignalFeedPage() {
   const [sector, setSector] = useState("");
   const [minScore, setMinScore] = useState("");
   const [sort, setSort] = useState("date");
+  const [period, setPeriod] = useState("");
   const [sectors, setSectors] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -391,14 +446,15 @@ export function SignalFeedPage() {
       category: category || undefined,
       sector: sector || undefined,
       min_score: minScore ? Number(minScore) : undefined,
-      sort: sort as "date" | "score" | "company",
+      sort: sort as "date" | "oldest" | "score" | "company",
+      days: period ? Number(period) : undefined,
     })
       .then((res) => {
         setTotal(res.total);
         setSignals(res.items.map(toSignal));
       })
       .catch(() => setSignals([]));
-  }, [category, sector, minScore, sort, page]);
+  }, [category, sector, minScore, sort, period, page]);
 
   /* Sector list comes from the API's own rollup so this page never carries a
      second copy of the industry->sector mapping. */
@@ -416,7 +472,7 @@ export function SignalFeedPage() {
      of a narrower result set shows an empty table. */
   useEffect(() => {
     setPage(1);
-  }, [category, sector, minScore, sort]);
+  }, [category, sector, minScore, sort, period]);
 
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
@@ -447,7 +503,9 @@ export function SignalFeedPage() {
               onCategory={setCategory}
               onMinScore={setMinScore}
               onSector={setSector}
+              onPeriod={setPeriod}
               onSort={setSort}
+              period={period}
               sector={sector}
               sectors={sectors}
               sort={sort}

@@ -10,7 +10,13 @@ import {
 import { useEffect, useState, type ComponentType } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Delta, FLAT_LINE, Sparkline, TrendLineChart } from "../../components/ui/dataviz";
+import {
+  Delta,
+  FLAT_LINE,
+  Sparkline,
+  TrendLineChart,
+  type TrendGranularity,
+} from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
 import { getSignalStats, type SignalStatsOut, type SignalWithCompanyOut } from "../../api/signals";
 import { getOrganisationId } from "../../lib/session";
@@ -79,7 +85,7 @@ function toStatCards(data: SignalStatsOut): StatCard[] {
 
 const ZERO_STATS: SignalStatsOut = {
   total: 0, high_relevance: 0, medium_relevance: 0, low_relevance: 0, company_count: 0, avg_confidence: 0,
-  executives_impacted: 0, actionable_count: 0, by_category: [], trend: [], top_signals: [], histogram: [], by_country: [], by_source: [],
+  executives_impacted: 0, actionable_count: 0, by_category: [], trend: [], trend_granularity: "day", top_signals: [], histogram: [], by_country: [], by_source: [],
 };
 
 function StatCards({ stats }: { stats: StatCard[] }) {
@@ -118,14 +124,27 @@ function StatCards({ stats }: { stats: StatCard[] }) {
 
 type TrendSeries = { label: string; color: string; values: number[] };
 
-function SignalTrendCard({ labels, series, hasData }: { labels: string[]; series: TrendSeries[]; hasData: boolean }) {
+function SignalTrendCard({
+  labels,
+  series,
+  hasData,
+  granularity,
+}: {
+  labels: string[];
+  series: TrendSeries[];
+  hasData: boolean;
+  /* Real bucket width from the API - the axis used to claim "(shown by week)"
+     whenever there were >28 points, which was a guess and wrong as often as
+     not. */
+  granularity: string;
+}) {
   return (
     <section className="flex flex-col rounded-[18px] border border-[#eef1f6] bg-white p-[24px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div>
         <h2 className="m-0 text-[18px] font-bold text-[#0f172a]">Signal Trend Over Time</h2>
         <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">
-          Y-axis: number of signals · X-axis: date published
-          {labels.length > 28 ? " (shown by week)" : ""} · split by relevance
+          Y-axis: number of signals · X-axis: date the event was published
+          {granularity !== "day" ? ` (grouped by ${granularity})` : ""} · split by relevance
         </p>
       </div>
 
@@ -144,7 +163,11 @@ function SignalTrendCard({ labels, series, hasData }: { labels: string[]; series
             ))}
           </div>
           <div className="mt-[12px] flex-1">
-            <TrendLineChart labels={labels} series={series} />
+            <TrendLineChart
+              granularity={granularity as TrendGranularity}
+              labels={labels}
+              series={series}
+            />
           </div>
         </>
       )}
@@ -461,7 +484,12 @@ export function SignalIntelligencePage() {
           </div>
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-            <SignalTrendCard hasData={hasTrend} labels={trendLabels} series={trendSeries} />
+            <SignalTrendCard
+              granularity={data.trend_granularity}
+              hasData={hasTrend}
+              labels={trendLabels}
+              series={trendSeries}
+            />
             <SourceTypeCard segments={categorySegments} total={data.total} />
           </div>
 

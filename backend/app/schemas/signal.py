@@ -79,6 +79,11 @@ class SignalStatsOut(BaseModel):
     actionable_count: int
     by_category: list[SignalCategoryCount]
     trend: list[SignalTrendPoint]
+    # "day" | "week" | "month" - the bucket width trend points are aggregated
+    # at. Sent explicitly so the chart can label its axis correctly; the
+    # frontend previously guessed ("shown by week" when >28 points), which was
+    # wrong whenever the span and the point count disagreed.
+    trend_granularity: str = "day"
     top_signals: list[SignalWithCompanyOut]
     histogram: list[ConfidenceBucketCount]
     by_country: list[CountryCount]

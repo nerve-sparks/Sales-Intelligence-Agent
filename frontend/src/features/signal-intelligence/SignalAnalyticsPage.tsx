@@ -10,7 +10,7 @@ import { lazy, Suspense, useEffect, useState, type ComponentType, type ReactNode
 import type { Data, ISOCode } from "react-svg-worldmap";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
-import { Donut, TrendLineChart } from "../../components/ui/dataviz";
+import { Donut, TrendLineChart, type TrendGranularity } from "../../components/ui/dataviz";
 import { getSignalStats, type SignalStatsOut } from "../../api/signals";
 import { getOrganisationId } from "../../lib/session";
 import { CATEGORY_COLORS, categoryLabel } from "../../lib/signalCategories";
@@ -108,16 +108,29 @@ function CardHead({
 
 type TrendSeries = { label: string; color: string; values: number[] };
 
-function SignalsOverTimeCard({ labels, series, hasData }: { labels: string[]; series: TrendSeries[]; hasData: boolean }) {
+function SignalsOverTimeCard({
+  labels,
+  series,
+  hasData,
+  granularity,
+}: {
+  labels: string[];
+  series: TrendSeries[];
+  hasData: boolean;
+  /* Real bucket width from the API. The card used to claim "last 90 days" and
+     "(shown by week)" - the window is no longer capped at 90 days, and the
+     bucket width is whatever trend_by_day chose to stay under 60 points. */
+  granularity: string;
+}) {
   return (
     <section className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <CardHead
-        info="Signal counts over the last 90 days by published date. Dense history is shown weekly so the chart stays readable. High / Medium / Low follow the same xsparks_relevance tiers used in the Signal Feed."
+        info="Signal counts by the date the event was published, across all history the API considers plausible. The bucket width adapts to the range so the chart stays readable. High / Medium / Low follow the same xsparks_relevance tiers used in the Signal Feed."
         title="Signals Over Time"
       />
       <p className="m-0 mt-[4px] text-[12px] text-[#94a3b8]">
-        Y-axis: number of signals · X-axis: date published
-        {labels.length > 28 ? " (shown by week)" : ""}
+        Y-axis: number of signals · X-axis: date the event was published
+        {granularity !== "day" ? ` (grouped by ${granularity})` : ""}
       </p>
       {!hasData ? (
         <div className="py-[60px] text-center text-[13px] text-[#94a3b8]">
@@ -134,7 +147,13 @@ function SignalsOverTimeCard({ labels, series, hasData }: { labels: string[]; se
             ))}
           </div>
           <div className="mt-[10px]">
-            <TrendLineChart height={280} labels={labels} series={series} width={560} />
+            <TrendLineChart
+              granularity={granularity as TrendGranularity}
+              height={280}
+              labels={labels}
+              series={series}
+              width={560}
+            />
           </div>
         </>
       )}
@@ -479,7 +498,7 @@ function GeographicCard({ countries, geoData }: { countries: CountryRow[]; geoDa
 
 const ZERO_STATS: SignalStatsOut = {
   total: 0, high_relevance: 0, medium_relevance: 0, low_relevance: 0, company_count: 0, avg_confidence: 0,
-  executives_impacted: 0, actionable_count: 0, by_category: [], trend: [], top_signals: [], histogram: [], by_country: [], by_source: [],
+  executives_impacted: 0, actionable_count: 0, by_category: [], trend: [], trend_granularity: "day", top_signals: [], histogram: [], by_country: [], by_source: [],
 };
 
 export function SignalAnalyticsPage() {
@@ -528,7 +547,12 @@ export function SignalAnalyticsPage() {
           </div>
 
           <div className="mt-[20px] grid grid-cols-1 gap-[20px] xl:grid-cols-3">
-            <SignalsOverTimeCard hasData={hasTrend} labels={overTimeLabels} series={overTimeSeries} />
+            <SignalsOverTimeCard
+              granularity={data.trend_granularity}
+              hasData={hasTrend}
+              labels={overTimeLabels}
+              series={overTimeSeries}
+            />
             <CategoryCard segments={categorySegments} total={data.total} />
             <RelevanceLevelCard segments={relevanceSegments} total={data.total} />
           </div>

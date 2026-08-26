@@ -17,6 +17,16 @@ class BuyingEventOut(BaseModel):
     title: str | None = None
     summary: str | None = None
     published_at: datetime | None = None
+    # When research FOUND this event, as opposed to when the event happened.
+    # Always populated (buying_event.created_at has no nulls across 9,171 rows),
+    # so every signal can show a real date even when published_at is unknown -
+    # 1,836 events have no publish date because it could not be sourced.
+    #
+    # Deliberately a SEPARATE field, never copied into published_at: freshness
+    # is computed from published_at, so stamping the research date there would
+    # award freshness 1.0 to events of unknown age. That is precisely the bug
+    # that scored Premier Coil Solutions 100/100 off six undated static pages.
+    discovered_at: datetime | None = None
     base_strength: float | None = None
     relevance: float | None = None
     freshness: float | None = None
