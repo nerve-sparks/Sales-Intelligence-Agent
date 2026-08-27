@@ -90,7 +90,6 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
     """
     seen_companies: dict[int, dict] = {}
     seen_dms: dict[int, dict] = {}
-    dm_rows_no_id: list[dict] = []
     zi_to_company_id: dict[int, UUID] = {}
 
     for row in raw_rows:
@@ -106,17 +105,21 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
         # Multiple uploaded files can legitimately contain the same contact -
         # a single bulk INSERT can't ON CONFLICT DO UPDATE the same
         # (organisation_id, zi_person_id) row twice, so duplicates within this
-        # batch are collapsed here (last occurrence wins). Rows with no
-        # zi_person_id never conflict (NULL != NULL in a unique constraint).
+        # batch are collapsed here (last occurrence wins).
         dm_row = mapper.build_decision_maker_row(row, organisation_id)
         zi_person_id = dm_row["zi_person_id"]
         if zi_person_id is not None:
             seen_dms[zi_person_id] = dm_row
-        else:
-            dm_rows_no_id.append(dm_row)
+        # A row with no identifiable person carries only its company, so there
+        # is no contact to create - and decision_maker.zi_person_id is NOT
+        # NULL, so inserting one anyway aborts the whole upload with an
+        # integrity error. table_mapper deliberately emits such rows (a
+        # company-only spreadsheet line, and every ICP-generated company,
+        # which has no contacts by construction), so they are skipped here
+        # rather than rejected upstream.
 
     await _upsert_companies(session, list(seen_companies.values()))
-    await _upsert_decision_makers(session, list(seen_dms.values()) + dm_rows_no_id)
+    await _upsert_decision_makers(session, list(seen_dms.values()))
     await session.commit()
 
     return zi_to_company_id
@@ -433,10 +436,18 @@ async def record_import_batch(
     total_rows: int,
     zi_to_company_id: dict[int, UUID],
     ingest_warnings: list[str] | None = None,
+    source: str = "upload",
+    icp_id: UUID | None = None,
 ) -> IcpImportBatch:
-    """Persists one prospect-upload event for the Settings prospect-data
-    history (and Enterprise List's per-upload filter) - a permanent audit
-    record, workspace-scoped, with NO ICP (brief section 7).
+    """Persists one batch event for the Settings prospect-data history (and
+    Enterprise List's per-batch filter) - a permanent audit record, scoped to
+    a workspace.
+
+    source distinguishes the two ways companies enter: 'upload' (a person
+    supplied a file, icp_id NULL) or 'generated' (discovered from an ICP,
+    icp_id naming it). Everything after this point is identical for both,
+    which is the whole reason generation reuses this record rather than
+    inventing its own job tracking.
 
     Created with research_status='pending' and zero counts - research +
     scoring run afterward as a background task (score_companies_in_background),
@@ -446,7 +457,8 @@ async def record_import_batch(
     Company.import_batch_id for the "most recent upload" convenience view."""
     batch = IcpImportBatch(
         workspace_id=workspace_id,
-        icp_id=None,
+        icp_id=icp_id,
+        source=source,
         file_names=file_names,
         files_processed=len(file_names),
         total_rows=total_rows,

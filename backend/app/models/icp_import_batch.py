@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import TIMESTAMP, ForeignKey, Index, Integer, Text, text
+from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Integer, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -12,19 +12,28 @@ if TYPE_CHECKING:
 
 
 class IcpImportBatch(Base):
-    """One prospect-data upload event - the persisted audit record for the
-    Settings prospect-data page and Enterprise List's per-upload filter.
+    """One batch of companies entering the system - the persisted audit record
+    behind the Settings prospect-data page and Enterprise List's per-batch
+    filter, and the job record the research/scoring task reports progress on.
 
-    The table keeps its historical name, but the active pipeline no longer
-    depends on an ICP: uploads are scoped to a workspace (workspace_id), and
-    icp_id is nullable (SET NULL) - retained only so historical rows stay
-    readable. The active_count/nurture_count/matched_icp_count columns are
-    likewise legacy-read-only; new pipeline classification uses the
-    sales-status counts below.
+    Two origins, distinguished by `source`:
+      * 'upload'    - a person supplied a spreadsheet. icp_id is NULL.
+      * 'generated' - companies discovered from an ICP (see lead_generation.py).
+                      icp_id names that ICP.
+
+    Both then follow the identical path: company rows, background research,
+    evidence scoring, job polling, retry/cancel and export all work the same
+    way, which is why generation reuses this table rather than adding its own.
+
+    The table keeps its historical name from when uploads were ICP-scoped.
+    Batches are scoped to a workspace (workspace_id); the
+    active_count/nurture_count/matched_icp_count columns are legacy-read-only,
+    and new classification uses the sales-status counts below.
     """
 
     __tablename__ = "icp_import_batch"
     __table_args__ = (
+        CheckConstraint("source IN ('upload', 'generated')", name="icp_import_batch_source_check"),
         Index("idx_icp_import_batch_icp_id", "icp_id"),
         Index("idx_icp_import_batch_workspace_id", "workspace_id"),
     )
@@ -35,10 +44,19 @@ class IcpImportBatch(Base):
     workspace_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("workspace.workspace_id", ondelete="CASCADE")
     )
-    # Legacy - nullable now; new uploads leave this NULL.
+    # NULL for a file upload. Set for a generated batch, naming the ICP the
+    # companies were discovered from (SET NULL, so deleting that ICP later
+    # leaves the batch and its companies intact).
     icp_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("icp_profile.icp_id", ondelete="SET NULL")
     )
+
+    # How this batch's companies came to exist: 'upload' (a person supplied a
+    # file) or 'generated' (discovered from an ICP). Generated companies arrive
+    # with no contacts, so their Contact Access is 0 and their Lead Score is
+    # capped lower than an uploaded company's - the label is what stops that
+    # structural difference reading as "worse prospects".
+    source: Mapped[str] = mapped_column(Text, nullable=False, server_default="upload")
 
     file_names: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     files_processed: Mapped[int] = mapped_column(Integer, nullable=False)

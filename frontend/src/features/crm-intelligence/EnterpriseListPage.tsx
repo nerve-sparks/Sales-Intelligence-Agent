@@ -116,7 +116,11 @@ function formatBatchLabel(batch: ImportBatchOut): string {
     : "Unknown date";
   const suffix = batch.scoring_status === "pending" ? " (Scoring…)" : "";
   const label = batch.file_names?.[0] || "Upload";
-  return `${when} · ${label} · ${batch.companies_ingested} companies${suffix}`;
+  // Generated batches read as ordinary uploads otherwise, and they are not
+  // comparable: their companies have no contacts yet, so their scores sit
+  // systematically lower.
+  const origin = batch.source === "generated" ? "Generated · " : "";
+  return `${when} · ${origin}${label} · ${batch.companies_ingested} companies${suffix}`;
 }
 
 /* Filters the list to one specific prospect upload (Company.import_batch_id).
@@ -455,7 +459,13 @@ function Pagination({
 export function EnterpriseListPage() {
   const [enterprises, setEnterprises] = useState<Enterprise[]>([]);
   const [batches, setBatches] = useState<ImportBatchOut[]>([]);
-  const [selectedBatchId, setSelectedBatchId] = useState("all");
+  /* Honours ?import_batch_id=... so a link can open this page already
+     filtered to one batch - the ICP page's "View these companies" after a
+     generation run does exactly that. Read once, at mount: afterwards the
+     dropdown owns the value. */
+  const [selectedBatchId, setSelectedBatchId] = useState(
+    () => new URLSearchParams(window.location.search).get("import_batch_id") ?? "all",
+  );
   const [statCards, setStatCards] = useState<StatCard[]>(emptyStats);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);

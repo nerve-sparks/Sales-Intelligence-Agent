@@ -1149,6 +1149,7 @@ export function SettingsIcpDataPage() {
                         <tr className="text-left">
                           {[
                             "Date",
+                            "Source",
                             "Files",
                             "Rows",
                             "Companies",
@@ -1191,6 +1192,22 @@ export function SettingsIcpDataPage() {
                                 onClick={() => setExpandedBatchId(expanded ? null : batch.import_batch_id)}
                               >
                                 <td className={cell}>{formatDate(batch.created_at)}</td>
+                                <td className="px-[8px] py-[8px] font-['Inter'] text-[12px]">
+                                  {batch.source === "generated" ? (
+                                    <span
+                                      className="rounded-[6px] bg-[#eef1ff] px-[8px] py-[3px] text-[11px] font-semibold text-[#4f46e5]"
+                                      title={
+                                        "Discovered from an ICP and verified against live web search. " +
+                                        "Generated companies arrive without contacts, so their Lead Score " +
+                                        "is capped lower than an uploaded company's until contacts are added."
+                                      }
+                                    >
+                                      Generated
+                                    </span>
+                                  ) : (
+                                    <span className="text-[#64748b]">Upload</span>
+                                  )}
+                                </td>
                                 <td className={cell}>{batch.files_processed}</td>
                                 <td className={cell}>{batch.total_rows}</td>
                                 <td className={cell}>{batch.companies_ingested}</td>
@@ -1259,7 +1276,7 @@ export function SettingsIcpDataPage() {
                               </tr>
                               {expanded && workspaceId && (
                                 <tr>
-                                  <td colSpan={13} className="p-0">
+                                  <td colSpan={14} className="p-0">
                                     <JobDetailPanel
                                       importBatchId={batch.import_batch_id}
                                       onStatusChange={() => loadHistory()}

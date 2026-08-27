@@ -10,6 +10,7 @@ from app.core.logging_config import configure_logging
 from app.routes import (
     auth,
     companies,
+    icp,
     icp_imports,
     organisations,
     scores,
@@ -80,6 +81,7 @@ app.include_router(companies.router)
 app.include_router(companies.decision_makers_router)
 app.include_router(signals.router)
 app.include_router(scores.router)
+app.include_router(icp.router)
 app.include_router(icp_imports.router)
 app.include_router(triggers.router)
 app.include_router(uploads.router)

@@ -1,11 +1,15 @@
-/* Historical module name (kept, like ImportBatchOut's own icp_id/icp_name
- * fields, so callers don't churn over a rename) - the ICP CRUD API this file
- * used to mirror (backend/app/routes/icp.py) has been deleted entirely (no
- * ICP anywhere in the active product). CompanyOut/DecisionMakerOut are
- * general-purpose types several pages still import from here;
- * listImportBatches/ImportBatchOut back Onboarding/Settings' upload history,
- * which has no ICP dependency and hits backend/app/routes/icp_imports.py. */
-import { apiDelete, apiGet, apiPost } from "./client";
+/* Three separate things share this module for historical reasons (the name
+ * predates the split, and the shared types have many importers):
+ *
+ * - ICP CRUD (IcpOut/IcpCreate/listIcps/...) mirrors backend/app/routes/icp.py,
+ *   backing the ICP page at /icp. An ICP here is a *seed for discovery* - it
+ *   describes which companies to go find. It is NOT a filter on scoring and
+ *   has no term in the Lead Score; see ICP_LEAD_GENERATION_INTENT.md.
+ * - CompanyOut/DecisionMakerOut are general-purpose types several pages import.
+ * - listImportBatches/ImportBatchOut and the job* helpers back Onboarding/
+ *   Settings' upload history, which has no ICP dependency and hits
+ *   backend/app/routes/icp_imports.py. */
+import { apiDelete, apiGet, apiPost, apiPut } from "./client";
 
 export type DecisionMakerOut = {
   decision_maker_id: string;
@@ -63,8 +67,14 @@ export type CompanyOut = {
 export type ImportBatchOut = {
   import_batch_id: string;
   workspace_id: string | null;
-  icp_id: string | null; // legacy, null for new prospect uploads
-  icp_name: string | null; // legacy
+  /* How this batch's companies came to exist. "generated" batches were
+   * discovered from an ICP (icp_id names it) and arrive with no contacts, so
+   * their Contact Access is 0 and their Lead Score is capped lower than an
+   * uploaded company's - which is why the two are labelled rather than mixed
+   * silently. */
+  source: "upload" | "generated";
+  icp_id: string | null; // set for generated batches, null for uploads
+  icp_name: string | null;
   file_names: string[] | null;
   files_processed: number;
   total_rows: number;
@@ -191,4 +201,92 @@ export function retryFailedJobItems(workspaceId: string, importBatchId: string):
 
 export function cancelJob(workspaceId: string, importBatchId: string): Promise<JobStatusOut> {
   return apiPost<JobStatusOut>(`/workspaces/${workspaceId}/imports/${importBatchId}/cancel`);
+}
+
+/* ── ICP definitions (mirrors backend/app/routes/icp.py) ──────────────────
+ *
+ * Every criterion is optional; an unset one means "no constraint". There is
+ * deliberately no `fit_mode` and no "companies matching this ICP" call - both
+ * belonged to the removed ICP-as-scoring-filter design. */
+
+export type IcpOut = {
+  icp_id: string;
+  workspace_id: string;
+  name: string | null;
+  industries: string[] | null;
+  employee_min: number | null;
+  employee_max: number | null;
+  revenue_min_usd: number | null;
+  revenue_max_usd: number | null;
+  countries: string[] | null;
+  technologies: string[] | null;
+  buying_committee_personas: string[] | null;
+  departments: string[] | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type IcpCreate = {
+  name?: string | null;
+  industries?: string[] | null;
+  employee_min?: number | null;
+  employee_max?: number | null;
+  revenue_min_usd?: number | null;
+  revenue_max_usd?: number | null;
+  countries?: string[] | null;
+  technologies?: string[] | null;
+  buying_committee_personas?: string[] | null;
+  departments?: string[] | null;
+};
+
+/* Picker vocabulary, served by the backend so the form can't drift from the
+ * values real data actually uses. `departments` is read from this org's own
+ * contacts and is empty before any upload. */
+export type IcpOptionsOut = {
+  industries: string[];
+  sectors: Record<string, string[]>;
+  personas: string[];
+  departments: string[];
+};
+
+export function listIcps(workspaceId: string): Promise<IcpOut[]> {
+  return apiGet<IcpOut[]>(`/workspaces/${workspaceId}/icp`);
+}
+
+export function getIcpOptions(workspaceId: string): Promise<IcpOptionsOut> {
+  return apiGet<IcpOptionsOut>(`/workspaces/${workspaceId}/icp/options`);
+}
+
+export function createIcp(workspaceId: string, payload: IcpCreate): Promise<IcpOut> {
+  return apiPost<IcpOut>(`/workspaces/${workspaceId}/icp`, payload);
+}
+
+/* Full-replace (PUT): the edit form submits every field, so an omitted field
+ * means "clear this criterion", not "leave it unchanged". */
+export function updateIcp(workspaceId: string, icpId: string, payload: IcpCreate): Promise<IcpOut> {
+  return apiPut<IcpOut>(`/workspaces/${workspaceId}/icp/${icpId}`, payload);
+}
+
+/* Upload history survives: icp_import_batch.icp_id is ON DELETE SET NULL, so
+ * past uploads keep their counts and only lose the ICP link. Companies,
+ * buying events and scores are organisation-scoped and untouched. */
+export function deleteIcp(workspaceId: string, icpId: string): Promise<void> {
+  return apiDelete<void>(`/workspaces/${workspaceId}/icp/${icpId}`);
+}
+
+/* Discovers new companies from an ICP: an LLM proposes candidates, each is
+ * verified against live web search, and only the verified ones become
+ * companies. Returns the SAME ImportBatchOut an upload does, with
+ * scoring_status "pending" - poll the existing job endpoints (getJobStatus /
+ * getJobItems / retryFailedJobItems / cancelJob) exactly as for an upload.
+ *
+ * Slow by nature (one search per candidate) and can legitimately fail with:
+ *   503 - the LLM or search service isn't configured
+ *   422 - nothing new could be verified (all invented, or all already owned) */
+export function generateLeads(
+  workspaceId: string,
+  icpId: string,
+  target: number,
+): Promise<ImportBatchOut> {
+  return apiPost<ImportBatchOut>(`/workspaces/${workspaceId}/icp/${icpId}/generate`, { target });
 }

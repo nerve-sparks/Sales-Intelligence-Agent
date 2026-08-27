@@ -738,7 +738,67 @@ const TOPICS: GuideTopic[] = [
 
   // ---------------------------------------------------------------- setup
   {
-    id: "uploads",
+    id: "icp",
+    label: "Ideal Customer Profiles",
+    group: "Setup",
+    icon: Target,
+    href: "/icp",
+    summary: "Describe who you sell to - saved definitions of the companies worth targeting.",
+    blocks: [
+      {
+        kind: "text",
+        text:
+          "An ICP is a saved description of the kind of company worth selling to: industry, size, revenue, location, technologies, and the roles and departments you need to reach. Each one belongs to a workspace, so different teams can target different markets from the same book of companies.",
+      },
+      { kind: "sub", text: "What an ICP does and does not do" },
+      {
+        kind: "text",
+        text:
+          "An ICP describes which companies are worth finding. It has no effect whatsoever on scoring: every company is scored on the evidence found about it, and a company that matches your ICP perfectly can still score low if there is no buying evidence behind it. That separation is deliberate - a fit score dressed up as a buying score is what makes a call list untrustworthy.",
+      },
+      { kind: "sub", text: "Filling one in" },
+      {
+        kind: "steps",
+        items: [
+          "Every field is optional. A field left blank places no constraint - an ICP with only an industry set is perfectly valid.",
+          "Industries and personas are picked from the values the platform actually recognises, so a criterion can never silently match nothing.",
+          "Departments are read from the contacts you have already uploaded, which is why the list is empty until your first upload.",
+        ],
+      },
+      { kind: "sub", text: "Finding companies from an ICP" },
+      {
+        kind: "text",
+        text:
+          "\"Find companies\" on an ICP card discovers new companies rather than filtering the ones you already have. It is the other way into the platform: instead of uploading a list, you describe who you want and the platform goes looking.",
+      },
+      {
+        kind: "steps",
+        items: [
+          "Candidates are proposed from your ICP and your offering profile.",
+          "Every candidate is then checked against live web search, and only companies with a confirmed real website are saved. Anything that cannot be confirmed is discarded rather than stored.",
+          "Companies you already have are skipped, so a run never re-adds them.",
+          "The survivors are researched and scored exactly like uploaded companies, with the same progress, retry and cancel controls.",
+        ],
+      },
+      {
+        kind: "note",
+        text:
+          "Expect fewer companies than you asked for - that is verification working. A shorter list of companies that genuinely exist is the point, and every candidate costs real research budget.",
+      },
+      {
+        kind: "text",
+        text:
+          "Companies found this way arrive without contacts, so their Contact Access score is 0 and their Lead Score is capped below an uploaded company's until contacts are added. That is a difference in what is known about them, not in how good a prospect they are - which is why generated batches are labelled as such in Upload History and the Enterprise List filter.",
+      },
+      {
+        kind: "note",
+        text:
+          "Deleting an ICP never touches your data. Companies, buying events and scores belong to the organisation, and past batches keep their history - they simply stop being linked to that ICP.",
+      },
+    ],
+  },
+  {
+    id: "uploading",
     label: "Uploading data",
     group: "Setup",
     icon: Upload,

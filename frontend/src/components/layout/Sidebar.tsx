@@ -4,6 +4,7 @@ import {
   Home,
   Radio,
   Settings,
+  Target,
   // Zap,  // re-add with the Trigger Intelligence nav item below
 } from "lucide-react";
 import { useState, type ComponentType, type ReactNode } from "react";
@@ -39,6 +40,9 @@ const navItems: NavEntry[] = [
     ],
   },
   { icon: Contact, label: "Enterprise List", href: "/enterprise-list" },
+  // ICP defines who is worth targeting; it deliberately has no effect on how
+  // companies are scored (see features/icp/IcpPage.tsx).
+  { icon: Target, label: "ICP", href: "/icp" },
 ];
 
 const settingsItem: NavEntry = { icon: Settings, label: "Settings", href: "/settings" };
