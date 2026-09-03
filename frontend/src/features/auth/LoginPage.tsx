@@ -12,14 +12,31 @@ import { resolvePostLoginPath } from "../../lib/postLogin";
 type AuthMode = "login" | "mfa" | "signup";
 
 /* Firebase error codes -> plain-English text. Falls back to the raw message
- * for anything not covered here (unusual, but better than nothing). */
-function authErrorMessage(err: unknown): string {
+ * for anything not covered here (unusual, but better than nothing).
+ *
+ * `hasPaddedPassword` upgrades the generic credential error when the password
+ * field has leading/trailing whitespace. Firebase reports a padded password as
+ * INVALID_LOGIN_CREDENTIALS - identical to a genuinely wrong password - so a
+ * stray space from a paste or autofill is otherwise invisible: the field looks
+ * correct, the characters are correct, and the only feedback is "Incorrect
+ * email or password." We do not silently trim it, because a password may
+ * legitimately contain edge whitespace and trimming would lock out anyone who
+ * set one; we say what we can see instead. */
+function authErrorMessage(err: unknown, hasPaddedPassword = false): string {
   if (err instanceof FirebaseError) {
     switch (err.code) {
+      /* These three collapse into one message because Firebase's email
+         enumeration protection makes them indistinguishable: a nonexistent
+         address returns INVALID_LOGIN_CREDENTIALS, byte-identical to a wrong
+         password, so "no account for that email" is not knowable client-side.
+         Hence the nudge about spelling - a one-character typo in the address
+         presents exactly as a bad password, and reads as a broken login. */
       case "auth/invalid-credential":
       case "auth/wrong-password":
       case "auth/user-not-found":
-        return "Incorrect email or password.";
+        return hasPaddedPassword
+          ? "Incorrect email or password. Note the password starts or ends with a space - if that was not intentional, remove it and try again."
+          : "Incorrect email or password. Check the email is spelled correctly - a typo in the address gives this same message.";
       case "auth/email-already-in-use":
         return "An account with this email already exists.";
       case "auth/weak-password":
@@ -519,16 +536,23 @@ function LoginForm({
       return;
     }
 
+    /* Emails cannot contain leading/trailing whitespace, so trimming is always
+       safe - and necessary: a pasted address with a stray space is rejected as
+       auth/invalid-email ("Enter a valid email address") against a field that
+       looks perfectly valid on screen. */
+    const trimmedEmail = email.trim();
+    const paddedPassword = password !== password.trim();
+
     setSubmitting(true);
     try {
       if (isSignup) {
-        await createUserWithEmailAndPassword(auth, email, password);
+        await createUserWithEmailAndPassword(auth, trimmedEmail, password);
         // Firebase Auth only handles the credential - the app's own
         // Organisation/Workspace/User records still need to be created,
         // which is what onboarding does.
         navigate("/onboarding");
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        await signInWithEmailAndPassword(auth, trimmedEmail, password);
         // GET /auth/me looks up the real backend record for this Firebase
         // account (via User.firebase_uid) - a returning user lands on
         // /dashboard even on a browser that's never completed onboarding
@@ -536,7 +560,7 @@ function LoginForm({
         navigate(await resolvePostLoginPath());
       }
     } catch (err) {
-      setAuthError(authErrorMessage(err));
+      setAuthError(authErrorMessage(err, paddedPassword));
       setSubmitting(false);
     }
   };

@@ -358,7 +358,7 @@ async def test_target_is_capped_regardless_of_what_is_asked_for(org_ctx, monkeyp
 
     monkeypatch.setattr(lead_generation.llm_client, "is_configured", lambda: True)
 
-    async def fake_propose(icp, offering, target, trace_user_id=None):
+    async def fake_propose(icp, offering, target, trace_user_id=None, exclude_names=None):
         seen_targets.append(target)
         return [], []
 
@@ -650,3 +650,68 @@ async def test_a_row_with_a_company_but_no_contact_ingests_the_company(org_ctx):
 
     assert [c.company_name for c in companies] == ["Contactless Co"]
     assert contacts == [], "no contact exists, so none should be invented"
+
+
+# ── the exclusion steer: what the org already owns ────────────────────────
+
+
+async def test_existing_companies_are_named_in_the_prompt(org_ctx, make_company, monkeypatch):
+    """The model must be told what the organisation already has.
+
+    Without this it proposes the same well-known companies on every run, all of
+    them already in the database, and the run reports zero new companies - but
+    only AFTER paying for a verification search on each duplicate. That is the
+    exact failure this guards: a generation that costs full budget and yields
+    nothing, with no error to point at.
+    """
+    organisation_id, workspace_id = org_ctx
+    await make_company(company_name="Already Owned Ltd", primary_industry=["Software"])
+
+    monkeypatch.setattr(lead_generation.llm_client, "is_configured", lambda: True)
+
+    seen_excludes: list[list[str]] = []
+
+    async def fake_propose(icp, offering, target, trace_user_id=None, exclude_names=None):
+        seen_excludes.append(list(exclude_names or ()))
+        return [], []
+
+    monkeypatch.setattr(lead_generation, "propose_candidates", fake_propose)
+
+    async with async_session_maker() as session:
+        icp = await create_icp(session, workspace_id, {"name": "Any", "industries": ["Software"]})
+        await lead_generation.generate_leads(session, organisation_id, icp, 5)
+
+    assert seen_excludes, "propose_candidates was never called"
+    assert "Already Owned Ltd" in seen_excludes[0]
+
+
+async def test_exclusion_list_prefers_companies_matching_the_icp_industry(org_ctx, make_company):
+    """An org can hold thousands of companies and only a few hundred names fit
+    in a prompt, so the budget must go to the ones the model is actually likely
+    to propose for THIS ICP - not an arbitrary alphabetical slice."""
+    organisation_id, workspace_id = org_ctx
+    await make_company(company_name="Zeta Software Co", primary_industry=["Software"])
+    await make_company(company_name="Alpha Mining Co", primary_industry=["Mining"])
+
+    async with async_session_maker() as session:
+        icp = await create_icp(session, workspace_id, {"name": "SW", "industries": ["Software"]})
+        names = await lead_generation.existing_company_names(
+            session, organisation_id, icp, limit=2
+        )
+
+    assert names[0] == "Zeta Software Co", (
+        "the industry match must outrank alphabetical order"
+    )
+
+
+async def test_this_runs_candidates_survive_prompt_truncation():
+    """Owned names are a steer; this run's candidates are load-bearing. If they
+    were truncated away the model would repeat what it just proposed and the
+    accumulation loop would stall short of the target."""
+    owned = [f"Owned Co {i}" for i in range(lead_generation.PROMPT_EXCLUDE_MAX + 50)]
+    prompt = lead_generation._build_prompt(
+        lead_generation.IcpProfile(name="x"), "offering", 5, ["Fresh Candidate"] + owned
+    )
+
+    assert "Fresh Candidate" in prompt
+    assert f"Owned Co {lead_generation.PROMPT_EXCLUDE_MAX + 40}" not in prompt

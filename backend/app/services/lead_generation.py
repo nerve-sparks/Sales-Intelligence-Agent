@@ -40,7 +40,7 @@ import re
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Company, IcpProfile, Organisation
@@ -58,6 +58,15 @@ logger = logging.getLogger(__name__)
 # Candidates requested per LLM call. One call for hundreds of names truncates
 # and degrades; several smaller calls stay coherent and fail independently.
 CHUNK_SIZE = 25
+
+# How many already-owned company names to echo into the prompt. Large enough to
+# actually steer the model off its favourite answers, small enough that the
+# exclusion list does not crowd out the instructions.
+EXCLUDE_NAME_LIMIT = 200
+
+# Hard cap on names echoed into a single prompt, covering this run's candidates
+# plus the owned-name steer.
+PROMPT_EXCLUDE_MAX = 300
 
 # Verification is one search per candidate, so this is the real cost driver.
 # Kept at/below the research stage's default concurrency to avoid being the
@@ -143,9 +152,10 @@ def _icp_summary(icp: IcpProfile) -> str:
 def _build_prompt(icp: IcpProfile, offering_summary: str, count: int, exclude: list[str]) -> str:
     exclusions = ""
     if exclude:
-        # Cap the echoed list: the point is to steer away from repeats within a
-        # run, and a very long list would crowd out the actual instructions.
-        shown = ", ".join(exclude[:120])
+        # Cap the echoed list: the point is to steer away from repeats, and a
+        # very long list would crowd out the actual instructions. Callers put
+        # the entries they cannot afford to lose at the front.
+        shown = ", ".join(exclude[:PROMPT_EXCLUDE_MAX])
         exclusions = (
             f"\nDo NOT propose any of these, they are already known:\n{shown}\n"
         )
@@ -203,13 +213,22 @@ def _parse_candidates(raw: str) -> list[Candidate]:
 
 
 async def propose_candidates(
-    icp: IcpProfile, offering_profile: dict, target: int, trace_user_id: str | None = None
+    icp: IcpProfile,
+    offering_profile: dict,
+    target: int,
+    trace_user_id: str | None = None,
+    exclude_names: list[str] | None = None,
 ) -> tuple[list[Candidate], list[str]]:
     """Unverified LLM candidates for one ICP. Persists nothing.
 
     Returns (candidates, warnings). Candidates are deduplicated by name within
     the run, and each chunk excludes what earlier chunks already produced so
     the model does not simply repeat its most obvious answers.
+
+    `exclude_names` are companies the organisation ALREADY has (see
+    existing_company_names). They steer the model off names that would be
+    discarded as duplicates later anyway - after a verification search has
+    already been spent on each.
     """
     if not llm_client.is_configured():
         raise LeadGenerationError(
@@ -223,10 +242,17 @@ async def propose_candidates(
     warnings: list[str] = []
     chunk_index = 0
 
+    owned = list(exclude_names or ())
+
     while len(seen) < wanted:
         remaining = wanted - len(seen)
         ask = min(CHUNK_SIZE, remaining)
-        prompt = _build_prompt(icp, offering_summary, ask, list(seen))
+        # This run's candidates first: _build_prompt truncates a long list, and
+        # losing them would let the model repeat what it just proposed, which
+        # stalls the loop. Owned names are the steer, not the correctness guard
+        # - drop_existing_companies still backstops a model that ignores them.
+        exclusions = [c.name for c in seen.values()] + owned
+        prompt = _build_prompt(icp, offering_summary, ask, exclusions)
         try:
             raw = await llm_client.complete(
                 [{"role": "user", "content": prompt}],
@@ -354,6 +380,44 @@ async def verify_candidates(candidates: list[Candidate]) -> tuple[list[VerifiedL
 # ── deduplication against what the org already has ────────────────────────
 
 
+async def existing_company_names(
+    session: AsyncSession,
+    organisation_id: UUID,
+    icp: IcpProfile,
+    limit: int = EXCLUDE_NAME_LIMIT,
+) -> list[str]:
+    """Names the organisation already holds, for the prompt's exclusion list.
+
+    Without this the model is only told what it proposed earlier in the SAME
+    run, so on every subsequent run it proposes the same well-known companies,
+    all of them already in the database. That failure is silent and expensive:
+    the duplicates are only detected by drop_existing_companies AFTER a
+    verification search has been paid for on each one, and the run then reports
+    zero new companies.
+
+    An organisation can hold thousands of companies and only a couple of
+    hundred names fit in a prompt that still has to be mostly instructions, so
+    the budget goes to companies whose industry overlaps the ICP's - precisely
+    the ones the model is likely to propose for this ICP.
+    """
+    stmt = select(Company.company_name).where(
+        Company.organisation_id == organisation_id,
+        Company.company_name.isnot(None),
+    )
+
+    industries = [i for i in (icp.industries or []) if i]
+    if industries:
+        stmt = stmt.order_by(
+            case((Company.primary_industry.overlap(industries), 0), else_=1),
+            Company.company_name,
+        )
+    else:
+        stmt = stmt.order_by(Company.company_name)
+
+    rows = (await session.execute(stmt.limit(limit))).scalars().all()
+    return [name for name in rows if name]
+
+
 async def drop_existing_companies(
     session: AsyncSession, organisation_id: UUID, leads: list[VerifiedLead]
 ) -> tuple[list[VerifiedLead], int]:
@@ -404,8 +468,14 @@ async def generate_leads(
     org = await session.get(Organisation, organisation_id)
     offering_profile = offering_profile_service.profile_for_scoring(org)
 
+    owned = await existing_company_names(session, organisation_id, icp)
+
     candidates, warnings = await propose_candidates(
-        icp, offering_profile, target, trace_user_id=str(organisation_id)
+        icp,
+        offering_profile,
+        target,
+        trace_user_id=str(organisation_id),
+        exclude_names=owned,
     )
     result = GenerationResult(candidates_proposed=len(candidates), warnings=warnings)
     if not candidates:
