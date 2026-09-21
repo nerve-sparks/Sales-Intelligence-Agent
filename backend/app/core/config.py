@@ -12,6 +12,7 @@ class Settings:
     log_level: str
     database_url: str
     llm_api_key: str | None
+    llm_model: str
     deepseek_api_key: str | None
     ollama_base_url: str
     ollama_model: str
@@ -56,6 +57,11 @@ def get_settings() -> Settings:
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         database_url=database_url,
         llm_api_key=os.environ.get("LLM_API_KEY"),
+        # Which BridgeLLM-served model to call (see llm_client.py's module
+        # docstring for which of the proxy's advertised models actually serve
+        # a request) - overridable via env without a redeploy, since the
+        # proxy's working set has shifted before.
+        llm_model=os.environ.get("LLM_MODEL", "gemini-flash-latest"),
         deepseek_api_key=os.environ.get("DEEPSEEK_API_KEY"),
         # Defaults match the verified-working local fallback server, so this
         # keeps working even in environments where the .env var isn't set.

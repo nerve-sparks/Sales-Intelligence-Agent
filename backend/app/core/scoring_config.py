@@ -74,6 +74,21 @@ BASE_STRENGTH = {
 DEFAULT_BASE_STRENGTH = 20  # v1 15 - unknown/other event type
 
 # ---------------------------------------------------------------------------
+# Earliest plausible event date. event_date is LLM-extracted from web text and
+# the model sometimes reads a founding year, "Since 1926" tagline, or an old
+# encyclopedia/asset-profile page as if it were the date of the event itself
+# (confirmed live: buying_event rows dated 1883, 1926, 1969 - all static
+# company-overview pages with no real event date at all).
+#
+# Enforced at extraction time (buying_event_service.parse_event_date), not
+# just filtered in the trend chart query, so a bad date never reaches the
+# BuyingEvent row in the first place and can't distort freshness scoring
+# either - anything older is treated as unknown (None), the same fallback
+# already used for unparseable dates.
+# ---------------------------------------------------------------------------
+MIN_PLAUSIBLE_EVENT_YEAR = 2015
+
+# ---------------------------------------------------------------------------
 # XSparks relevance (brief section 12). The LLM returns a 0-1 float; these are
 # the anchor interpretations used when building the extraction prompt and for
 # documenting what the number means. Used as-is (already 0-1) as a multiplier.

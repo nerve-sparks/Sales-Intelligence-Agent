@@ -90,6 +90,11 @@ BRIDGE_BASE_URL = "https://llm.bridgellm.nervesparks.com"
 # NON-reasoning options if that overhead ever needs removing (~1.0s/call, zero
 # thinking tokens), at the cost of a smaller model doing the extraction
 # judgement.
+#
+# This is only the DEFAULT now - complete() calls settings.llm_model, which
+# reads LLM_MODEL from .env and falls back to this constant when unset. Kept
+# as a real constant (not inlined into config.py) since the module docstring's
+# probe table above documents what it's set to and why.
 BRIDGE_MODEL = "gemini-flash-latest"
 
 # The SDK's own default (read=600s, i.e. 10 minutes, with its own 2 hidden
@@ -215,12 +220,13 @@ async def complete(
     settings = get_settings()
     if not settings.llm_api_key:
         raise LLMNotConfiguredError("LLM_API_KEY is not set in the environment")
+    model = settings.llm_model
 
-    print(f"[LLM-PROVIDER] Calling BridgeLLM ({BRIDGE_MODEL}) for '{generation_name}'...")
+    print(f"[LLM-PROVIDER] Calling BridgeLLM ({model}) for '{generation_name}'...")
     client = _get_bridge_client()
     with trace_llm_generation(
         name=generation_name,
-        model=BRIDGE_MODEL,
+        model=model,
         messages=messages,
         session_id=trace_id,
         user_id=trace_user_id,
@@ -228,7 +234,7 @@ async def complete(
     ) as observation:
         try:
             response = await client.chat.completions.create(
-                model=BRIDGE_MODEL,
+                model=model,
                 messages=messages,
                 extra_body={
                     "metadata": {
@@ -243,7 +249,7 @@ async def complete(
         except Exception as exc:
             # No fallback by design (see module docstring). A 400 "Invalid model
             # name" here is the proxy having no deployment registered for
-            # BRIDGE_MODEL - a server-side fix, not a code one.
+            # `model` - a server-side fix, not a code one.
             print(f"[LLM-PROVIDER] !!! BridgeLLM FAILED for '{generation_name}' "
                   f"- {type(exc).__name__}: {exc}")
             finish_llm_generation(observation, output="", usage=None, error=str(exc))
@@ -251,5 +257,5 @@ async def complete(
 
         text = response.choices[0].message.content or ""
         finish_llm_generation(observation, output=text, usage=getattr(response, "usage", None))
-        print(f"[LLM-PROVIDER] SUCCESS via BridgeLLM ({BRIDGE_MODEL})")
+        print(f"[LLM-PROVIDER] SUCCESS via BridgeLLM ({model})")
         return text

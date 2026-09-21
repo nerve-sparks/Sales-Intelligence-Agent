@@ -85,9 +85,16 @@ def parse_event_date(raw: str | None, now: datetime) -> datetime | None:
         return now - timedelta(days=_RELATIVE_DAYS[rel.group(2).lower()] * int(rel.group(1)))
     for fmt in ("%b %d, %Y", "%B %d, %Y", "%Y-%m-%d"):
         try:
-            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+            parsed = datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
+        if parsed.year < cfg.MIN_PLAUSIBLE_EVENT_YEAR:
+            # Not a real event date - almost always the LLM reading a founding
+            # year, copyright year, or "Since 1926"-style tagline off a static
+            # company-overview page. Treated as unknown, same as an
+            # unparseable date, rather than trusted and stored.
+            return None
+        return parsed
     return None
 
 
@@ -185,6 +192,12 @@ def _build_prompt(company: dict, offering_profile: dict, items: list[dict], now:
         "new senior leader, acquisition/merger, expansion, or significant hiring IS an acceptable "
         "event - classify it and score its relevance per the anchors below; do NOT reject it just "
         "for lacking an explicit AI mention (these are legitimate prospecting triggers).\n\n"
+        "event_date is the date THIS SPECIFIC EVENT happened or was reported - never the company's "
+        "founding year, a copyright year, or an encyclopedia/asset-profile page's last-updated stamp. "
+        "A static \"About Us\", company-overview, directory listing, or historical-background page "
+        "(e.g. \"Since 1926\", \"Founded in 1883\") has NO event date at all - set event_date to null "
+        "for it rather than guessing a year found on the page, even if that means most such pages "
+        "score as event_type company_identity_update with no date.\n\n"
         f"Allowed event_type values (choose the closest): {event_types}.\n"
         "event_category is one of: buying_stage, ai_seriousness, ai_pain_points, budget_and_capital, "
         "urgency_and_catalysts, competitive_context, company_identity, reachability.\n"
@@ -224,7 +237,7 @@ def _build_prompt(company: dict, offering_profile: dict, items: list[dict], now:
         "result describes it at length.\n"
         '[{"index":0,"is_real_company_event":true,"event_type":"vendor_evaluation",'
         '"event_category":"buying_stage","event_summary":"","event_status":"active",'
-        '"event_date":"2026-01-21","is_action":true,"xsparks_relevance":0.9,'
+        '"event_date":"2026-01-21","is_action":true,"xsparks_relevance":0.9,'  # event_date: null when the source has no real event date (see above)
         '"best_offering":"AI Agents and Workflow Automation","relevance_reason":"",'
         '"extraction_confidence":0.88,"is_negative":false,"negative_type":null,'
         '"public_budget_usd":null,"budget_currency":null,"budget_confidence":null,'
