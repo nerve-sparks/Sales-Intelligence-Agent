@@ -61,7 +61,7 @@ function WorkspaceSwitcher() {
   return (
     <div className="relative hidden lg:block" ref={rootRef}>
       <button
-        className="flex h-[46px] items-center gap-[8px] rounded-[12px] border border-[#e9edf5] bg-white px-[14px] text-[14px] font-semibold text-[#334155] disabled:cursor-default"
+        className="flex h-[40px] items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[12px] text-[13px] font-semibold text-[#334155] disabled:cursor-default"
         disabled={!hasMultiple}
         onClick={() => hasMultiple && setOpen((o) => !o)}
         type="button"
@@ -115,7 +115,7 @@ export function TopBar({
   const user = useCurrentUser();
 
   return (
-    <header className="sticky top-0 z-30 flex h-[88px] shrink-0 items-center gap-[16px] border-b border-[#e9edf5] bg-white px-[24px]">
+    <header className="sticky top-0 z-30 flex h-[64px] shrink-0 items-center gap-[14px] border-b border-[#e9edf5] bg-white px-[24px]">
       {showWorkspaceSwitcher && <WorkspaceSwitcher />}
 
       <div className="ml-auto flex items-center gap-[12px]">

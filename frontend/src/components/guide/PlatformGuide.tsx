@@ -16,7 +16,6 @@ import {
   Radio,
   Rocket,
   Scale,
-  Search,
   Settings as SettingsIcon,
   Sparkles,
   Target,
@@ -26,7 +25,7 @@ import {
   Wallet,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 import { Link } from "react-router-dom";
 import { cn } from "../../lib/cn";
 
@@ -1623,16 +1622,9 @@ function Block({ block }: { block: GuideBlock }) {
 
 function GuidePanel({ onClose }: { onClose: () => void }) {
   const [activeId, setActiveId] = useState(TOPICS[0].id);
-  const [query, setQuery] = useState("");
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  const matches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return TOPICS;
-    return TOPICS.filter((t) =>
-      [t.label, t.summary, ...t.blocks.map(blockText)].join(" ").toLowerCase().includes(q),
-    );
-  }, [query]);
+  const matches = TOPICS;
 
   // Keep the selection valid while filtering, so an empty content pane can
   // never be shown alongside a non-empty result list.
@@ -1683,16 +1675,6 @@ function GuidePanel({ onClose }: { onClose: () => void }) {
             <p className="m-0 text-[12px] text-[#64748b]">
               Every page, every metric, and exactly how a Lead Score is produced.
             </p>
-          </div>
-          <div className="relative hidden sm:block">
-            <Search className="pointer-events-none absolute left-[11px] top-1/2 size-[15px] -translate-y-1/2 text-[#94a3b8]" />
-            <input
-              aria-label="Search the guide"
-              className="h-[38px] w-[220px] rounded-[10px] border border-[#e9edf5] bg-[#f8fafc] pl-[34px] pr-[12px] text-[13px] text-[#334155] outline-none placeholder:text-[#94a3b8] focus:border-[#2563eb]"
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search the guide"
-              value={query}
-            />
           </div>
           <button
             aria-label="Close guide"
@@ -1747,11 +1729,7 @@ function GuidePanel({ onClose }: { onClose: () => void }) {
             className="min-w-0 flex-1 overflow-y-auto px-[24px] py-[22px] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             ref={bodyRef}
           >
-            {!active ? (
-              <p className="m-0 text-[13px] text-[#94a3b8]">
-                Nothing in the guide matches “{query}”.
-              </p>
-            ) : (
+            {active && (
               <>
                 {/* Mobile topic picker - the sidebar is hidden below md. */}
                 <div className="mb-[16px] md:hidden">
@@ -1812,12 +1790,12 @@ export function GuideButton() {
     <>
       <button
         aria-haspopup="dialog"
-        className="flex h-[46px] items-center gap-[8px] rounded-[12px] border border-[#e9edf5] bg-white px-[14px] text-[14px] font-semibold text-[#334155] transition hover:border-[#cbd5e1] hover:text-[#0f172a]"
+        className="flex h-[40px] items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[12px] text-[13px] font-semibold text-[#334155] transition hover:border-[#cbd5e1] hover:text-[#0f172a]"
         onClick={() => setOpen(true)}
         title="Platform guide"
         type="button"
       >
-        <BookOpen className="size-[17px] text-[#64748b]" />
+        <BookOpen className="size-[16px] text-[#64748b]" />
         <span className="hidden lg:inline">Guide</span>
       </button>
 

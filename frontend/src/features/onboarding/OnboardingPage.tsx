@@ -19,7 +19,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { FigmaLogo } from "../auth/LoginPage";
 import { ApiError } from "../../api/client";
-import { createOrganisation } from "../../api/organisations";
+import {
+  createOrganisation,
+  prefillFromWebsite,
+  seedOfferingProfile,
+  type OfferingProfile,
+  type WebsitePrefillOut,
+} from "../../api/organisations";
 import { addWorkspaceMember, createWorkspace } from "../../api/workspaces";
 import { createUser } from "../../api/users";
 import {
@@ -107,6 +113,8 @@ type OnboardingFormState = {
   business_type: string;
   headquarters_location: string;
   founded_year: string;
+  employee_count_range: string;
+  annual_revenue_range: string;
   company_description: string;
 };
 
@@ -127,6 +135,8 @@ const initialFormState: OnboardingFormState = {
   business_type: "B2B",
   headquarters_location: "",
   founded_year: "",
+  employee_count_range: "",
+  annual_revenue_range: "",
   company_description: "",
 };
 
@@ -151,7 +161,6 @@ function formatDate(iso: string | null): string {
 const steps = [
   ["Organization", "Setup"],
   ["Workspace", "Setup"],
-  ["Team", "Invitations"],
   ["Offering &", "Prospect Data"],
   ["Business", "Discovery"],
   ["Go", "Live"],
@@ -309,12 +318,33 @@ const goLiveFeatures = [
 const setupSummaryItems = [
   "Workspace Setup",
   "Organization Setup",
-  "Team Invitations",
   "Industry Selection",
   "Business Discovery",
   "Offering & Prospect Data",
   "Go Live",
 ];
+
+function applyOrganisationPrefill(
+  current: OnboardingFormState,
+  org: WebsitePrefillOut["organisation"],
+): OnboardingFormState {
+  const next = { ...current };
+  const assign = (key: keyof OnboardingFormState, value: unknown) => {
+    if (typeof value !== "string" || !value.trim()) return;
+    next[key] = value.trim() as OnboardingFormState[typeof key];
+  };
+  assign("company_name", org.company_name);
+  assign("legal_business_name", org.legal_business_name);
+  assign("industry", org.industry);
+  assign("sub_industry", org.sub_industry);
+  assign("headquarters_location", org.headquarters_location);
+  assign("founded_year", org.founded_year);
+  assign("employee_count_range", org.employee_count_range);
+  assign("annual_revenue_range", org.annual_revenue_range);
+  assign("business_type", org.business_type);
+  assign("company_description", org.company_description);
+  return next;
+}
 
 function RequiredMark() {
   return <span className="text-[#ef4444]">*</span>;
@@ -446,7 +476,21 @@ type StepFormProps = {
   onFieldChange: <K extends keyof OnboardingFormState>(field: K, value: OnboardingFormState[K]) => void;
 };
 
-function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
+type OrganizationSetupFormProps = StepFormProps & {
+  websiteLookupBusy: boolean;
+  websiteLookupHint: string | null;
+  onResearchWebsite: () => void;
+};
+
+function OrganizationSetupForm({
+  form,
+  onFieldChange,
+  websiteLookupBusy,
+  websiteLookupHint,
+  onResearchWebsite,
+}: OrganizationSetupFormProps) {
+  const canResearch = form.website.trim().length >= 4 && form.website.includes(".");
+
   return (
     <div className="grid grid-cols-1 gap-x-[20px] gap-y-[16px] md:grid-cols-2">
       <TextField
@@ -457,21 +501,30 @@ function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
         required
         value={form.company_name}
       />
-      <TextField
-        icon={icons.globe}
-        label="Website"
-        onChange={(v) => onFieldChange("website", v)}
-        placeholder="https://www.acmetech.com"
-        required
-        value={form.website}
-      />
-      <TextField
-        icon={icons.workspace}
-        label="Legal Business Name"
-        onChange={(v) => onFieldChange("legal_business_name", v)}
-        placeholder="Acme Technologies Incorporated"
-        value={form.legal_business_name}
-      />
+      <div className="flex flex-col gap-[8px]">
+        <FieldLabel required>Website</FieldLabel>
+        <div className="flex items-center gap-[8px]">
+          <div className="relative flex h-[42px] min-w-0 flex-1 items-center rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc]">
+            <img alt="" aria-hidden="true" className="absolute left-[12px] size-[18px]" src={icons.globe} />
+            <input
+              className="h-full w-full rounded-[8px] bg-transparent pl-[41px] pr-[14px] font-['Inter'] text-[14px] leading-[20px] text-[#0f172a] outline-none placeholder:text-[#94a3b8]"
+              onChange={(e) => onFieldChange("website", e.target.value)}
+              placeholder="https://www.acmetech.com"
+              type="url"
+              value={form.website}
+            />
+          </div>
+          <button
+            className="flex h-[42px] shrink-0 items-center gap-[6px] rounded-[8px] bg-[#0f1f6f] px-[14px] font-['Inter'] text-[13px] font-semibold text-white disabled:opacity-50"
+            disabled={!canResearch || websiteLookupBusy}
+            onClick={onResearchWebsite}
+            type="button"
+          >
+            <RadioTower aria-hidden="true" className="size-[15px]" />
+            {websiteLookupBusy ? "Researching…" : "Research"}
+          </button>
+        </div>
+      </div>
       <TextField
         icon={icons.workspace}
         label="Industry"
@@ -495,6 +548,15 @@ function OrganizationSetupForm({ form, onFieldChange }: StepFormProps) {
         placeholder="e.g. VP of Sales"
         value={form.designation}
       />
+
+      {websiteLookupBusy && (
+        <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#2563eb] md:col-span-2">
+          Researching your website via you.com…
+        </p>
+      )}
+      {!websiteLookupBusy && websiteLookupHint && (
+        <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#64748b] md:col-span-2">{websiteLookupHint}</p>
+      )}
 
       <div className="flex flex-col gap-[8px] md:col-span-2">
         <FieldLabel>Company Description</FieldLabel>
@@ -1256,6 +1318,53 @@ function OnboardingCard() {
   // batch once that finishes (still scoring_status: "pending" until the
   // background scoring task catches up - see the polling effect below).
   const [uploadStats, setUploadStats] = useState<"idle" | "uploading" | ImportBatchOut>("idle");
+  const [pendingOffering, setPendingOffering] = useState<{
+    profile: OfferingProfile;
+    source_url: string;
+  } | null>(null);
+  const [websiteLookupBusy, setWebsiteLookupBusy] = useState(false);
+  const [websiteLookupHint, setWebsiteLookupHint] = useState<string | null>(null);
+  const websitePrefillRequest = useRef(0);
+
+  const handleWebsiteResearch = async () => {
+    const raw = form.website.trim();
+    if (raw.length < 4 || !raw.includes(".")) {
+      setWebsiteLookupHint("Enter a valid website URL first.");
+      return;
+    }
+    const requestId = ++websitePrefillRequest.current;
+    setWebsiteLookupBusy(true);
+    setWebsiteLookupHint(null);
+    try {
+      const result = await prefillFromWebsite(raw);
+      if (requestId !== websitePrefillRequest.current) return;
+      if (result.status === "ok") {
+        setForm((prev) => applyOrganisationPrefill(prev, result.organisation));
+        if (result.offering_profile && result.website) {
+          setPendingOffering({ profile: result.offering_profile, source_url: result.website });
+        }
+        setWebsiteLookupHint(
+          result.offering_profile
+            ? "Company details and offering profile filled from your website."
+            : "Company details filled from your website.",
+        );
+      } else if (result.status === "not_configured") {
+        setWebsiteLookupHint("Website research is unavailable (you.com or LLM not configured).");
+      } else if (result.status === "invalid_url") {
+        setWebsiteLookupHint("Enter a valid website URL first.");
+      } else {
+        setWebsiteLookupHint("Could not find enough public information for that URL yet.");
+      }
+    } catch {
+      if (requestId === websitePrefillRequest.current) {
+        setWebsiteLookupHint("Website lookup failed. You can still fill the form manually.");
+      }
+    } finally {
+      if (requestId === websitePrefillRequest.current) {
+        setWebsiteLookupBusy(false);
+      }
+    }
+  };
 
   // Scoring runs in the background after the upload responds - poll until
   // this specific batch flips to "complete" so Business Discovery updates
@@ -1301,9 +1410,8 @@ function OnboardingCard() {
 
   const isOrganizationStep = activeStep === 0;
   const isWorkspaceStep = activeStep === 1;
-  const isTeamStep = activeStep === 2;
-  const isOfferingStep = activeStep === 3;
-  const isAiBusinessStep = activeStep === 4;
+  const isOfferingStep = activeStep === 2;
+  const isAiBusinessStep = activeStep === 3;
   const isGoLiveStep = activeStep === LAST_STEP;
   const stepperStep = activeStep;
   // Flexes to fill whatever space is left after the fixed-size stepper/
@@ -1361,10 +1469,19 @@ function OnboardingCard() {
           business_type: form.business_type || null,
           headquarters_location: form.headquarters_location || null,
           founded_year: form.founded_year || null,
+          employee_count_range: form.employee_count_range || null,
+          annual_revenue_range: form.annual_revenue_range || null,
           company_description: form.company_description || null,
         });
         setOrganisationId(org.organisation_id);
         setSessionOrganisationId(org.organisation_id);
+        if (pendingOffering) {
+          try {
+            await seedOfferingProfile(org.organisation_id, pendingOffering);
+          } catch {
+            /* offering step can sync manually */
+          }
+        }
       } catch (err) {
         setSubmitError(
           err instanceof ApiError ? String(err.detail) : "Something went wrong. Please try again.",
@@ -1456,11 +1573,9 @@ function OnboardingCard() {
             ? "Analysis in Progress"
             : isOfferingStep
               ? "Offering & Prospect Data"
-              : isTeamStep
-                ? "Invite Team Members"
-                : isOrganizationStep
-                  ? "Organization Information"
-                  : "Workspace Information"}
+              : isOrganizationStep
+                ? "Organization Information"
+                : "Workspace Information"}
         </h2>
         <p className="m-0 mt-[2px] font-['Inter'] text-[14px] font-normal leading-[21px] text-[#64748b]">
           {isGoLiveStep
@@ -1468,12 +1583,10 @@ function OnboardingCard() {
             : isAiBusinessStep
             ? "We're analyzing your business to build a powerful foundation for personalized insights."
             : isOfferingStep
-              ? "Review what XSparks sells, then upload your prospect data - no ICP required."
-              : isTeamStep
-                ? "Add your teammates by email and assign appropriate roles."
-                : isOrganizationStep
-                  ? "Tell us about your organization so we can personalize your XSparks experience."
-                  : "This will be your organization's dedicated workspace in XSparks."}
+              ? "Review your offering profile, then upload prospect data."
+              : isOrganizationStep
+                ? "Enter your website, then click Research to prefill company details via you.com."
+                : "This will be your organization's dedicated workspace in XSparks."}
         </p>
       </div>
 
@@ -1484,13 +1597,16 @@ function OnboardingCard() {
           style={{ transform: `translateX(-${activeStep * 100}%)` }}
         >
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <OrganizationSetupForm form={form} onFieldChange={handleFieldChange} />
+            <OrganizationSetupForm
+              form={form}
+              onFieldChange={handleFieldChange}
+              onResearchWebsite={handleWebsiteResearch}
+              websiteLookupBusy={websiteLookupBusy}
+              websiteLookupHint={websiteLookupHint}
+            />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <WorkspaceSetupForm firebaseEmail={firebaseUser?.email ?? null} form={form} onFieldChange={handleFieldChange} />
-          </div>
-          <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <TeamInvitationsForm />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <OfferingAndProspectDataForm

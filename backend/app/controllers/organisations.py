@@ -6,8 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import VerifiedFirebaseUser, require_firebase_user, require_organisation_member
 from app.core.db import get_db
-from app.services.offering_profile_service import sync_offering_profile
+from app.schemas.organisation import OfferingProfileSeedIn, WebsitePrefillIn
+from app.services.offering_profile_service import seed_offering_profile, sync_offering_profile
 from app.services.organisation_service import create_organisation, get_organisation, update_organisation
+from app.services.organisation_website_intelligence import prefill_from_website
 
 
 class OrganisationCreate(BaseModel):
@@ -83,7 +85,25 @@ async def sync_offering_profile_endpoint(
     db: AsyncSession = Depends(get_db),
     _member: object = Depends(require_organisation_member),
 ):
-    """Re-fetch XSparks' Offering Profile from xsparks.ai (scraper + LLM),
-    falling back cleanly if unavailable (brief section 6). Never 500s on a
-    scrape/LLM failure - returns status 'sync_failed' with the fallback."""
+    """Re-fetch the tenant Offering Profile from their website (you.com + LLM),
+    falling back cleanly if unavailable. Never 500s on failure."""
     return await sync_offering_profile(db, organisation_id)
+
+
+async def prefill_from_website_endpoint(
+    payload: WebsitePrefillIn,
+    _firebase_user: VerifiedFirebaseUser = Depends(require_firebase_user),
+):
+    """Onboarding: research a URL before an organisation exists."""
+    del _firebase_user
+    return await prefill_from_website(payload.website)
+
+
+async def seed_offering_profile_endpoint(
+    organisation_id: UUID,
+    payload: OfferingProfileSeedIn,
+    db: AsyncSession = Depends(get_db),
+    _member: object = Depends(require_organisation_member),
+):
+    del _member
+    return await seed_offering_profile(db, organisation_id, payload.profile, payload.source_url)

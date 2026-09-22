@@ -6,11 +6,11 @@ Crucially, the Offering Profile NEVER excludes a company - it only informs the
 LLM's relevance judgement (xsparks_relevance, best_offering). Every uploaded
 company is still scored regardless.
 
-sync flow: scrape xsparks.ai via the Nexus scraper -> ask the LLM for
-structured JSON -> validate -> store on Organisation. If scraping or the LLM
+sync flow: research the organisation's website via you.com -> ask the LLM for
+structured JSON -> validate -> store on Organisation. If research or the LLM
 is unavailable, fall back to XSPARKS_FALLBACK_PROFILE and record an honest
 status ('fallback'/'sync_failed') rather than pretending fallback content was
-freshly scraped.
+freshly synced.
 """
 
 import json
@@ -20,7 +20,11 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Organisation
-from app.services import llm_client, nexus_scraper
+from app.services import llm_client, you_client
+from app.services.organisation_website_intelligence import (
+    _normalize_website,
+    gather_website_research_text,
+)
 
 XSPARKS_SOURCE_URL = "https://xsparks.ai/"
 OFFERING_PROFILE_VERSION = 1
@@ -129,10 +133,10 @@ def profile_for_scoring(org: Organisation | None) -> dict:
     return fallback_profile()
 
 
-def _build_extraction_prompt(scraped_text: str) -> str:
+def _build_extraction_prompt(scraped_text: str, company_name: str, source_url: str) -> str:
     template = json.dumps(
         {
-            "company": "XSparks",
+            "company": company_name or "",
             "positioning": "",
             "offerings": [{"name": "", "problems_solved": [], "technologies": [], "buying_signals": []}],
             "problems_solved": [],
@@ -143,9 +147,9 @@ def _build_extraction_prompt(scraped_text: str) -> str:
         indent=2,
     )
     return (
-        "You are analysing the website of XSparks, an AI solutions and AI transformation "
-        "partner. From the scraped page content below, produce a structured JSON profile of "
-        "what XSparks SELLS - the offerings, the problems each solves, the relevant "
+        f"You are analysing public web research about {company_name or 'this company'} "
+        f"({source_url}). From the content below, produce a structured JSON profile of "
+        "what the company SELLS - the offerings, the problems each solves, the relevant "
         "technologies, and the categories of alternative solutions a buyer might consider.\n\n"
         "Rules:\n"
         "- alternative_solutions must be solution CATEGORIES (e.g. 'Internal AI development', "
@@ -155,7 +159,7 @@ def _build_extraction_prompt(scraped_text: str) -> str:
         "- buying_signals should describe the kind of company event that would indicate a need "
         "for that offering.\n\n"
         f"Respond with ONLY this JSON shape, no prose or markdown:\n{template}\n\n"
-        f"Scraped content:\n{scraped_text[:12000]}"
+        f"Research content:\n{scraped_text[:12000]}"
     )
 
 
@@ -174,20 +178,36 @@ def _parse_profile(raw: str) -> dict | None:
     return parsed
 
 
-async def _scrape_and_extract(organisation_id=None) -> dict | None:
-    """Returns a freshly-scraped + LLM-structured profile, or None if either
-    the scraper or the LLM is unavailable / returns unusable output."""
-    if not nexus_scraper.is_configured() or not llm_client.is_configured():
+def _source_url_for_org(org: Organisation | None) -> str:
+    if org is not None and org.website:
+        normalized = _normalize_website(org.website)
+        if normalized:
+            return normalized
+    return XSPARKS_SOURCE_URL
+
+
+async def _research_and_extract(
+    source_url: str,
+    company_name: str | None,
+    organisation_id=None,
+) -> dict | None:
+    """Returns a you.com-researched + LLM-structured profile, or None if unavailable."""
+    if not you_client.is_configured() or not llm_client.is_configured():
         return None
     try:
-        content = await nexus_scraper.scrape(XSPARKS_SOURCE_URL, output_format="markdown")
+        content = await gather_website_research_text(source_url)
     except Exception:
         return None
-    if not content:
+    if not content.strip():
         return None
     try:
         raw = await llm_client.complete(
-            [{"role": "user", "content": _build_extraction_prompt(content)}],
+            [
+                {
+                    "role": "user",
+                    "content": _build_extraction_prompt(content, company_name or "", source_url),
+                }
+            ],
             generation_name="sync-offering-profile",
             trace_user_id=str(organisation_id) if organisation_id else None,
         )
@@ -197,22 +217,22 @@ async def _scrape_and_extract(organisation_id=None) -> dict | None:
 
 
 async def sync_offering_profile(session: AsyncSession, organisation_id) -> dict:
-    """Sync XSparks' Offering Profile onto the organisation. Never raises for
-    a scraping/LLM failure - it stores the fallback with an honest status
-    instead, so onboarding is never blocked by xsparks.ai being unavailable
-    (brief section 6). Returns {status, profile}."""
+    """Sync the tenant Offering Profile from their website via you.com. Never
+    raises for a research/LLM failure - stores fallback with honest status.
+    Returns {status, profile}."""
+    org = await session.get(Organisation, organisation_id)
+    source_url = _source_url_for_org(org)
+    company_name = org.company_name if org is not None else None
     now = datetime.now(timezone.utc)
-    extracted = await _scrape_and_extract(organisation_id)
+    extracted = await _research_and_extract(source_url, company_name, organisation_id)
 
     if extracted is not None:
-        extracted["source_url"] = XSPARKS_SOURCE_URL
+        extracted["source_url"] = source_url
         extracted["synced_at"] = now.isoformat()
         extracted["version"] = OFFERING_PROFILE_VERSION
         profile, status = extracted, STATUS_SYNCED
     else:
         profile = fallback_profile()
-        # sync_failed if the org previously had a real profile or we actively
-        # tried and failed; plain fallback if this is a first-time seed.
         status = STATUS_SYNC_FAILED
 
     await session.execute(
@@ -220,13 +240,39 @@ async def sync_offering_profile(session: AsyncSession, organisation_id) -> dict:
         .where(Organisation.organisation_id == organisation_id)
         .values(
             offering_profile=profile,
-            offering_profile_source_url=XSPARKS_SOURCE_URL,
+            offering_profile_source_url=source_url,
             offering_profile_status=status,
             offering_profile_synced_at=now if status == STATUS_SYNCED else None,
         )
     )
     await session.commit()
     return {"status": status, "profile": profile}
+
+
+async def seed_offering_profile(
+    session: AsyncSession,
+    organisation_id,
+    profile: dict,
+    source_url: str,
+) -> dict:
+    """Apply a profile already extracted during onboarding (no second LLM call)."""
+    now = datetime.now(timezone.utc)
+    seeded = json.loads(json.dumps(profile))
+    seeded["source_url"] = source_url
+    seeded["synced_at"] = now.isoformat()
+    seeded["version"] = OFFERING_PROFILE_VERSION
+    await session.execute(
+        update(Organisation)
+        .where(Organisation.organisation_id == organisation_id)
+        .values(
+            offering_profile=seeded,
+            offering_profile_source_url=source_url,
+            offering_profile_status=STATUS_SYNCED,
+            offering_profile_synced_at=now,
+        )
+    )
+    await session.commit()
+    return {"status": STATUS_SYNCED, "profile": seeded}
 
 
 OFFERING_PROFILE_STALE_DAYS = 30

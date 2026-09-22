@@ -56,6 +56,24 @@ export function syncOfferingProfile(organisationId: string): Promise<OfferingPro
   return apiPost<OfferingProfileSyncOut>(`/organisations/${organisationId}/offering-profile/sync`);
 }
 
+export type WebsitePrefillOut = {
+  website: string | null;
+  status: string;
+  organisation: Record<string, string | null | undefined>;
+  offering_profile: OfferingProfile | null;
+};
+
+export function prefillFromWebsite(website: string): Promise<WebsitePrefillOut> {
+  return apiPost<WebsitePrefillOut>("/organisations/prefill-from-website", { website });
+}
+
+export function seedOfferingProfile(
+  organisationId: string,
+  payload: { profile: OfferingProfile; source_url: string },
+): Promise<OfferingProfileSyncOut> {
+  return apiPost<OfferingProfileSyncOut>(`/organisations/${organisationId}/offering-profile/seed`, payload);
+}
+
 export type OrganisationCreate = {
   // Onboarding step 1 - account identity
   account_name?: string | null;

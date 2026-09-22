@@ -37,25 +37,6 @@ import uploadIconAsset from "../../assets/figma/onboarding/icons/upload.svg";
 import workspaceIconAsset from "../../assets/figma/onboarding/icons/workspace.svg";
 import globeIconAsset from "../../assets/figma/onboarding/icons/globe.svg";
 
-/* Read-only explanation of how scoring works (brief item 2). */
-function ScoringMethodCard() {
-  return (
-    <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
-      <h2 className="m-0 font-['Inter'] text-[16px] font-bold text-[#0f172a]">Scoring Method</h2>
-      <p className="m-0 mt-[6px] font-['Inter'] text-[14px] font-semibold text-[#334155]">
-        Lead Score = Buying Evidence + Contact Access − Negative Evidence (0–100)
-      </p>
-      <ul className="m-0 mt-[10px] flex flex-col gap-[6px] pl-[18px] font-['Inter'] text-[13px] text-[#64748b]">
-        <li>Status thresholds: Sales Ready 65+, High Priority 50–64, Warm 35–49, Monitor 20–34, Low Priority 0–19.</li>
-        <li>Evidence is deduplicated - multiple articles about one event count once, with corroborating sources.</li>
-        <li>Revenue and funding affect Expected Deal Value only, never the Lead Score.</li>
-        <li>Confidence is calculated separately from the score.</li>
-        <li>External evidence is gathered live via Tavily web research.</li>
-      </ul>
-    </div>
-  );
-}
-
 /* Ongoing counterpart to Onboarding's Offering & Prospect Data step: review
  * the XSparks Offering Profile, upload prospect data at any time, and see
  * every past upload in a persisted history table (IcpImportBatch - a real DB
@@ -384,7 +365,7 @@ function OrganizationPanel({
   ];
 
   return (
-    <div className="mb-[20px] rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
+    <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-[10px]">
           <span className="flex size-[36px] items-center justify-center rounded-[9px] bg-[#eef1ff] text-[#4f46e5]">
@@ -568,7 +549,7 @@ function WorkspacesPanel({ organisationId }: { organisationId: string | null }) 
   };
 
   return (
-    <div className="mb-[20px] rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
+    <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-[10px]">
           <span className="flex size-[36px] items-center justify-center rounded-[9px] bg-[#eef1ff] text-[#4f46e5]">
@@ -1058,20 +1039,19 @@ export function SettingsIcpDataPage() {
             </p>
           </div>
 
-          <OrganizationPanel organisationId={organisationId} workspaceId={workspaceId} />
+          <div className="flex flex-col gap-[20px]">
+            <OrganizationPanel organisationId={organisationId} workspaceId={workspaceId} />
 
-          <WorkspacesPanel organisationId={organisationId} />
+            <WorkspacesPanel organisationId={organisationId} />
 
-          <OfferingProfileCard />
+            <OfferingProfileCard />
 
-          <ScoringMethodCard />
-
-          {!workspaceId ? (
-            <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[24px] font-['Inter'] text-[14px] text-[#64748b]">
-              No workspace found yet — finish onboarding first.
-            </div>
-          ) : (
-            <div className="flex flex-col gap-[20px]">
+            {!workspaceId ? (
+              <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[24px] font-['Inter'] text-[14px] text-[#64748b]">
+                No workspace found yet — finish onboarding first.
+              </div>
+            ) : (
+              <>
               <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[20px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
@@ -1294,8 +1274,9 @@ export function SettingsIcpDataPage() {
                   </div>
                 )}
               </div>
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </main>
       </div>
     </div>

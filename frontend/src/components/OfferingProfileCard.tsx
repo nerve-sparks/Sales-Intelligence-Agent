@@ -66,9 +66,9 @@ export function OfferingProfileCard() {
     <div className="rounded-[16px] border border-[#eef1f6] bg-white p-[22px] shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex flex-wrap items-start justify-between gap-[12px]">
         <div>
-          <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">XSparks Offering Profile</h2>
+          <h2 className="m-0 text-[16px] font-bold text-[#0f172a]">Offering Profile</h2>
           <p className="m-0 mt-[4px] text-[13px] text-[#64748b]">
-            What XSparks sells - used to judge how relevant each company's buying signals are. Never excludes a company.
+            What your company sells — used to judge how relevant each prospect&apos;s buying signals are. Never excludes a company.
           </p>
           <div className="mt-[8px] flex flex-wrap items-center gap-[10px] text-[12px] text-[#64748b]">
             <StatusBadge status={status} />

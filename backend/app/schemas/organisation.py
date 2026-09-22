@@ -36,3 +36,19 @@ class OrganisationOut(BaseModel):
 class OfferingProfileSyncOut(BaseModel):
     status: str
     profile: dict
+
+
+class WebsitePrefillIn(BaseModel):
+    website: str
+
+
+class WebsitePrefillOut(BaseModel):
+    website: str | None = None
+    status: str
+    organisation: dict = {}
+    offering_profile: dict | None = None
+
+
+class OfferingProfileSeedIn(BaseModel):
+    profile: dict
+    source_url: str
