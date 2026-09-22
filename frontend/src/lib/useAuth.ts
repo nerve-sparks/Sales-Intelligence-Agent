@@ -1,21 +1,24 @@
 import { useEffect, useState } from "react";
-import { onAuthStateChanged, type User } from "firebase/auth";
-import { auth } from "./firebase";
+import { getAuthUser, type AuthUser } from "./authToken";
 
-/* Tracks Firebase's real auth state (not the org/workspace session in
- * lib/session.ts, which is a separate, unrelated concept - a signed-in
- * Firebase user might not have an org/workspace yet, and vice versa isn't
- * possible since onboarding itself now requires being signed in). */
-export function useAuth(): { user: User | null; loading: boolean } {
-  const [user, setUser] = useState<User | null>(null);
+/* Tracks whether a gateway JWT is present in localStorage. Re-reads on
+ * auth-changed (login/logout) and storage events from other tabs. */
+export function useAuth(): { user: AuthUser | null; loading: boolean } {
+  const [user, setUser] = useState<AuthUser | null>(() => getAuthUser());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
+    const sync = () => {
+      setUser(getAuthUser());
       setLoading(false);
-    });
-    return unsubscribe;
+    };
+    sync();
+    window.addEventListener("auth-changed", sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener("auth-changed", sync);
+      window.removeEventListener("storage", sync);
+    };
   }, []);
 
   return { user, loading };

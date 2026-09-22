@@ -572,7 +572,7 @@ function OrganizationSetupForm({
   );
 }
 
-function WorkspaceSetupForm({ form, onFieldChange, firebaseEmail }: StepFormProps & { firebaseEmail: string | null }) {
+function WorkspaceSetupForm({ form, onFieldChange, authEmail }: StepFormProps & { authEmail: string | null }) {
   return (
     <div className="grid grid-cols-1 gap-x-[20px] gap-y-[19px] md:grid-cols-2">
       <TextField
@@ -596,10 +596,7 @@ function WorkspaceSetupForm({ form, onFieldChange, firebaseEmail }: StepFormProp
         placeholder="Enter your full name"
         value={form.user_full_name}
       />
-      {/* Locked to the actual logged-in Firebase account, not free-typed -
-       * this is the real identity the workspace membership (and the
-       * backend's app_user row) gets created under, so it can't drift from
-       * whoever is actually signed in. */}
+      {/* Locked to the logged-in gateway account email. */}
       <TextField
         disabled
         icon={<Mail className="size-[16px] text-[#94a3b8]" />}
@@ -607,7 +604,7 @@ function WorkspaceSetupForm({ form, onFieldChange, firebaseEmail }: StepFormProp
         onChange={() => {}}
         placeholder="you@company.com"
         required
-        value={firebaseEmail ?? form.user_email}
+        value={authEmail ?? form.user_email}
       />
     </div>
   );
@@ -1297,7 +1294,7 @@ function OnboardingStepper({ activeStep }: { activeStep: number }) {
 
 function OnboardingCard() {
   const navigate = useNavigate();
-  const { user: firebaseUser } = useAuth();
+  const { user: authUser } = useAuth();
   // Landing here can mean "genuinely new account" OR "RequireOnboarding
   // bounced a returning user here because this browser's cached session was
   // empty" (different browser, cleared storage, etc.) - GET /auth/me (via
@@ -1390,7 +1387,7 @@ function OnboardingCard() {
   }, [uploadStats, workspaceId]);
 
   useEffect(() => {
-    if (!firebaseUser) {
+    if (!authUser) {
       setCheckingAccount(false);
       return;
     }
@@ -1406,7 +1403,7 @@ function OnboardingCard() {
     return () => {
       cancelled = true;
     };
-  }, [firebaseUser, navigate]);
+  }, [authUser, navigate]);
 
   const isOrganizationStep = activeStep === 0;
   const isWorkspaceStep = activeStep === 1;
@@ -1500,13 +1497,9 @@ function OnboardingCard() {
       // Workspace Name is optional in the UI (Workspace.workspace_name is
       // still a NOT NULL column on the backend, so a blank entry falls back
       // to a generated placeholder instead of blocking the step). Your
-      // Email is no longer free-typed - it's locked to whichever Firebase
-      // account is actually logged in (RequireAuth guarantees one exists on
-      // every onboarding page), and the backend re-derives/verifies it from
-      // the request's bearer token anyway (see app/controllers/users.py),
-      // so this is really just what gets shown while submitting.
+      // Email is locked to the authenticated gateway account.
       const workspaceName = form.workspace_name.trim() || `${form.company_name || "My"} Workspace`;
-      const userEmail = firebaseUser?.email ?? `founder+${Date.now()}@placeholder.local`;
+      const userEmail = authUser?.email ?? `founder+${Date.now()}@placeholder.local`;
 
       setSubmitting(true);
       setSubmitError(null);
@@ -1606,7 +1599,7 @@ function OnboardingCard() {
             />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
-            <WorkspaceSetupForm firebaseEmail={firebaseUser?.email ?? null} form={form} onFieldChange={handleFieldChange} />
+            <WorkspaceSetupForm authEmail={authUser?.email ?? null} form={form} onFieldChange={handleFieldChange} />
           </div>
           <div className="h-full w-full shrink-0 overflow-y-auto pr-[6px]" style={{ overflowAnchor: "none" }}>
             <OfferingAndProspectDataForm

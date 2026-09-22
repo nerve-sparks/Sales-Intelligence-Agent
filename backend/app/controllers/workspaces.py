@@ -6,8 +6,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import (
-    VerifiedFirebaseUser,
-    require_firebase_user,
+    VerifiedAuthUser,
+    require_auth_user,
     require_organisation_member,
     require_workspace_member,
 )
@@ -31,7 +31,7 @@ async def create(
     organisation_id: UUID,
     payload: WorkspaceCreate,
     db: AsyncSession = Depends(get_db),
-    firebase_user: VerifiedFirebaseUser = Depends(require_firebase_user),
+    auth_user: VerifiedAuthUser = Depends(require_auth_user),
 ):
     # Two legitimate callers: (a) an existing member of this organisation
     # creating an additional department workspace (Settings' "+ New
@@ -39,7 +39,7 @@ async def create(
     # brand-new organisation - at that point createUser hasn't run yet, so
     # there's no app_user row to match against. Anyone else (a different
     # org's member, or a stranger guessing this organisation_id) is rejected.
-    user = (await db.execute(select(User).where(User.firebase_uid == firebase_user.uid))).scalar_one_or_none()
+    user = (await db.execute(select(User).where(User.firebase_uid == auth_user.uid))).scalar_one_or_none()
     if user is not None:
         if user.organisation_id != organisation_id:
             raise HTTPException(status_code=403, detail="Not authorized for this organisation")
@@ -79,7 +79,7 @@ async def add_workspace_member(
     workspace_id: UUID,
     payload: MemberCreate,
     db: AsyncSession = Depends(get_db),
-    firebase_user: VerifiedFirebaseUser = Depends(require_firebase_user),
+    auth_user: VerifiedAuthUser = Depends(require_auth_user),
 ):
     workspace = await db.get(Workspace, workspace_id)
     if workspace is None:
@@ -87,10 +87,7 @@ async def add_workspace_member(
 
     # No "invite a teammate" flow exists yet - the only real caller is
     # onboarding adding the founder's own just-created User row as owner.
-    # Requiring the caller's own resolved identity to match both the
-    # payload's user_id AND this workspace's organisation stops anyone from
-    # adding an arbitrary user_id to a workspace they don't belong to.
-    user = (await db.execute(select(User).where(User.firebase_uid == firebase_user.uid))).scalar_one_or_none()
+    user = (await db.execute(select(User).where(User.firebase_uid == auth_user.uid))).scalar_one_or_none()
     if user is None or user.user_id != payload.user_id or user.organisation_id != workspace.organisation_id:
         raise HTTPException(status_code=403, detail="Not authorized to add this member")
 

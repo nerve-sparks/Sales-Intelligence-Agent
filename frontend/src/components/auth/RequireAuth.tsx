@@ -3,10 +3,7 @@ import { Navigate } from "react-router-dom";
 import { useAuth } from "../../lib/useAuth";
 
 /* Wraps every non-auth route (see App.tsx) - unauthenticated visitors get
- * bounced to "/" (LoginPage), which itself covers login/signup/mfa.
- * Firebase's auth state takes a moment to resolve on first load (it's
- * reading IndexedDB/localStorage async), so there's a brief loading state
- * rather than redirecting before we actually know. */
+ * bounced to "/" (LoginPage). Auth state is the gateway JWT in localStorage. */
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
 

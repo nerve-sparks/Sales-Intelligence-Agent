@@ -1,19 +1,58 @@
 /* Shared fetch wrapper for every file in src/api/. One file per backend
  * routes/*.py file - keep that mapping when adding new endpoints. */
-import { auth } from "../lib/firebase";
+import { clearAuthTokens, getAccessToken, getRefreshToken } from "../lib/authToken";
+import { gatewayRefresh } from "../lib/gatewayAuth";
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8175";
 
-/* Attaches the current Firebase session as a bearer token so the backend
- * can verify who's actually calling (see backend/app/core/auth.py) -
- * without this every request looked anonymous no matter who was logged in.
- * Empty when logged out; those endpoints don't all require auth yet, so an
- * absent header is a normal, non-error state, not something to throw on. */
 async function authHeaders(): Promise<Record<string, string>> {
-  const user = auth.currentUser;
-  if (!user) return {};
-  const token = await user.getIdToken();
+  const token = getAccessToken();
+  if (!token) return {};
   return { Authorization: `Bearer ${token}` };
+}
+
+// A single in-flight refresh shared by every caller: several requests can hit
+// a 401 near-simultaneously (e.g. a page mount firing 3-4 parallel fetches
+// right as the access token expires), and each one racing its own /refresh
+// call would let one rotation invalidate another's - the exact kind of
+// intermittent logout this exists to fix.
+let refreshInFlight: Promise<boolean> | null = null;
+
+function refreshAccessToken(): Promise<boolean> {
+  if (!refreshInFlight) {
+    const refreshToken = getRefreshToken();
+    refreshInFlight = (refreshToken ? gatewayRefresh(refreshToken).then(() => true) : Promise.resolve(false))
+      .catch(() => false)
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
+/** Runs one request; on a 401, tries ONE silent token refresh and retries
+ * once before giving up. Only a 401 that survives a fresh access token means
+ * the session is genuinely over - previously ANY 401 cleared the session
+ * immediately, so a token expiring mid-session (often first surfaced by the
+ * next sidebar navigation's data fetch) force-logged the user out instead of
+ * silently renewing. */
+async function fetchWithAuthRetry(request: () => Promise<Response>): Promise<Response> {
+  const response = await request();
+  if (response.status !== 401) return response;
+
+  const refreshed = await refreshAccessToken();
+  if (!refreshed) {
+    clearAuthTokens();
+    return response;
+  }
+
+  const retryResponse = await request();
+  if (retryResponse.status === 401) {
+    // The gateway accepted the refresh but the session still isn't valid -
+    // genuinely logged out (e.g. the refresh token itself was revoked).
+    clearAuthTokens();
+  }
+  return retryResponse;
 }
 
 export class ApiError extends Error {
@@ -37,19 +76,22 @@ async function parseErrorDetail(response: Response): Promise<unknown> {
 }
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${BASE_URL}${path}`, {
-    // Every page (Dashboard included) fetches its data fresh on load/navigation
-    // - "no-store" guarantees that's a real network hit against the current
-    // database state, not a cached response from the browser's disk/back-
-    // forward cache, regardless of what any intermediary might otherwise do.
-    cache: "no-store",
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(await authHeaders()),
-      ...options.headers,
-    },
-  });
+  const token = getAccessToken();
+  if (!token) {
+    throw new ApiError(401, "Your session has expired. Please sign in again.");
+  }
+
+  const response = await fetchWithAuthRetry(async () =>
+    fetch(`${BASE_URL}${path}`, {
+      cache: "no-store",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(await authHeaders()),
+        ...options.headers,
+      },
+    }),
+  );
 
   if (!response.ok) {
     throw new ApiError(response.status, await parseErrorDetail(response));
@@ -78,44 +120,51 @@ export function apiDelete<T>(path: string): Promise<T> {
   return apiFetch<T>(path, { method: "DELETE" });
 }
 
-/* For endpoints that take a multipart file and return JSON (e.g. the logo
- * upload) - as opposed to apiPostForBlob below, which is FormData in AND a
- * binary file out. */
 export async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
-  const response = await fetch(`${BASE_URL}${path}`, {
-    method: "POST",
-    body: formData,
-    headers: await authHeaders(),
-  });
+  const token = getAccessToken();
+  if (!token) {
+    throw new ApiError(401, "Your session has expired. Please sign in again.");
+  }
+  const response = await fetchWithAuthRetry(async () =>
+    fetch(`${BASE_URL}${path}`, {
+      method: "POST",
+      body: formData,
+      headers: await authHeaders(),
+    }),
+  );
   if (!response.ok) {
     throw new ApiError(response.status, await parseErrorDetail(response));
   }
   return (await response.json()) as T;
 }
 
-/* For endpoints that return a binary file (e.g. the scored Excel download)
- * instead of JSON. Headers are returned alongside the blob since some
- * endpoints (the Excel import pipeline) report real result counts via
- * custom response headers - the body has to stay the binary file. */
 export async function apiPostForBlob(
   path: string,
   formData: FormData,
 ): Promise<{ blob: Blob; headers: Headers }> {
-  const response = await fetch(`${BASE_URL}${path}`, {
-    method: "POST",
-    body: formData,
-    headers: await authHeaders(),
-  });
+  const token = getAccessToken();
+  if (!token) {
+    throw new ApiError(401, "Your session has expired. Please sign in again.");
+  }
+  const response = await fetchWithAuthRetry(async () =>
+    fetch(`${BASE_URL}${path}`, {
+      method: "POST",
+      body: formData,
+      headers: await authHeaders(),
+    }),
+  );
   if (!response.ok) {
     throw new ApiError(response.status, await parseErrorDetail(response));
   }
   return { blob: await response.blob(), headers: response.headers };
 }
 
-/* Same idea as apiPostForBlob but for GET endpoints that stream back a
- * binary file (e.g. the Enterprise List's company export). */
 export async function apiGetForBlob(path: string): Promise<{ blob: Blob; headers: Headers }> {
-  const response = await fetch(`${BASE_URL}${path}`, { headers: await authHeaders() });
+  const token = getAccessToken();
+  if (!token) {
+    throw new ApiError(401, "Your session has expired. Please sign in again.");
+  }
+  const response = await fetchWithAuthRetry(async () => fetch(`${BASE_URL}${path}`, { headers: await authHeaders() }));
   if (!response.ok) {
     throw new ApiError(response.status, await parseErrorDetail(response));
   }

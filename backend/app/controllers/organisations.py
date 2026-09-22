@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import VerifiedFirebaseUser, require_firebase_user, require_organisation_member
+from app.core.auth import VerifiedAuthUser, require_auth_user, require_organisation_member
 from app.core.db import get_db
 from app.schemas.organisation import OfferingProfileSeedIn, WebsitePrefillIn
 from app.services.offering_profile_service import seed_offering_profile, sync_offering_profile
@@ -52,7 +52,7 @@ class OrganisationUpdate(BaseModel):
 async def create(
     payload: OrganisationCreate,
     db: AsyncSession = Depends(get_db),
-    _firebase_user: VerifiedFirebaseUser = Depends(require_firebase_user),
+    _auth_user: VerifiedAuthUser = Depends(require_auth_user),
 ):
     return await create_organisation(db, payload.model_dump())
 
@@ -92,10 +92,10 @@ async def sync_offering_profile_endpoint(
 
 async def prefill_from_website_endpoint(
     payload: WebsitePrefillIn,
-    _firebase_user: VerifiedFirebaseUser = Depends(require_firebase_user),
+    _auth_user: VerifiedAuthUser = Depends(require_auth_user),
 ):
     """Onboarding: research a URL before an organisation exists."""
-    del _firebase_user
+    del _auth_user
     return await prefill_from_website(payload.website)
 
 

@@ -30,7 +30,7 @@ import {
 } from "../../api/workspaces";
 import { getOrganisation, updateOrganisation, type OrganisationOut } from "../../api/organisations";
 import { updateUser } from "../../api/users";
-import { auth } from "../../lib/firebase";
+import { getAuthUser } from "../../lib/authToken";
 import { useRefreshCurrentUser } from "../../lib/CurrentUserContext";
 import { getOrganisationId, getWorkspaceId, setWorkspaceId } from "../../lib/session";
 import uploadIconAsset from "../../assets/figma/onboarding/icons/upload.svg";
@@ -303,7 +303,7 @@ function OrganizationPanel({
 
   useEffect(() => {
     if (!workspaceId) return;
-    const email = auth.currentUser?.email;
+    const email = getAuthUser()?.email;
     listWorkspaceMembers(workspaceId)
       .then((members) => setMe(members.find((m) => m.email === email) ?? null))
       .catch(() => setMe(null));

@@ -200,20 +200,31 @@ async def _research_and_extract(
         return None
     if not content.strip():
         return None
-    try:
-        raw = await llm_client.complete(
-            [
-                {
-                    "role": "user",
-                    "content": _build_extraction_prompt(content, company_name or "", source_url),
-                }
-            ],
-            generation_name="sync-offering-profile",
-            trace_user_id=str(organisation_id) if organisation_id else None,
-        )
-    except Exception:
-        return None
-    return _parse_profile(raw)
+
+    prompt = _build_extraction_prompt(content, company_name or "", source_url)
+    # Two attempts: this profile is long/multi-offering JSON (confirmed live -
+    # a 9-offering response dropped a closing brace mid-array, e.g.
+    # "...]\n    ,\n    {" instead of "...]\n    },\n    {"), and unlike every
+    # other extraction call site in the app (buying_event_service,
+    # evidence_scorer's judge) this one wasn't pinned to temperature=0, so a
+    # single malformed response permanently failed the whole sync with no
+    # second chance. temperature=0 alone doesn't guarantee valid JSON, so one
+    # retry backs it up cheaply (this call runs at most once per org per
+    # month - see OFFERING_PROFILE_STALE_DAYS).
+    for attempt in range(2):
+        try:
+            raw = await llm_client.complete(
+                [{"role": "user", "content": prompt}],
+                generation_name="sync-offering-profile",
+                temperature=0,
+                trace_user_id=str(organisation_id) if organisation_id else None,
+            )
+        except Exception:
+            return None
+        parsed = _parse_profile(raw)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 async def sync_offering_profile(session: AsyncSession, organisation_id) -> dict:

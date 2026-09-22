@@ -10,7 +10,7 @@ openpyxl==3.1.5
 python-multipart==0.0.20
 httpx==0.28.1
 openai==2.46.0
-firebase-admin==7.5.0
+python-jose[cryptography]==3.3.0
 langfuse==4.14.1
 
 # Dev/test tooling (brief item 26). The standalone tests/ scripts also run

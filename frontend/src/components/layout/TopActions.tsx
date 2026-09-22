@@ -1,9 +1,8 @@
-import { signOut } from "firebase/auth";
 import { Bell, ChevronDown, LogOut, Scan } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "../../lib/cn";
-import { auth } from "../../lib/firebase";
+import { gatewayLogout } from "../../lib/gatewayAuth";
 import { clearSession } from "../../lib/session";
 
 /* Reusable header/top-bar controls shared across feature pages. */
@@ -82,11 +81,8 @@ export function UserMenu({
   const handleLogout = async () => {
     setLoggingOut(true);
     try {
-      await signOut(auth);
+      await gatewayLogout();
     } finally {
-      // Clear regardless of whether signOut itself succeeded - staying
-      // signed in with a stale cached org/workspace is worse than a
-      // redundant clear.
       clearSession();
       navigate("/", { replace: true });
     }

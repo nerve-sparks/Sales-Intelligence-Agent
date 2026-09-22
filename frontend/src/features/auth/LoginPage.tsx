@@ -1,53 +1,29 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-} from "firebase/auth";
-import { FirebaseError } from "firebase/app";
-import { auth } from "../../lib/firebase";
+import { GatewayAuthError, gatewayLogin, gatewayRegister } from "../../lib/gatewayAuth";
 import { useAuth } from "../../lib/useAuth";
 import { resolvePostLoginPath } from "../../lib/postLogin";
 
 type AuthMode = "login" | "mfa" | "signup";
 
-/* Firebase error codes -> plain-English text. Falls back to the raw message
- * for anything not covered here (unusual, but better than nothing).
- *
- * `hasPaddedPassword` upgrades the generic credential error when the password
- * field has leading/trailing whitespace. Firebase reports a padded password as
- * INVALID_LOGIN_CREDENTIALS - identical to a genuinely wrong password - so a
- * stray space from a paste or autofill is otherwise invisible: the field looks
- * correct, the characters are correct, and the only feedback is "Incorrect
- * email or password." We do not silently trim it, because a password may
- * legitimately contain edge whitespace and trimming would lock out anyone who
- * set one; we say what we can see instead. */
 function authErrorMessage(err: unknown, hasPaddedPassword = false): string {
-  if (err instanceof FirebaseError) {
-    switch (err.code) {
-      /* These three collapse into one message because Firebase's email
-         enumeration protection makes them indistinguishable: a nonexistent
-         address returns INVALID_LOGIN_CREDENTIALS, byte-identical to a wrong
-         password, so "no account for that email" is not knowable client-side.
-         Hence the nudge about spelling - a one-character typo in the address
-         presents exactly as a bad password, and reads as a broken login. */
-      case "auth/invalid-credential":
-      case "auth/wrong-password":
-      case "auth/user-not-found":
-        return hasPaddedPassword
-          ? "Incorrect email or password. Note the password starts or ends with a space - if that was not intentional, remove it and try again."
-          : "Incorrect email or password. Check the email is spelled correctly - a typo in the address gives this same message.";
-      case "auth/email-already-in-use":
-        return "An account with this email already exists.";
-      case "auth/weak-password":
-        return "Password must be at least 6 characters.";
-      case "auth/invalid-email":
-        return "Enter a valid email address.";
-      case "auth/too-many-requests":
-        return "Too many attempts. Please wait a moment and try again.";
-      default:
-        return err.message;
+  if (err instanceof GatewayAuthError) {
+    const msg = err.message.toLowerCase();
+    if (msg.includes("password") && msg.includes("8")) {
+      return "Password must be at least 8 characters.";
     }
+    if (err.status === 401 || msg.includes("invalid email") || msg.includes("password")) {
+      return hasPaddedPassword
+        ? "Incorrect email or password. Note the password starts or ends with a space - if that was not intentional, remove it and try again."
+        : "Incorrect email or password. Check the email is spelled correctly - a typo in the address gives this same message.";
+    }
+    if (msg.includes("already") || msg.includes("exists")) {
+      return "An account with this email already exists.";
+    }
+    return err.message;
+  }
+  if (err instanceof Error && err.message) {
+    return err.message;
   }
   return "Something went wrong. Please try again.";
 }
@@ -546,17 +522,16 @@ function LoginForm({
     setSubmitting(true);
     try {
       if (isSignup) {
-        await createUserWithEmailAndPassword(auth, trimmedEmail, password);
-        // Firebase Auth only handles the credential - the app's own
-        // Organisation/Workspace/User records still need to be created,
-        // which is what onboarding does.
+        if (password.length < 8) {
+          setAuthError("Password must be at least 8 characters.");
+          setSubmitting(false);
+          return;
+        }
+        const displayName = trimmedEmail.split("@")[0] || "User";
+        await gatewayRegister(trimmedEmail, password, displayName);
         navigate("/onboarding");
       } else {
-        await signInWithEmailAndPassword(auth, trimmedEmail, password);
-        // GET /auth/me looks up the real backend record for this Firebase
-        // account (via User.firebase_uid) - a returning user lands on
-        // /dashboard even on a browser that's never completed onboarding
-        // locally; a genuinely new account goes to onboarding.
+        await gatewayLogin(trimmedEmail, password);
         navigate(await resolvePostLoginPath());
       }
     } catch (err) {

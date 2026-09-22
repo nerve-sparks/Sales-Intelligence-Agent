@@ -26,8 +26,8 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(Text)
     designation: Mapped[str | None] = mapped_column(Text)
 
-    # Firebase Auth uid this row was created under (see app/core/auth.py) -
-    # nullable because rows created before this column existed have none.
+    # Auth-gateway subject (`sub`). Column name is historical; nullable for
+    # rows created before this column existed.
     firebase_uid: Mapped[str | None] = mapped_column(Text, unique=True)
 
     created_at: Mapped[object | None] = mapped_column(

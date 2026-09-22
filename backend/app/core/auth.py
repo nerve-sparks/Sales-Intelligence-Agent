@@ -1,71 +1,83 @@
-"""Verifies the Firebase ID token the frontend attaches to every request
-(see frontend/src/api/client.ts) - the only thing standing between "a
-Firebase account is logged in" and "the backend accepts requests from
-anyone" (previously nothing did).
+"""Auth for API requests: verify NervesParks auth-gateway JWTs, then resolve
+local app_user membership for tenant-scoped routes.
 
-require_firebase_user just proves *someone* is logged in - used on the
-tenant-creation endpoints (create organisation/workspace/user, add workspace
-member), where there's often no existing membership row yet to check against.
+require_auth_user proves *someone* is logged in (gateway JWT valid) - used on
+tenant-creation endpoints where there may be no membership row yet.
 
-require_organisation_member/require_workspace_member go a step further: they
-resolve the verified Firebase account to its real app_user row and confirm
-it's actually tied to the organisation_id/workspace_id in the request's path
-- these gate every other tenant-scoped endpoint (companies, signals, scores,
-triggers, ICPs, zoominfo enrichment), so a valid login for someone else's
-account can no longer read or write a different organisation's data just by
-knowing/guessing its UUID.
+require_organisation_member / require_workspace_member resolve the verified
+caller to a local app_user row and confirm organisation/workspace membership.
+Authorization (roles, ownership) stays in this DB, not in JWT claims.
 """
 
 from dataclasses import dataclass
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException
-from firebase_admin import auth as firebase_auth
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
+from app.core.jwt_auth import verify_auth_gateway_token
 from app.models import User, WorkspaceMember
-from app.services.firebase_client import FirebaseNotConfiguredError, get_firebase_app
 
 
 @dataclass
-class VerifiedFirebaseUser:
+class VerifiedAuthUser:
+    """Caller identity from a verified auth-gateway JWT.
+
+    `uid` is the gateway subject (`sub`) — stored on app_user.firebase_uid
+    (column name is historical; value is the gateway user id).
+    """
+
     uid: str
     email: str | None
 
 
-async def require_firebase_user(authorization: str | None = Header(default=None)) -> VerifiedFirebaseUser:
+def _email_from_claims(claims: dict) -> str | None:
+    email = claims.get("email")
+    if isinstance(email, str) and email.strip():
+        return email.strip()
+    # Some gateway deployments nest profile fields.
+    for key in ("preferred_username", "username"):
+        value = claims.get(key)
+        if isinstance(value, str) and "@" in value:
+            return value.strip()
+    return None
+
+
+async def require_auth_user(authorization: str | None = Header(default=None)) -> VerifiedAuthUser:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
     token = authorization.removeprefix("Bearer ").strip()
+    claims = verify_auth_gateway_token(token)
+    if claims is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    try:
-        app = get_firebase_app()
-    except FirebaseNotConfiguredError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    sub = claims.get("sub")
+    if not sub or not isinstance(sub, str):
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
 
-    try:
-        decoded = firebase_auth.verify_id_token(token, app=app)
-    except Exception as exc:
-        raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
-
-    return VerifiedFirebaseUser(uid=decoded["uid"], email=decoded.get("email"))
+    return VerifiedAuthUser(uid=sub, email=_email_from_claims(claims))
 
 
-async def _resolve_user(db: AsyncSession, firebase_user: VerifiedFirebaseUser) -> User | None:
+# Back-compat aliases while call sites migrate — same dependency.
+VerifiedFirebaseUser = VerifiedAuthUser
+require_firebase_user = require_auth_user
+
+
+async def _resolve_user(db: AsyncSession, auth_user: VerifiedAuthUser) -> User | None:
     return (
-        await db.execute(select(User).where(User.firebase_uid == firebase_user.uid))
+        await db.execute(select(User).where(User.firebase_uid == auth_user.uid))
     ).scalar_one_or_none()
 
 
 async def require_organisation_member(
     organisation_id: UUID,
     db: AsyncSession = Depends(get_db),
-    firebase_user: VerifiedFirebaseUser = Depends(require_firebase_user),
+    auth_user: VerifiedAuthUser = Depends(require_auth_user),
 ) -> User:
-    user = await _resolve_user(db, firebase_user)
+    user = await _resolve_user(db, auth_user)
     if user is None or user.organisation_id != organisation_id:
         raise HTTPException(status_code=403, detail="Not authorized for this organisation")
     return user
@@ -74,9 +86,9 @@ async def require_organisation_member(
 async def require_workspace_member(
     workspace_id: UUID,
     db: AsyncSession = Depends(get_db),
-    firebase_user: VerifiedFirebaseUser = Depends(require_firebase_user),
+    auth_user: VerifiedAuthUser = Depends(require_auth_user),
 ) -> User:
-    user = await _resolve_user(db, firebase_user)
+    user = await _resolve_user(db, auth_user)
     if user is None:
         raise HTTPException(status_code=403, detail="Not authorized for this workspace")
     membership = (

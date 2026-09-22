@@ -109,6 +109,54 @@ def _norm_header(value) -> str:
     return _NON_ALNUM.sub("", str(value).lower()) if value is not None else ""
 
 
+# Contact-only fields usable via a CONTAINMENT match (not resolve_columns'
+# exact match) against a header with a digit stripped out - for a sheet that
+# lists several buying-committee members as repeated column groups instead of
+# separate rows ("Contact 1 Name", "Contact 1 Email", "Contact 2 Name", ...).
+# resolve_columns cannot see these at all: "Contact 1 Name" normalises to
+# "contact1name", which is not an exact match for the "contactname" alias, so
+# every such column silently matched nothing.
+#
+# Containment, not exact match, because the group prefix varies too much to
+# enumerate ("Contact N", "Decision Maker N", "Stakeholder N", "Buying
+# Committee Member N", ...) - what's constant is the trailing field word.
+# Order matters: more specific fields are checked before the generic "name"
+# suffix (full_name), so "Contact 1 First Name" resolves to first_name rather
+# than full_name.
+CONTACT_GROUP_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "email": ("email",),
+    "phone": ("phone", "mobile", "telephone"),
+    "linkedin": ("linkedin",),
+    "first_name": ("firstname",),
+    "last_name": ("lastname",),
+    "department": ("department",),
+    "job_title": ("jobtitle", "title", "designation"),
+    "full_name": ("name",),
+}
+_DIGIT_RE = re.compile(r"\d+")
+
+
+def resolve_contact_groups(header: list) -> dict[int, dict[str, str]]:
+    """Maps group number -> {canonical field: original header} for repeated
+    per-person column groups. Only headers carrying a digit are considered, so
+    an ordinary single "Email" column is never mistaken for a group member."""
+    groups: dict[int, dict[str, str]] = {}
+    for raw in header:
+        text = str(raw) if raw is not None else ""
+        match = _DIGIT_RE.search(text)
+        if not match:
+            continue
+        group_num = int(match.group())
+        stripped = _norm_header(_DIGIT_RE.sub("", text))
+        if not stripped:
+            continue
+        for field, suffixes in CONTACT_GROUP_SUFFIXES.items():
+            if any(suf in stripped for suf in suffixes):
+                groups.setdefault(group_num, {}).setdefault(field, raw)
+                break
+    return groups
+
+
 def resolve_columns(header: list) -> dict[str, str]:
     """Maps canonical field -> the actual header string in this file.
 
@@ -328,9 +376,14 @@ def to_canonical_rows(filename: str, content: bytes) -> tuple[list[dict], dict]:
 
     for sheet_name, rows in read_tables(filename, content):
         columns = resolve_columns(list(rows[0].keys()))
+        # Repeated per-person column groups ("Contact 1 Name", "Contact 2
+        # Name", ...) - a sheet listing several buying-committee members as
+        # columns rather than rows. Detected once per sheet, same as `columns`.
+        contact_groups = resolve_contact_groups(list(rows[0].keys()))
         sheet_stat = {
             "sheet": sheet_name, "rows": len(rows),
             "recognised_fields": sorted(columns), "dropped_no_company": 0,
+            "contact_groups": len(contact_groups),
         }
         report["rows_read"] += len(rows)
 
@@ -345,25 +398,8 @@ def to_canonical_rows(filename: str, content: bytes) -> tuple[list[dict], dict]:
             # Domain is the stronger natural key: it merges "Acme, Inc." and
             # "Acme Inc" that a name-derived id would split into two companies.
             zi_company_id = synthetic_bigint("company", domain or normalize_company_name(company_name))
-
-            first = _get(row, columns, "first_name")
-            last = _get(row, columns, "last_name")
-            if not first and not last:
-                first, last = split_full_name(_get(row, columns, "full_name"))
-            email = _get(row, columns, "email")
-
-            # A row with no identifiable person still carries the company, so
-            # it is kept - upsert_rows skips contact creation when the contact
-            # id is absent, giving us the company either way.
-            has_contact = bool(email or first or last)
-            zi_person_id = (
-                synthetic_bigint("contact", email or f"{zi_company_id}|{first}|{last}")
-                if has_contact else None
-            )
-
-            out.append({
+            company_fields = {
                 "ZoomInfo Company ID": zi_company_id,
-                "ZoomInfo Contact ID": zi_person_id,
                 "Company Name": company_name,
                 "Website": domain,
                 "Founded Year": _get(row, columns, "founded"),
@@ -388,18 +424,63 @@ def to_canonical_rows(filename: str, content: bytes) -> tuple[list[dict], dict]:
                 "Company City": _get(row, columns, "city"),
                 "Company State": _get(row, columns, "state"),
                 "Company Country": _get(row, columns, "country"),
-                "First Name": first,
-                "Last Name": last,
-                "Job Title": _get(row, columns, "job_title"),
-                "Department": _get(row, columns, "department"),
-                "Email Address": email,
-                "Direct Phone Number": _get(row, columns, "phone"),
-                "LinkedIn Contact Profile URL": _get(row, columns, "linkedin"),
                 "_source_sheet": sheet_name,
-            })
-            report["rows_usable"] += 1
-            if has_contact:
-                report["contacts"] += 1
+            }
+
+            # One contact per detected person: the row's own singular columns
+            # (group 0 - "Email", "Job Title", ...) plus one per numbered
+            # column group ("Contact 1 ...", "Contact 2 ...", ...). Each
+            # becomes its OWN canonical row sharing this company's identity -
+            # a single spreadsheet row can carry an entire buying committee.
+            first, last = _get(row, columns, "first_name"), _get(row, columns, "last_name")
+            if not first and not last:
+                first, last = split_full_name(_get(row, columns, "full_name"))
+            contacts = [{
+                "first": first, "last": last,
+                "email": _get(row, columns, "email"),
+                "job_title": _get(row, columns, "job_title"),
+                "department": _get(row, columns, "department"),
+                "phone": _get(row, columns, "phone"),
+                "linkedin": _get(row, columns, "linkedin"),
+            }]
+            for group_num in sorted(contact_groups):
+                group_columns = contact_groups[group_num]
+                g_first, g_last = _get(row, group_columns, "first_name"), _get(row, group_columns, "last_name")
+                if not g_first and not g_last:
+                    g_first, g_last = split_full_name(_get(row, group_columns, "full_name"))
+                contacts.append({
+                    "first": g_first, "last": g_last,
+                    "email": _get(row, group_columns, "email"),
+                    "job_title": _get(row, group_columns, "job_title"),
+                    "department": _get(row, group_columns, "department"),
+                    "phone": _get(row, group_columns, "phone"),
+                    "linkedin": _get(row, group_columns, "linkedin"),
+                })
+
+            # A row with no identifiable person still carries the company, so
+            # it is kept - upsert_rows skips contact creation when the contact
+            # id is absent, giving us the company either way.
+            real_contacts = [c for c in contacts if c["email"] or c["first"] or c["last"]]
+            for contact in real_contacts or contacts[:1]:
+                has_contact = bool(contact["email"] or contact["first"] or contact["last"])
+                zi_person_id = (
+                    synthetic_bigint("contact", contact["email"] or f"{zi_company_id}|{contact['first']}|{contact['last']}")
+                    if has_contact else None
+                )
+                out.append({
+                    **company_fields,
+                    "ZoomInfo Contact ID": zi_person_id,
+                    "First Name": contact["first"],
+                    "Last Name": contact["last"],
+                    "Job Title": contact["job_title"],
+                    "Department": contact["department"],
+                    "Email Address": contact["email"],
+                    "Direct Phone Number": contact["phone"],
+                    "LinkedIn Contact Profile URL": contact["linkedin"],
+                })
+                report["rows_usable"] += 1
+                if has_contact:
+                    report["contacts"] += 1
             if zi_company_id not in seen_companies:
                 seen_companies.add(zi_company_id)
                 report["companies"] += 1

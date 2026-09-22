@@ -16,7 +16,15 @@ class Settings:
     deepseek_api_key: str | None
     ollama_base_url: str
     ollama_model: str
-    firebase_credentials_path: str | None
+    # NervesParks auth-gateway (RS256 JWT verification via JWKS).
+    auth_gateway_base_url: str
+    auth_gateway_prefix: str
+    auth_jwks_url: str | None
+    auth_issuer: str | None
+    auth_audience: str | None
+    auth_verify_claims: bool
+    auth_jwks_cache_ttl_seconds: int
+    auth_tenant_id: str | None
     scraper_service_url: str | None
     scraper_api_key: str | None
     tavily_api_key: str | None
@@ -52,6 +60,15 @@ def get_settings() -> Settings:
 
     research_concurrency = int(os.environ.get("RESEARCH_CONCURRENCY", "10"))
 
+    # Prefer AUTH_* names from the org integration guide; fall back to
+    # MAIN_AUTH_* (already used in some NervesParks services / this .env).
+    auth_jwks_url = os.environ.get("AUTH_JWKS_URL") or os.environ.get("MAIN_AUTH_JWKS_URL")
+    auth_issuer = os.environ.get("AUTH_ISSUER") or os.environ.get("MAIN_AUTH_ISSUER")
+    auth_audience = os.environ.get("AUTH_AUDIENCE") or os.environ.get("MAIN_AUTH_AUDIENCE")
+    auth_ttl = os.environ.get("AUTH_JWKS_CACHE_TTL_SECONDS") or os.environ.get(
+        "MAIN_AUTH_JWKS_CACHE_TTL_SECONDS", "86400"
+    )
+
     return Settings(
         app_env=os.environ.get("APP_ENV", "local"),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -67,7 +84,14 @@ def get_settings() -> Settings:
         # keeps working even in environments where the .env var isn't set.
         ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://124.123.18.150:11434/v1"),
         ollama_model=os.environ.get("OLLAMA_MODEL", "qwen3:14b"),
-        firebase_credentials_path=os.environ.get("FIREBASE_CREDENTIALS_PATH"),
+        auth_gateway_base_url=os.environ.get("AUTH_GATEWAY_BASE_URL", "https://auth.nervesparks.com"),
+        auth_gateway_prefix=os.environ.get("AUTH_GATEWAY_PREFIX", "/api/v1/auth"),
+        auth_jwks_url=auth_jwks_url,
+        auth_issuer=auth_issuer,
+        auth_audience=auth_audience,
+        auth_verify_claims=os.environ.get("AUTH_VERIFY_CLAIMS", "").lower() in ("1", "true", "yes"),
+        auth_jwks_cache_ttl_seconds=int(auth_ttl),
+        auth_tenant_id=os.environ.get("AUTH_TENANT_ID"),
         scraper_service_url=os.environ.get("SCRAPER_SERVICE_URL"),
         scraper_api_key=os.environ.get("SCRAPER_API_KEY"),
         tavily_api_key=os.environ.get("TAVILY_API_KEY"),

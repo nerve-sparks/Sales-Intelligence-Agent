@@ -758,7 +758,6 @@ function IcpForm({
         />
 
         <MultiSelectField
-          emptyMessage="No contacts uploaded yet"
           hint="Read from the department labels on your own uploaded contacts, so the options always match your data."
           label="Departments"
           onChange={(v) => onFieldChange("departments", v)}
