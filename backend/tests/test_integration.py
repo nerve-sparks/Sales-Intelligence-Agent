@@ -58,7 +58,6 @@ from app.services import (
     you_client,
 )
 from app.services import llm_client as llm_client_module
-from app.services import nexus_scraper as nexus_scraper_module
 
 NOW = datetime(2026, 1, 15, tzinfo=timezone.utc)
 
@@ -722,9 +721,14 @@ async def test_every_company_gets_scored_no_icp_gate(org_ctx, make_company):
 # Offering Profile fallback
 # ---------------------------------------------------------------------------
 
-async def test_offering_profile_falls_back_when_scraper_unavailable(org_ctx, monkeypatch):
+async def test_offering_profile_falls_back_when_research_unavailable(org_ctx, monkeypatch):
     organisation_id, _workspace_id = org_ctx
-    monkeypatch.setattr(nexus_scraper_module, "is_configured", lambda: False)
+    # you.com is the research path (_research_and_extract), so this is the gate
+    # that actually decides whether a live sync can run. It used to patch
+    # nexus_scraper, which the offering-profile path no longer touches at all -
+    # so the patch did nothing and the test only passed while the LLM happened
+    # to be failing for unrelated reasons.
+    monkeypatch.setattr(you_client, "is_configured", lambda: False)
 
     async with async_session_maker() as session:
         profile = await offering_profile_service.ensure_offering_profile(session, organisation_id)
@@ -732,7 +736,7 @@ async def test_offering_profile_falls_back_when_scraper_unavailable(org_ctx, mon
     assert profile == offering_profile_service.fallback_profile()
 
     # Re-fetch the organisation directly to check the honestly-recorded status:
-    # a sync was attempted (nexus_scraper unconfigured -> _scrape_and_extract
+    # a sync was attempted (research unconfigured -> _research_and_extract
     # returns None immediately) and it failed, so STATUS_SYNC_FAILED is the
     # correct label here - the one guarantee that matters is it never claims
     # STATUS_SYNCED when no real sync happened.

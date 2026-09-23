@@ -136,7 +136,9 @@ def profile_for_scoring(org: Organisation | None) -> dict:
 def _build_extraction_prompt(scraped_text: str, company_name: str, source_url: str) -> str:
     template = json.dumps(
         {
-            "company": company_name or "",
+            # Left blank on purpose - pre-filling the stored name here anchored
+            # the model to it even when the content was about another company.
+            "company": "",
             "positioning": "",
             "offerings": [{"name": "", "problems_solved": [], "technologies": [], "buying_signals": []}],
             "problems_solved": [],
@@ -146,12 +148,29 @@ def _build_extraction_prompt(scraped_text: str, company_name: str, source_url: s
         },
         indent=2,
     )
+    # The WEBSITE is the subject, not the stored company name. Naming the
+    # company up front used to anchor the model to it: an organisation whose
+    # saved name had drifted from its website (renamed, or the website edited
+    # in Settings) produced a profile with `offerings: []`, because the model
+    # correctly refused to invent that company's offerings out of a different
+    # company's site - and an empty offerings list is rejected by
+    # _parse_profile, so the whole sync failed with no usable reason. The name
+    # is passed as a correctable hint instead.
+    name_hint = (
+        f' Our records call this company "{company_name}", but that may be out of date:'
+        " if the content is clearly about a different company, describe the company the"
+        " CONTENT is actually about and put its real name in the `company` field."
+        if company_name
+        else ""
+    )
     return (
-        f"You are analysing public web research about {company_name or 'this company'} "
-        f"({source_url}). From the content below, produce a structured JSON profile of "
-        "what the company SELLS - the offerings, the problems each solves, the relevant "
+        f"You are analysing public web research about the company at {source_url}."
+        f"{name_hint}\n\n"
+        "From the content below, produce a structured JSON profile of "
+        "what that company SELLS - the offerings, the problems each solves, the relevant "
         "technologies, and the categories of alternative solutions a buyer might consider.\n\n"
         "Rules:\n"
+        "- Describe the company the CONTENT is about, whatever it is called.\n"
         "- alternative_solutions must be solution CATEGORIES (e.g. 'Internal AI development', "
         "'Legacy RPA'), never invented named competitors. Mark each with inferred:true unless "
         "the page explicitly names it.\n"

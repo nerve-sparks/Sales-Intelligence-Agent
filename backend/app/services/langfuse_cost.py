@@ -112,11 +112,17 @@ def ensure_langfuse_model_prices() -> None:
         "outputPrice": OUTPUT_USD_PER_TOKEN,
     }
     try:
-        # POST-only: listing every model on this host can time out, and a
-        # duplicate name is returned as 409 which we treat as already done.
+        # POST-only: listing every model on this host can time out.
         with httpx.Client(timeout=45.0) as client:
             created = client.post(f"{base}/api/public/models", auth=auth, json=payload)
-            if created.status_code in {409, 422}:
+            if created.status_code in {409, 422} or _is_duplicate_model_error(created):
+                # A duplicate name is the expected steady-state outcome (this
+                # runs on every startup): Langfuse's actual API returns 400
+                # with {"error": "InvalidRequestError", "message": "Model
+                # name '<name>' already exists in project"} for it, not 409 as
+                # first assumed - confirmed live, so this is checked by
+                # content, not left as a guessed status code that could be
+                # wrong again on the next Langfuse version.
                 _prices_registered = True
                 log.info("Langfuse model prices already present for %s", MODEL_DEFINITION_NAME)
                 return
@@ -125,6 +131,16 @@ def ensure_langfuse_model_prices() -> None:
             log.info("Registered Langfuse model prices for %s", MODEL_DEFINITION_NAME)
     except Exception:
         log.warning("Could not register Langfuse model prices", exc_info=True)
+
+
+def _is_duplicate_model_error(response: httpx.Response) -> bool:
+    if response.status_code != 400:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return body.get("error") == "InvalidRequestError" and "already exists" in (body.get("message") or "")
 
 
 def _finish_observation(

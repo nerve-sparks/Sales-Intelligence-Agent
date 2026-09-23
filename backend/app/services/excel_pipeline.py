@@ -216,8 +216,8 @@ async def score_companies_in_background(
                 return
 
             # Ensure a real Offering Profile (auto-sync if none/stale - item 11).
-            print(f"[UPLOAD] Ensuring XSparks Offering Profile is fresh (auto-syncs from "
-                  f"xsparks.ai if missing/stale)...")
+            print(f"[UPLOAD] Ensuring Offering Profile is ready (uses org profile; "
+                  f"auto-syncs from the org website only if missing/stale)...")
             await ensure_offering_profile(session, organisation_id)
             # Domain enrichment is deliberately NOT run here. company_enrichment
             # still exists and is tested, but it made every upload block on one
@@ -250,11 +250,16 @@ async def score_companies_in_background(
                       f"research will use company name (domain enrichment is disabled)")
 
             print(f"[UPLOAD] Offering Profile ready. Handing off to research_companies() "
-                  f"for {len(company_id_list)} companies...")
+                  f"for {len(company_id_list)} companies (force_refresh=True so a re-upload "
+                  f"re-judges evidence against the current Offering Profile)...")
 
             research_start = datetime.now(timezone.utc)
             research_summary = await search_signal_ingest.research_companies(
-                session, organisation_id, company_ids=company_id_list, import_batch_id=import_batch_id,
+                session,
+                organisation_id,
+                company_ids=company_id_list,
+                force_refresh=True,
+                import_batch_id=import_batch_id,
             )
             research_elapsed = (datetime.now(timezone.utc) - research_start).total_seconds()
             print(f"\n[UPLOAD] === RESEARCH STAGE COMPLETE in {research_elapsed:.1f}s ===")
@@ -417,7 +422,11 @@ async def retry_failed_companies_in_background(
         async with async_session_maker() as session:
             await ensure_offering_profile(session, organisation_id)
             await search_signal_ingest.research_companies(
-                session, organisation_id, company_ids=company_ids, import_batch_id=import_batch_id,
+                session,
+                organisation_id,
+                company_ids=company_ids,
+                force_refresh=True,
+                import_batch_id=import_batch_id,
             )
             await evidence_scorer.run_scoring(
                 session, organisation_id, company_ids=company_ids, import_batch_id=import_batch_id,
@@ -515,7 +524,7 @@ async def list_import_batches(session: AsyncSession, workspace_id: UUID) -> list
 EXPORT_COLUMNS = [
     "Company Name", "Domain", "Industry", "Location", "Employees", "Revenue",
     "Lead Score", "Sales Status", "Confidence", "Buying Evidence", "Contact Access",
-    "Negative Penalty", "Best XSparks Offering", "Why Now", "Recommended Action",
+    "Negative Penalty", "Best Offering", "Why Now", "Recommended Action",
     "Expected Deal Min", "Expected Deal Max", "Expected Deal Value", "Deal Value Basis",
     "Last Scored",
     # Added so a row explains ITSELF. Previously a company with no domain

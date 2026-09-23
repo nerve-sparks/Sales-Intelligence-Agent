@@ -50,7 +50,7 @@ async def require_auth_user(authorization: str | None = Header(default=None)) ->
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
     token = authorization.removeprefix("Bearer ").strip()
-    claims = verify_auth_gateway_token(token)
+    claims = await verify_auth_gateway_token(token)
     if claims is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 

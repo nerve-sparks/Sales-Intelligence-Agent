@@ -4,7 +4,7 @@ scattered across services, so the formula is auditable and tunable in one
 place.
 
 The pipeline answers "which uploaded companies have real, current buying
-potential for XSparks AI solutions" via:
+potential for the tenant's Offering Profile" via:
 
     Lead Score = clamp(Buying Evidence + Contact Access - Negative Penalty, 0, 100)
 
@@ -22,11 +22,32 @@ SCORE_FORMULA_VERSION = "trigger-v2"
 #
 # trigger-v2 recalibration: v1 rewarded ONLY active-buying signals (RFP,
 # procurement, pilot) and treated growth/change events (funding, expansion,
-# hiring, tech mandates) as near-noise, so real companies capped ~41. For an
-# AI solutions/consulting partner, a change/growth trigger IS a prospecting
+# hiring, tech mandates) as near-noise, so real companies capped ~41. For a
+# solutions/consulting partner, a change/growth trigger IS a prospecting
 # moment (fresh budget, a new leader's agenda, scaling pain), so those event
 # types are raised to legitimate mid-strength here. Active-buying signals stay
 # highest - the ranking order is preserved, only the floor is lifted.
+#
+# Seller-agnostic naming: five types here used to be spelled "ai_..." from
+# when this whole pipeline was built for exactly one AI-consulting tenant.
+# The type's MEANING (a budget/pilot/adoption/hiring signal shaped like a
+# match for whatever the tenant sells) never depended on the seller being an
+# AI company - only the name did. buying_event_service._build_prompt already
+# judges seller_relevance dynamically against the tenant's real Offering
+# Profile, so a paperboard-and-FMCG tenant's profile correctly scores an "AI
+# adoption" event near zero relevance - but the event_type label itself still
+# read "explicit_ai_tool_adoption" regardless of the tenant, which is what
+# made every tenant's signals look AI-flavoured even when the number
+# underneath was properly seller-scoped. Renamed so the taxonomy carries no
+# assumption about what the tenant sells at all:
+#   explicit_ai_budget          -> explicit_solution_budget
+#   ai_transformation_program   -> transformation_program
+#   ai_pilot_announced          -> pilot_program_announced
+#   explicit_ai_tool_adoption   -> solution_adoption
+#   relevant_ai_hiring          -> relevant_hiring
+# Existing BuyingEvent rows already stored under the old names were backfilled
+# to these (see scripts/rename_ai_event_taxonomy.py) - this dict is the only
+# place a NEW event can be classified into, so the two can't drift apart again.
 # ---------------------------------------------------------------------------
 BASE_STRENGTH = {
     "rfp_published": 80,
@@ -34,13 +55,13 @@ BASE_STRENGTH = {
     "vendor_replacement": 75,
     "vendor_evaluation": 70,
     "active_pilot": 65,
-    "explicit_ai_budget": 65,
-    "ai_transformation_program": 60,
-    "ai_pilot_announced": 60,
+    "explicit_solution_budget": 65,
+    "transformation_program": 60,
+    "pilot_program_announced": 60,
     "technology_budget": 55,
     "new_tech_mandate": 55,                # v1 40 - a tech mandate is a real trigger
-    "explicit_ai_tool_adoption": 50,
-    "relevant_ai_hiring": 50,              # v1 35 - building an AI team = active intent
+    "solution_adoption": 50,
+    "relevant_hiring": 50,                 # v1 35 - building a relevant team = active intent
     "plant_expansion": 50,                 # v1 40 - expansion = scaling pain + budget
     # M&A: post-deal integration is real, budgeted work for a solutions partner -
     # consolidating systems, migrating data, reconciling two tech stacks. Same
@@ -56,22 +77,39 @@ BASE_STRENGTH = {
     # operational_inefficiency. Confirmed reproducible on a single extraction
     # call, not a one-off.
     "acquisition_or_merger": 50,
-    # A new CTO/CIO/CDO/Chief AI officer arrives with a mandate and a budget -
+    # A new CTO/CIO/CDO/Chief Data Officer arrives with a mandate and a budget -
     # one of the strongest prospecting moments there is. Sits at funding's tier
     # rather than M&A's because it signals intent without necessarily carrying
     # integration work with it. An irrelevant appointment (new CMO, new CFO)
-    # gets discounted by xsparks_relevance rather than needing its own type.
+    # gets discounted by seller_relevance rather than needing its own type.
     "leadership_change": 45,
     "funding_without_buying_evidence": 45, # v1 20 - capital raised = budget + modernise mandate
     "operational_inefficiency": 45,
     "quality_control_problem": 45,
     "supply_chain_disruption": 45,
-    "regulatory_compliance_pressure": 45,  # v1 35 - compliance pressure drives AI/automation spend
+    "regulatory_compliance_pressure": 45,  # v1 35 - compliance pressure drives modernisation spend
     "labour_shortage": 40,
     "generic_technology_assessment": 25,   # v1 15
     "company_identity_update": 0,
 }
 DEFAULT_BASE_STRENGTH = 20  # v1 15 - unknown/other event type
+
+# ---------------------------------------------------------------------------
+# Event categories (brief section 10) - the buckets a classified event's
+# `category` field must be one of. Single source of truth referenced by
+# buying_event_service._build_prompt, rather than a second hardcoded list
+# there that could drift from this one. "ai_seriousness"/"ai_pain_points"
+# were renamed to "buyer_seriousness"/"buyer_pain_points" for the same reason
+# BASE_STRENGTH's ai_* keys were above - the category is a bucket ("is this
+# prospect seriously in-market for what we sell" / "is this prospect in pain
+# our offerings address"), not an AI-specific concept, and the old name made
+# every tenant's dashboard read as AI-focused regardless of what they sell.
+# Existing rows backfilled - see scripts/rename_ai_event_taxonomy.py.
+# ---------------------------------------------------------------------------
+EVENT_CATEGORIES = [
+    "buying_stage", "buyer_seriousness", "buyer_pain_points", "budget_and_capital",
+    "urgency_and_catalysts", "competitive_context", "company_identity", "reachability",
+]
 
 # ---------------------------------------------------------------------------
 # Earliest plausible event date. event_date is LLM-extracted from web text and
@@ -89,18 +127,21 @@ DEFAULT_BASE_STRENGTH = 20  # v1 15 - unknown/other event type
 MIN_PLAUSIBLE_EVENT_YEAR = 2015
 
 # ---------------------------------------------------------------------------
-# XSparks relevance (brief section 12). The LLM returns a 0-1 float; these are
-# the anchor interpretations used when building the extraction prompt and for
-# documenting what the number means. Used as-is (already 0-1) as a multiplier.
+# Seller relevance (brief section 12). The LLM returns a 0-1 float judged
+# against the tenant's live Offering Profile - these are documentation-only
+# anchors for what the number means. Used as-is (already 0-1) as a multiplier.
+# Product/category examples must NEVER be hardcoded here; the extraction
+# prompt builds anchors from the Offering Profile at research time.
 # ---------------------------------------------------------------------------
-XSPARKS_RELEVANCE_ANCHORS = {
-    1.00: "Direct, explicit match to an XSparks solution",
-    0.85: "Strong adjacent AI/data/automation need",
-    0.65: "Operational pain addressable by XSparks, OR a growth/change trigger "
-          "(funding, new senior leader, acquisition, expansion, major hiring)",
-    0.35: "Weak or indirect relevance",
-    0.00: "Truly irrelevant to XSparks",
+SELLER_RELEVANCE_ANCHORS = {
+    1.00: "Direct, explicit match to a listed offering in the Offering Profile",
+    0.85: "Strong adjacent need matching the profile's problems/technologies",
+    0.65: "Credible buying opportunity for a listed offering (pain or buying_signal)",
+    0.35: "Weak or indirect relevance to the Offering Profile",
+    0.00: "No meaningful connection to what the seller sells",
 }
+# Back-compat alias - older code/docs referred to this under the XSparks name.
+XSPARKS_RELEVANCE_ANCHORS = SELLER_RELEVANCE_ANCHORS
 
 # ---------------------------------------------------------------------------
 # Freshness factor by age of the event (brief section 12). Days -> multiplier.

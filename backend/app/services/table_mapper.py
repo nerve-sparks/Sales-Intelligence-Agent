@@ -298,6 +298,55 @@ def split_full_name(full_name: str | None) -> tuple[str | None, str | None]:
     return parts[0], " ".join(parts[1:])
 
 
+# A header naming a free-text buying-committee cell, matched by CONTAINMENT
+# (not resolve_columns' exact alias match) since the real header is a
+# compound label like "Buying Committee / Key Contacts" - no single alias
+# could match that exactly, and it isn't a "name" column at all: it's a
+# single cell packing MULTIPLE people as one string.
+BUYING_COMMITTEE_HEADER_KEYWORDS = ("buyingcommittee", "keycontact", "decisionmaker", "stakeholder")
+
+# Splits "Name – Title" on a dash SURROUNDED BY WHITESPACE specifically ("en
+# dash"/"em dash"/hyphen all seen in the wild), so a hyphenated title word
+# with no surrounding spaces ("Co-Founder") is never mistaken for the
+# name/title separator - confirmed live: "Srikrishnan Ganesan – CEO &
+# Co-Founder" must split only on the first " – ", not on "Co-Founder"'s own
+# hyphen.
+_NAME_TITLE_SEP_RE = re.compile(r"\s[-‒–—]\s")
+
+
+def find_buying_committee_column(header: list) -> object | None:
+    """The header (as originally spelled) of a free-text buying-committee
+    cell in this sheet, or None if there isn't one."""
+    for raw in header:
+        normalised = _norm_header(raw)
+        if any(kw in normalised for kw in BUYING_COMMITTEE_HEADER_KEYWORDS):
+            return raw
+    return None
+
+
+def parse_buying_committee_cell(value) -> list[dict]:
+    """Parses one cell packing several buying-committee members as
+    "Name – Title | Name – Title | ..." (pipe-separated people, each
+    optionally carrying a dash-separated title) into structured entries.
+    Order is not guaranteed meaningful - just however the sheet listed them."""
+    text = _clean(value)
+    if not text:
+        return []
+    people = []
+    for entry in text.split("|"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        parts = _NAME_TITLE_SEP_RE.split(entry, maxsplit=1)
+        name_part = parts[0].strip()
+        title_part = parts[1].strip() if len(parts) > 1 else None
+        if not name_part:
+            continue
+        first, last = split_full_name(name_part)
+        people.append({"first": first, "last": last, "job_title": title_part})
+    return people
+
+
 def company_identity(row: dict, columns: dict[str, str]) -> tuple[str, str | None] | None:
     """Returns (company_name, company_domain) or None when the row names no
     company at all. Domain falls back to the email's domain - see
@@ -380,10 +429,16 @@ def to_canonical_rows(filename: str, content: bytes) -> tuple[list[dict], dict]:
         # Name", ...) - a sheet listing several buying-committee members as
         # columns rather than rows. Detected once per sheet, same as `columns`.
         contact_groups = resolve_contact_groups(list(rows[0].keys()))
+        # A single free-text cell packing several people, e.g. "Buying
+        # Committee / Key Contacts": "Name – Title | Name – Title | ..." -
+        # a third shape alongside one-row-per-person and repeated column
+        # groups. Detected once per sheet, same as the other two.
+        buying_committee_column = find_buying_committee_column(list(rows[0].keys()))
         sheet_stat = {
             "sheet": sheet_name, "rows": len(rows),
             "recognised_fields": sorted(columns), "dropped_no_company": 0,
             "contact_groups": len(contact_groups),
+            "buying_committee_column": buying_committee_column,
         }
         report["rows_read"] += len(rows)
 
@@ -456,6 +511,13 @@ def to_canonical_rows(filename: str, content: bytes) -> tuple[list[dict], dict]:
                     "phone": _get(row, group_columns, "phone"),
                     "linkedin": _get(row, group_columns, "linkedin"),
                 })
+            if buying_committee_column is not None:
+                for person in parse_buying_committee_cell(row.get(buying_committee_column)):
+                    contacts.append({
+                        "first": person["first"], "last": person["last"],
+                        "email": None, "job_title": person["job_title"],
+                        "department": None, "phone": None, "linkedin": None,
+                    })
 
             # A row with no identifiable person still carries the company, so
             # it is kept - upsert_rows skips contact creation when the contact

@@ -6,11 +6,12 @@ Replaces the old CompanyNews/Signal ingestion in the active pipeline - all
 external buying evidence now flows into buying_event (brief sections 8, 9).
 
 Research is scoped to an explicit company_id list (the current upload's
-companies - brief section 8), never the whole organisation. A refresh window
-(RESEARCH_REFRESH_DAYS) means a company is re-researched only when its last
-search is stale, rather than every scoring run - Company.search_signals_fetched_at
-records when it last ran (set whether or not events were found, so a
-genuinely-quiet company isn't re-billed every time).
+companies - brief section 8), never the whole organisation. Upload / retry
+calls pass force_refresh=True so a re-upload always re-runs search + LLM
+classification against the *current* Offering Profile (relevance is decided
+at research time, not at scoring). Other callers can omit force_refresh to
+reuse research newer than RESEARCH_REFRESH_DAYS via
+Company.search_signals_fetched_at.
 
 import_batch_id (optional) drives per-company status tracking on
 company_import_batch for GET .../imports/{id}/items and POST .../retry-failed
@@ -149,6 +150,16 @@ async def research_companies(
 
     org = await session.get(Organisation, organisation_id)
     offering_profile = profile_for_scoring(org)
+    seller = (offering_profile.get("company") or "seller").strip() or "seller"
+    offering_names = [
+        (o.get("name") or "").strip()
+        for o in (offering_profile.get("offerings") or [])
+        if isinstance(o, dict) and (o.get("name") or "").strip()
+    ]
+    print(
+        f"[RESEARCH] Using Offering Profile for '{seller}' "
+        f"({len(offering_names)} offering(s): {', '.join(offering_names[:5]) or 'none'})"
+    )
     now = datetime.now(timezone.utc)
     research_run_id = uuid.uuid4()
     stale_before = now - timedelta(days=RESEARCH_REFRESH_DAYS)

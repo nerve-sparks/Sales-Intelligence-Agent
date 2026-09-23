@@ -6,8 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.models import Company, CompanyImportBatch
+from app.models import Company, CompanyImportBatch, Organisation
 from app.services import company_directory, excel_pipeline, llm_client, signal_directory
+from app.services.offering_profile_service import profile_for_scoring
 from app.schemas.company import (
     CompanyInsightOut,
     CompanyListItemOut,
@@ -128,8 +129,15 @@ async def insight(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
     avg_score_str = f"{summary_data['avg_lead_score']:.1f}" if summary_data["avg_lead_score"] is not None else "not yet available"
     pipeline_value = summary_data["pipeline_value"]
 
+    org = await db.get(Organisation, organisation_id)
+    seller = (
+        (profile_for_scoring(org).get("company") if org is not None else None)
+        or (org.company_name if org is not None else None)
+        or "your company"
+    )
+
     prompt = (
-        "You are a senior B2B sales intelligence analyst for XSparks (an AI solutions partner), writing a "
+        f"You are a senior B2B sales intelligence analyst for {seller}, writing a "
         "daily pipeline briefing. Scoring is evidence-based: Lead Score = Buying Evidence + Contact Access "
         "- Negative Evidence (0-100); revenue/funding affect only Expected Deal Value, never the Lead "
         "Score; confidence is separate from score. Write 3 short plain-prose paragraphs (no headings, no "
@@ -138,7 +146,7 @@ async def insight(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
         "Priority / Warm / Monitor / Low Priority), the average lead score, and the estimated pipeline "
         "value.\n"
         "Paragraph 2 - Top opportunities: name the specific top-scored companies, their lead scores, the "
-        "best XSparks offering and why-now for each - interpret for a sales leader, don't just repeat "
+        "best offering and why-now for each - interpret for a sales leader, don't just repeat "
         "numbers.\n"
         "Paragraph 3 - Recommended action: one concrete recommendation for what the team should prioritise "
         "today, grounded in the evidence.\n\n"

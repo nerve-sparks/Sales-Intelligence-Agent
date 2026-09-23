@@ -194,3 +194,52 @@ def test_prompt_exposes_every_scorable_event_type():
     )
     missing = [t for t in cfg.BASE_STRENGTH if t not in prompt]
     assert not missing, f"event types unreachable by the model: {missing}"
+
+
+def test_prompt_is_driven_by_offering_profile_not_hardcoded_product():
+    """Relevance must be judged against the live Offering Profile - never a
+    hardcoded product line. A packaging seller's research prompt must name
+    that seller and its offerings, and must not instruct the model to prefer
+    AI/automation as if it were always the product."""
+    profile = {
+        "company": "Acme Packaging",
+        "positioning": "Industrial packaging equipment",
+        "offerings": [
+            {
+                "name": "High-speed carton sealers",
+                "problems_solved": ["slow packing lines"],
+                "technologies": ["servo sealers"],
+                "buying_signals": ["new packing plant"],
+            }
+        ],
+        "problems_solved": ["slow packing lines"],
+        "relevant_technologies": ["servo sealers"],
+        "alternative_solutions": [],
+        "accelerators": [],
+    }
+    prompt = bes._build_prompt(
+        {"company_name": "BuyerCo", "company_domain": "buyer.com", "industry": "Food"},
+        profile, [], NOW,
+    )
+    assert "Acme Packaging" in prompt
+    assert "High-speed carton sealers" in prompt
+    assert "seller_relevance" in prompt
+    assert "What Acme Packaging sells" in prompt
+    # Must not hard-wire a different product as the relevance target.
+    assert "What XSparks sells" not in prompt
+    assert "direct XSparks-solution match" not in prompt
+    assert "active AI/data/automation need" not in prompt
+
+
+def test_best_offering_must_match_live_offering_profile():
+    """LLM-invented labels (industry, seller name, old product lines) must not
+    be stored as best_offering - only names from the Offering Profile."""
+    profile = {
+        "company": "ITC Infotech",
+        "offerings": [{"name": "Digital engineering"}, {"name": "Cloud transformation"}],
+    }
+    assert bes._match_best_offering("Digital engineering", profile) == "Digital engineering"
+    assert bes._match_best_offering("cloud transformation", profile) == "Cloud transformation"
+    assert bes._match_best_offering("Information Technology (ITC Infotech)", profile) is None
+    assert bes._match_best_offering("AI Agents and Workflow Automation", profile) is None
+    assert bes._match_best_offering(None, profile) is None

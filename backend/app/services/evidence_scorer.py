@@ -215,18 +215,22 @@ def provisional_weighted_value(lead_score: float, deal_value_midpoint: float) ->
 # --------------------------------------------------------------------------
 # Orchestrator: score one company from its stored BuyingEvents + contacts
 # --------------------------------------------------------------------------
-_AI_RELEVANT_EVENT_TYPES = {
-    "explicit_ai_budget", "ai_transformation_program", "ai_pilot_announced",
-    "active_pilot", "explicit_ai_tool_adoption", "technology_budget",
-    "new_tech_mandate", "relevant_ai_hiring",
+# Renamed from _AI_RELEVANT_EVENT_TYPES - these are the event types that
+# indicate a budget/pilot/adoption/mandate signal shaped like a match for
+# whatever the tenant sells, not specifically AI (see scoring_config.py's
+# BASE_STRENGTH comment on the same rename).
+_TRANSFORMATION_RELEVANT_EVENT_TYPES = {
+    "explicit_solution_budget", "transformation_program", "pilot_program_announced",
+    "active_pilot", "solution_adoption", "technology_budget",
+    "new_tech_mandate", "relevant_hiring",
 }
 
 
 def _funding_recent_and_relevant(company: Company, events: list[BuyingEvent], now: datetime) -> bool:
     """Funding may bump EDV only if recent AND materially relevant - proxied
-    here by: a recent funding date on the company AND at least one AI/tech
-    buying event (evidence the funding plausibly supports transformation).
-    Conservative by design (brief section 19)."""
+    here by: a recent funding date on the company AND at least one solution/
+    tech buying event (evidence the funding plausibly supports transformation
+    relevant to what the tenant sells). Conservative by design (brief section 19)."""
     fdate = company.recent_funding_date
     if fdate is None:
         return False
@@ -234,7 +238,7 @@ def _funding_recent_and_relevant(company: Company, events: list[BuyingEvent], no
         fdate = fdate.replace(tzinfo=timezone.utc)
     if (now - fdate).days > cfg.FUNDING_RECENT_DAYS:
         return False
-    return any((e.event_type in _AI_RELEVANT_EVENT_TYPES) and not e.is_negative for e in events)
+    return any((e.event_type in _TRANSFORMATION_RELEVANT_EVENT_TYPES) and not e.is_negative for e in events)
 
 
 def _event_summary_row(e: BuyingEvent) -> dict:

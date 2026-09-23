@@ -1,11 +1,10 @@
-"""Turns raw Tavily web results into canonical BuyingEvents (brief sections
-10, 11, 12).
+"""Turns raw web results into canonical BuyingEvents (brief sections 10-12).
 
 Pipeline per company:
   1. Ask the LLM to read each candidate web result and decide whether it is a
-     real, current, XSparks-relevant buying event for THIS company (not a
-     same-name collision, not a generic industry article) - structured output
-     per brief section 10.
+     real, current buying event for THIS company that is relevant to the
+     tenant's *current* Offering Profile (not a same-name collision, not a
+     generic industry article) - structured output per brief section 10.
   2. Canonicalise + deduplicate: multiple articles about the same real-world
      event (company announcement + PR wire pickup + industry report) collapse
      into ONE BuyingEvent with several evidence sources - never several scored
@@ -16,7 +15,9 @@ Pipeline per company:
      Corroborating sources raise confidence later (scoring engine) but never
      add another event score.
 
-The LLM understands evidence; it never computes the final Lead Score.
+Relevance anchors are never hardcoded to a product line - they are derived
+from the Offering Profile passed into every research call. The LLM
+understands evidence; it never computes the final Lead Score.
 """
 
 import asyncio
@@ -141,16 +142,36 @@ def canonical_key(company_id, event: dict, event_date: datetime | None) -> str:
 # --------------------------------------------------------------------------
 # LLM extraction (brief section 10)
 # --------------------------------------------------------------------------
+def _seller_name(offering_profile: dict) -> str:
+    name = (offering_profile.get("company") or "").strip()
+    return name or "the seller"
+
+
+def _offering_names(offering_profile: dict) -> list[str]:
+    names = []
+    for o in offering_profile.get("offerings") or []:
+        name = (o.get("name") or "").strip() if isinstance(o, dict) else ""
+        if name:
+            names.append(name)
+    return names
+
+
 def _offering_summary(offering_profile: dict) -> str:
     """Compact-but-complete offering context for the LLM (brief item 12) - not
     just offering names: positioning, per-offering problems/tech/signals,
     global problems solved, relevant technologies, accelerators, and
-    alternative-solution categories. Truncated so the prompt stays bounded."""
+    alternative-solution categories. Truncated so the prompt stays bounded.
+    Never invents a product line - if the profile is empty, say so explicitly
+    so the model cannot fall back to a hardcoded category list."""
     p = offering_profile
     lines = []
+    seller = _seller_name(p)
+    lines.append(f"Seller: {seller}")
     if p.get("positioning"):
         lines.append(f"Positioning: {p['positioning']}")
     for o in p.get("offerings", [])[:8]:
+        if not isinstance(o, dict):
+            continue
         parts = [o.get("name", "")]
         if o.get("problems_solved"):
             parts.append("solves " + ", ".join(o["problems_solved"][:4]))
@@ -165,33 +186,115 @@ def _offering_summary(offering_profile: dict) -> str:
         lines.append("Relevant tech: " + ", ".join(p["relevant_technologies"][:10]))
     if p.get("accelerators"):
         lines.append("Accelerators: " + ", ".join(p["accelerators"][:6]))
-    alts = [a.get("category", "") for a in p.get("alternative_solutions", []) if a.get("category")]
+    alts = [a.get("category", "") for a in p.get("alternative_solutions", []) if isinstance(a, dict) and a.get("category")]
     if alts:
         lines.append("Alternative solution categories: " + ", ".join(alts[:8]))
-    return "\n".join(lines) or "AI strategy, data, agents, automation, governance, managed AI ops"
+    if len(lines) <= 1:
+        return f"Seller: {seller}\n(No structured offerings available - score relevance conservatively.)"
+    return "\n".join(lines)
+
+
+def _flatten_offering_field(offering_profile: dict, field: str, *, limit: int) -> list[str]:
+    """Every value of `field` (technologies / buying_signals / problems_solved)
+    across the WHOLE profile - the top-level list plus every per-offering list -
+    deduplicated and truncated. Feeds the dynamic per-tenant placeholders below,
+    so "does this event match what {seller} sells" is answered against this
+    tenant's actual words, never a generic notion of the field's name."""
+    seen: list[str] = []
+    for value in offering_profile.get(field) or []:
+        if isinstance(value, str) and value.strip() and value not in seen:
+            seen.append(value.strip())
+    for o in offering_profile.get("offerings") or []:
+        if not isinstance(o, dict):
+            continue
+        for value in o.get(field) or []:
+            if isinstance(value, str) and value.strip() and value not in seen:
+                seen.append(value.strip())
+    return seen[:limit]
+
+
+def _solution_type_guidance(seller: str, offering_profile: dict) -> str:
+    """Anchors the "does this event involve something like what {seller}
+    sells" event_type choices (explicit_solution_budget, technology_budget,
+    transformation_program, pilot_program_announced, solution_adoption,
+    generic_technology_assessment, new_tech_mandate, relevant_hiring) to this
+    tenant's OWN technologies/buying_signals/problems_solved - injected as
+    placeholders filled fresh per request - rather than leaving the model to
+    apply them to any event that merely sounds technical. Without this, the
+    fixed type NAMES read as generic "adopted some tech" buckets and the
+    model reached for them on ANY tech-adjacent event regardless of the
+    tenant, relying on seller_relevance alone to catch the mismatch
+    downstream - this catches it at classification time instead, for the
+    exact types where that mismatch matters most."""
+    technologies = _flatten_offering_field(offering_profile, "technologies", limit=15) or _flatten_offering_field(
+        offering_profile, "relevant_technologies", limit=15
+    )
+    buying_signals = _flatten_offering_field(offering_profile, "buying_signals", limit=12)
+    problems = _flatten_offering_field(offering_profile, "problems_solved", limit=12)
+    if not (technologies or buying_signals or problems):
+        return (
+            f"{seller}'s profile lists no specific technologies, buying signals, or problems "
+            "solved, so none of the types below can be matched with confidence - classify any "
+            "tech-adoption-shaped event as generic_technology_assessment or company_identity_update "
+            "and keep seller_relevance at 0.0-0.35 rather than guessing what would count as a match."
+        )
+    tech_line = ", ".join(technologies) if technologies else "(none listed)"
+    signals_line = ", ".join(buying_signals) if buying_signals else "(none listed)"
+    problems_line = ", ".join(problems) if problems else "(none listed)"
+    return (
+        f"explicit_solution_budget, technology_budget, transformation_program, "
+        f"pilot_program_announced, solution_adoption, generic_technology_assessment, and "
+        f"new_tech_mandate apply ONLY when the event matches one of {seller}'s OWN technologies "
+        f"({tech_line}), buying signals ({signals_line}), or problems solved ({problems_line}) - "
+        "never a generic notion of 'technology', 'digital', or 'AI'. relevant_hiring applies only "
+        f"to hiring for roles/skills matching that same list, not technical hiring in general. A "
+        f"prospect adopting, budgeting for, or being mandated to use something NOT in {seller}'s "
+        "own lists above does not qualify for any of these types, however technical it sounds - "
+        "classify it as company_identity_update (or the closest non-technology type) and score its "
+        "seller_relevance at 0.0-0.35, not higher."
+    )
+
+
+def _relevance_from_cls(cls: dict) -> float:
+    """Accept the current seller_relevance field, or the legacy xsparks_relevance
+    key still returned by older cached prompts / tests."""
+    raw = cls.get("seller_relevance")
+    if raw is None:
+        raw = cls.get("xsparks_relevance")
+    return _clamp01(raw)
 
 
 def _build_prompt(company: dict, offering_profile: dict, items: list[dict], now: datetime) -> str:
+    seller = _seller_name(offering_profile)
     offerings = _offering_summary(offering_profile)
+    offering_names = _offering_names(offering_profile)
+    offering_names_line = (
+        ", ".join(f'"{n}"' for n in offering_names[:12])
+        if offering_names
+        else "(none listed - leave best_offering null)"
+    )
+    example_offering = offering_names[0] if offering_names else None
     item_lines = "\n".join(
         f"[{i}] title: {it.get('title')!r} | snippet: {it.get('snippet')!r} | "
         f"url: {it.get('url')} | published: {it.get('published_date')}"
         for i, it in enumerate(items)
     )
     event_types = ", ".join(sorted(cfg.BASE_STRENGTH.keys()))
+    solution_type_guidance = _solution_type_guidance(seller, offering_profile)
     return (
-        "You are a B2B buying-signal analyst for XSparks (an AI solutions/transformation partner). "
+        f"You are a B2B buying-signal analyst for {seller}. "
         f"Today is {now.strftime('%Y-%m-%d')}.\n\n"
         f"Company under analysis: {company.get('company_name')} "
         f"(domain: {company.get('company_domain')}, industry: {company.get('industry')}).\n\n"
-        f"What XSparks sells:\n{offerings}\n\n"
+        f"What {seller} sells (the ONLY product/service context you may use for relevance):\n"
+        f"{offerings}\n\n"
         "For EACH web result below, decide whether it describes a REAL, CURRENT event for THIS "
         "specific company that a B2B sales team could act on. Reject ONLY: same-name different "
         "companies, generic industry articles not about this company, search-result/aggregator "
         "listing pages, job-board noise, and events clearly older than ~18 months. A funding round, "
-        "new senior leader, acquisition/merger, expansion, or significant hiring IS an acceptable "
-        "event - classify it and score its relevance per the anchors below; do NOT reject it just "
-        "for lacking an explicit AI mention (these are legitimate prospecting triggers).\n\n"
+        "new senior leader, acquisition/merger, expansion, or significant hiring MAY be a real "
+        "event worth classifying - but its seller_relevance must still be judged against what "
+        f"{seller} sells above, not treated as automatically relevant.\n\n"
         "event_date is the date THIS SPECIFIC EVENT happened or was reported - never the company's "
         "founding year, a copyright year, or an encyclopedia/asset-profile page's last-updated stamp. "
         "A static \"About Us\", company-overview, directory listing, or historical-background page "
@@ -199,24 +302,40 @@ def _build_prompt(company: dict, offering_profile: dict, items: list[dict], now:
         "for it rather than guessing a year found on the page, even if that means most such pages "
         "score as event_type company_identity_update with no date.\n\n"
         f"Allowed event_type values (choose the closest): {event_types}.\n"
-        "event_category is one of: buying_stage, ai_seriousness, ai_pain_points, budget_and_capital, "
-        "urgency_and_catalysts, competitive_context, company_identity, reachability.\n"
+        f"{solution_type_guidance}\n\n"
+        f"event_category is one of: {', '.join(cfg.EVENT_CATEGORIES)}.\n"
         "event_status: active | announced | exploring | speculative | completed_follow_on | completed_irrelevant.\n"
-        "xsparks_relevance is 0.0-1.0. Anchors: 1.0 direct XSparks-solution match (active AI/data/"
-        "automation need); 0.65 operational pain addressable by XSparks (inefficiency, quality, "
-        "compliance, labour) OR a clear growth/change TRIGGER a solutions partner should act on - "
-        "fresh funding, a new senior leader (CEO/CTO/CIO/CDO), an acquisition/merger, a major "
-        "expansion, or significant hiring; 0.35 weak/indirect relevance; 0.0 truly irrelevant. Do "
-        "NOT mark a real funding round, leadership change, acquisition, or expansion as 0.0/0.2 - "
-        "these are legitimate prospecting triggers even without an explicit AI mention.\n"
-        "is_negative=true for events that REDUCE buying likelihood; negative_type is one of: "
+        f"seller_relevance is 0.0-1.0 judged ONLY against what {seller} sells above. Anchors:\n"
+        "- 1.0: event shows an active need that directly matches a SPECIFIC listed offering "
+        "(names or clearly implies one of its own problems_solved, technologies, or buying_signals).\n"
+        "- 0.65: event creates a credible buying opportunity for a specific listed offering - a "
+        "concrete operational pain, or a buying_signal from the profile, that maps to one "
+        "particular offering's own problems_solved/technologies, not the seller's business in general.\n"
+        "- 0.35: weak or indirect connection to the listed offerings.\n"
+        f"- 0.0: no meaningful connection to what {seller} sells - including generic funding, "
+        "leadership changes, acquisitions, expansions, hiring, security incidents, or any other "
+        "routine company event that does NOT map to a specific offering's own problems_solved, "
+        "technologies, or buying_signals.\n"
+        "Do NOT inflate relevance for growth triggers unrelated to the offerings above. "
+        "Do NOT use any product category that is not in the profile.\n"
+        f"CRITICAL - a broadly-worded division or capability of {seller} (e.g. 'digital services', "
+        "'technology solutions', 'IT infrastructure') is NOT itself a listed offering: if the "
+        "profile only names a division in general terms rather than a specific problems_solved/"
+        "technologies/buying_signals match, treat any event needing that leap as 0.0-0.35, never "
+        "higher. Prospect X doing something 'tech-related' (adopting AI, raising funding, a data "
+        "breach, hiring engineers) is NOT evidence prospect X needs THIS SELLER's specific "
+        f"offering, unless the event explicitly describes needing what {seller} lists, not merely "
+        "something in the same broad field.\n"
+        f"best_offering must be exactly one of these offering names, or null if none fit: "
+        f"{offering_names_line}.\n"
+        "is_negative=true for events that REDUCE buying likelihood for this seller; negative_type is one of: "
         "vendor_selected | relevant_project_completed | project_cancelled | severe_financial_distress "
         "| strong_contradictory_signal (else null).\n"
-        "public_budget_usd: ONLY when the text explicitly ties a budget/funding figure to THIS "
-        "programme or procurement (e.g. 'allocated $5M for its AI transformation'); the numeric USD "
-        "amount, else null. NEVER use unrelated funding rounds, company valuation, revenue, or "
-        "contract totals as a budget. budget_currency (e.g. 'USD') and budget_confidence "
-        "(high|medium|low) only when public_budget_usd is set.\n"
+        "public_budget_usd: ONLY when the text explicitly ties a budget/funding figure to a "
+        "programme or procurement relevant to the offerings above; the numeric USD amount, else null. "
+        "NEVER use unrelated funding rounds, company valuation, revenue, or contract totals as a "
+        "budget. budget_currency (e.g. 'USD') and budget_confidence (high|medium|low) only when "
+        "public_budget_usd is set.\n"
         "canonical_subject/action/object identify the REAL-WORLD EVENT, not this article's angle on "
         "it, so that separate articles about one event collapse into one scored event instead of "
         "several. Describe what happened in the most neutral, generic phrasing you can, and phrase "
@@ -237,8 +356,8 @@ def _build_prompt(company: dict, offering_profile: dict, items: list[dict], now:
         "result describes it at length.\n"
         '[{"index":0,"is_real_company_event":true,"event_type":"vendor_evaluation",'
         '"event_category":"buying_stage","event_summary":"","event_status":"active",'
-        '"event_date":"2026-01-21","is_action":true,"xsparks_relevance":0.9,'  # event_date: null when the source has no real event date (see above)
-        '"best_offering":"AI Agents and Workflow Automation","relevance_reason":"",'
+        '"event_date":"2026-01-21","is_action":true,"seller_relevance":0.9,'
+        f'"best_offering":{json.dumps(example_offering)},"relevance_reason":"",'
         '"extraction_confidence":0.88,"is_negative":false,"negative_type":null,'
         '"public_budget_usd":null,"budget_currency":null,"budget_confidence":null,'
         '"canonical_subject":"","canonical_action":"","canonical_object":""}]\n'
@@ -362,8 +481,8 @@ async def extract_events(
     company: dict, offering_profile: dict, evidence_items: list[dict], now: datetime, research_run_id=None,
 ) -> tuple[list[dict], dict]:
     """Classifies each evidence item. Returns (accepted, stats) where accepted
-    is the XSparks-relevant events (each carrying its source evidence) and
-    stats = {chunks_total, chunks_failed}. A successful classification that
+    is the offering-profile-relevant events (each carrying its source evidence)
+    and stats = {chunks_total, chunks_failed}. A successful classification that
     finds zero real events is DISTINCT from an LLM failure (item 7): the former
     has chunks_failed=0, the latter chunks_failed>0."""
     if not evidence_items:
@@ -400,9 +519,9 @@ async def extract_events(
                     cls = {**cls, "is_negative": True, "negative_type": "severe_financial_distress"}
 
                 event_type = cls.get("event_type")
-                relevance = _clamp01(cls.get("xsparks_relevance"))
+                relevance = _relevance_from_cls(cls)
                 if relevance <= 0.0 and not cls.get("is_negative"):
-                    continue  # irrelevant to XSparks and not a negative -> drop
+                    continue  # irrelevant to this seller's offerings and not a negative -> drop
                 accepted.append({"cls": cls, "evidence": item, "event_type": event_type, "relevance": relevance})
     return accepted, {"chunks_total": len(chunks), "chunks_failed": chunks_failed}
 
@@ -410,11 +529,36 @@ async def extract_events(
 # --------------------------------------------------------------------------
 # Canonical grouping + scoring + persistence (brief sections 11, 12)
 # --------------------------------------------------------------------------
-def _build_canonical_events(company_id, accepted: list[dict], now: datetime) -> dict[str, dict]:
+def _match_best_offering(raw, offering_profile: dict) -> str | None:
+    """Force best_offering to an exact name from the live Offering Profile.
+    The LLM often invents labels (industry, seller name, old product lines) -
+    those must never land on BuyingEvent / LeadScore."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    names = _offering_names(offering_profile)
+    if not names:
+        return None
+    by_lower = {n.lower(): n for n in names}
+    if text.lower() in by_lower:
+        return by_lower[text.lower()]
+    # Allow near-match when the model appends fluff around a real name.
+    for name in names:
+        if name.lower() in text.lower() or text.lower() in name.lower():
+            return name
+    return None
+
+
+def _build_canonical_events(
+    company_id, accepted: list[dict], now: datetime, offering_profile: dict | None = None,
+) -> dict[str, dict]:
     """Groups accepted per-item classifications by canonical_key, then merges
     near-duplicate groups (item 9 hybrid dedup). Each surviving group becomes
     one BuyingEvent; representative multipliers come from the strongest single
     source, every source retained as evidence."""
+    profile = offering_profile or {}
     groups: dict[str, dict] = {}
     for entry in accepted:
         cls, item = entry["cls"], entry["evidence"]
@@ -450,7 +594,7 @@ def _build_canonical_events(company_id, accepted: list[dict], now: datetime) -> 
             "event_score": event_score,
             "is_negative": is_negative,
             "penalty_value": penalty,
-            "best_offering": cls.get("best_offering"),
+            "best_offering": _match_best_offering(cls.get("best_offering"), profile),
             "reasoning": cls.get("relevance_reason"),
             "company_match": item.get("company_match", 0.8),
             "public_budget_usd": budget,
@@ -725,14 +869,21 @@ async def persist_company_events(
                     merged.append(e)
                     seen.add(e.get("url"))
             row.evidence = merged
-            if (ev["event_score"] or 0) > (float(row.event_score) if row.event_score is not None else 0):
-                row.base_strength = ev["base_strength"]
-                row.relevance = ev["relevance"]
-                row.freshness = ev["freshness"]
-                row.source_quality = ev["source_quality"]
-                row.extraction_confidence = ev["extraction_confidence"]
-                row.status_factor = ev["status_factor"]
-                row.event_score = ev["event_score"]
+            # Always apply this run's classification. Relevance / best_offering
+            # are judged against the *current* Offering Profile — keeping an
+            # older higher score would leave companies ranked against a stale
+            # offering after a re-upload or profile refresh.
+            row.base_strength = ev["base_strength"]
+            row.relevance = ev["relevance"]
+            row.freshness = ev["freshness"]
+            row.source_quality = ev["source_quality"]
+            row.extraction_confidence = ev["extraction_confidence"]
+            row.status_factor = ev["status_factor"]
+            row.event_score = ev["event_score"]
+            row.is_negative = ev["is_negative"]
+            row.penalty_value = ev["penalty_value"]
+            row.best_offering = ev["best_offering"]
+            row.reasoning = ev["reasoning"]
             row.last_seen_at = now
             row.research_run_id = research_run_id
             row.is_stale = False
@@ -794,7 +945,7 @@ async def research_company(
 
     accepted, stats = await extract_events(company, offering_profile, evidence_items, now, research_run_id)
     llm_failed = stats["chunks_failed"] > 0 and stats["chunks_failed"] == stats["chunks_total"]
-    canonical_events = _build_canonical_events(company_id, accepted, now)
+    canonical_events = _build_canonical_events(company_id, accepted, now, offering_profile)
     # Only a run with NO Tavily failure and NO failed LLM chunks (partial or
     # total) is trustworthy enough to stale events this run didn't rediscover -
     # a partial/total failure means some still-current events may simply not
