@@ -164,20 +164,26 @@ async def test_batch_scoped_endpoints_use_membership_table_not_legacy_pointer(or
         await session.commit()
 
     async with async_session_maker() as session:
-        await evidence_scorer.run_scoring(session, organisation_id)
+        await evidence_scorer.run_scoring(session, workspace_id)
         await session.commit()
 
     async with async_session_maker() as session:
-        ranked_rows = await scores_controller.ranked(organisation_id, import_batch_id=batch1.import_batch_id, db=session)
+        ranked_rows = await scores_controller.ranked(
+            organisation_id, workspace_id, import_batch_id=batch1.import_batch_id, db=session
+        )
     assert len(ranked_rows) == 1
     assert ranked_rows[0]["company_id"] == company.company_id
 
     async with async_session_maker() as session:
-        run_counts = await scores_controller.run(organisation_id, import_batch_id=batch1.import_batch_id, db=session)
+        run_counts = await scores_controller.run(
+            organisation_id, workspace_id, import_batch_id=batch1.import_batch_id, db=session
+        )
     assert sum(run_counts.values()) == 1
 
     async with async_session_maker() as session:
-        export_response = await companies_controller.export(organisation_id, import_batch_id=batch1.import_batch_id, db=session)
+        export_response = await companies_controller.export(
+            organisation_id, workspace_id, import_batch_id=batch1.import_batch_id, db=session
+        )
     workbook = openpyxl.load_workbook(io.BytesIO(export_response.body))
     data_rows = list(workbook.active.iter_rows(min_row=2, values_only=True))
     assert len(data_rows) == 1
@@ -657,15 +663,19 @@ def test_public_budget_edv_takes_precedence():
 # Organisation isolation / every company scored (no ICP gate)
 # ---------------------------------------------------------------------------
 
-async def test_organisation_isolation(org_ctx, make_company):
-    organisation_id, _workspace_id = org_ctx
-    await make_company(company_name="Org A Co")
+async def test_workspace_isolation(org_ctx, make_company):
+    """Companies belong to ONE workspace (migration a3f8d21c6b94): another
+    workspace - even inside the same organisation - sees none of them."""
+    _organisation_id, workspace_id = org_ctx
+    await make_company(company_name="Workspace A Co")
 
-    other_org_id = uuid.uuid4()  # a UUID that belongs to no real organisation
+    other_workspace_id = uuid.uuid4()  # a UUID that belongs to no real workspace
 
     async with async_session_maker() as session:
-        rows_a, total_a = await company_directory.list_companies(session, organisation_id, page=1, page_size=25)
-        rows_other, total_other = await company_directory.list_companies(session, other_org_id, page=1, page_size=25)
+        rows_a, total_a = await company_directory.list_companies(session, workspace_id, page=1, page_size=25)
+        rows_other, total_other = await company_directory.list_companies(
+            session, other_workspace_id, page=1, page_size=25
+        )
 
     assert total_a == 1
     assert len(rows_a) == 1
@@ -674,7 +684,7 @@ async def test_organisation_isolation(org_ctx, make_company):
 
 
 async def test_every_company_gets_scored_no_icp_gate(org_ctx, make_company):
-    organisation_id, _workspace_id = org_ctx
+    _organisation_id, workspace_id = org_ctx
     company_no_evidence = await make_company(company_name="No Evidence Co")
     company_with_evidence = await make_company(company_name="With Evidence Co")
 
@@ -697,7 +707,7 @@ async def test_every_company_gets_scored_no_icp_gate(org_ctx, make_company):
         await session.commit()
 
     async with async_session_maker() as session:
-        await evidence_scorer.run_scoring(session, organisation_id)
+        await evidence_scorer.run_scoring(session, workspace_id)
         await session.commit()
 
     async with async_session_maker() as session:
@@ -753,7 +763,7 @@ async def test_offering_profile_falls_back_when_research_unavailable(org_ctx, mo
 # ---------------------------------------------------------------------------
 
 async def test_signal_directory_reads_buying_events(org_ctx, make_company):
-    organisation_id, _workspace_id = org_ctx
+    _organisation_id, workspace_id = org_ctx
     company = await make_company(company_name="Signal Feed Co")
 
     async with async_session_maker() as session:
@@ -775,7 +785,7 @@ async def test_signal_directory_reads_buying_events(org_ctx, make_company):
         await session.commit()
 
     async with async_session_maker() as session:
-        rows, total = await buying_event_directory.list_events(session, organisation_id, page=1, page_size=25)
+        rows, total = await buying_event_directory.list_events(session, workspace_id, page=1, page_size=25)
 
     assert total == 1
     (event, company_name) = rows[0]

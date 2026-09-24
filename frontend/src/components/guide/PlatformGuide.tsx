@@ -481,7 +481,7 @@ const TOPICS: GuideTopic[] = [
           ["Lead Score", "The 0-100 score with a bar, or a dash if not yet scored"],
           ["Sales Status", "The band, or Unscored"],
           ["Confidence", "High, Medium, Low or Insufficient Evidence"],
-          ["Best XSparks Offering", "The offering the strongest signal points to"],
+          ["Best Offering", "The offering from your Offering Profile that the strongest signal points to"],
           ["Expected Deal", "The expected deal value"],
         ],
       },

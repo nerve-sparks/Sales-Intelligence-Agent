@@ -331,7 +331,7 @@ function Recommendation({ score }: { score: ScoreDetailOut }) {
       <h2 className="m-0 shrink-0 text-[16px] font-bold text-[#0f172a]">Sales Recommendation</h2>
       <div className={`${EQUAL_CARD_BODY} flex flex-col gap-[12px]`}>
         <Field label="Why now" value={score.why_now} />
-        <Field label="Best XSparks offering" value={score.best_offering} />
+        <Field label="Best offering" value={score.best_offering} />
         <Field label="Recommended action" value={score.recommended_action} />
         {risks.length > 0 && (
           <div>

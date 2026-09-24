@@ -1,9 +1,39 @@
 /* Shared fetch wrapper for every file in src/api/. One file per backend
  * routes/*.py file - keep that mapping when adding new endpoints. */
 import { clearAuthTokens, getAccessToken, getRefreshToken } from "../lib/authToken";
-import { gatewayRefresh } from "../lib/gatewayAuth";
+import { GatewayAuthError, gatewayRefresh } from "../lib/gatewayAuth";
+import { getWorkspaceId } from "../lib/session";
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8175";
+
+/* Companies, contacts, signals and scores are WORKSPACE-scoped (backend
+ * migration a3f8d21c6b94): the organisation in the path is the authorisation
+ * boundary, the workspace decides which data you actually see. Every such
+ * endpoint therefore needs the active workspace alongside the org.
+ *
+ * Read from session here rather than threaded through ~10 pages' worth of
+ * call sites: getWorkspaceId() is already the single source every page reads
+ * for "which workspace am I in", and this file already pulls the auth token
+ * from session the same way. Switching workspace reloads the page, so this is
+ * always the workspace the UI is currently showing. */
+export function withWorkspace(params: URLSearchParams): URLSearchParams {
+  const workspaceId = getWorkspaceId();
+  if (workspaceId) {
+    params.set("workspace_id", workspaceId);
+  }
+  return params;
+}
+
+export function workspaceQuery(extra: Record<string, string | undefined> = {}): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(extra)) {
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(key, String(value));
+    }
+  }
+  const qs = withWorkspace(params).toString();
+  return qs ? `?${qs}` : "";
+}
 
 async function authHeaders(): Promise<Record<string, string>> {
   const token = getAccessToken();
@@ -11,48 +41,78 @@ async function authHeaders(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${token}` };
 }
 
+/** "invalid" is the ONLY outcome that ends a session: the gateway looked at
+ * the refresh token and rejected it. "unavailable" means we never got an
+ * answer (offline, DNS, timeout, gateway 5xx) - that says nothing about
+ * whether the user is signed in, so the session must survive it. */
+type RefreshOutcome = "refreshed" | "invalid" | "unavailable";
+
 // A single in-flight refresh shared by every caller: several requests can hit
 // a 401 near-simultaneously (e.g. a page mount firing 3-4 parallel fetches
 // right as the access token expires), and each one racing its own /refresh
-// call would let one rotation invalidate another's - the exact kind of
-// intermittent logout this exists to fix.
-let refreshInFlight: Promise<boolean> | null = null;
+// call would let one rotation invalidate another's.
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
 
-function refreshAccessToken(): Promise<boolean> {
+async function runRefresh(): Promise<RefreshOutcome> {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return "invalid";
+  try {
+    await gatewayRefresh(refreshToken);
+    return "refreshed";
+  } catch (error) {
+    // Only an explicit rejection from the gateway means the session is over.
+    // Anything else - fetch() throwing on a network error, a timeout, a 502
+    // while the gateway restarts - is an availability problem, and treating
+    // it as a logout is what made sessions drop at random.
+    if (error instanceof GatewayAuthError && error.status >= 400 && error.status < 500) {
+      return "invalid";
+    }
+    return "unavailable";
+  }
+}
+
+function refreshAccessToken(tokenUsedForRequest: string | null): Promise<RefreshOutcome> {
+  // Another tab (or an earlier request in this one) may already have renewed
+  // the token while this request was in flight. Spending the refresh token
+  // again would make a rotating gateway reject the second call and look like
+  // an invalid session, so reuse what is already there instead.
+  const current = getAccessToken();
+  if (current && current !== tokenUsedForRequest) {
+    return Promise.resolve("refreshed");
+  }
+
   if (!refreshInFlight) {
-    const refreshToken = getRefreshToken();
-    refreshInFlight = (refreshToken ? gatewayRefresh(refreshToken).then(() => true) : Promise.resolve(false))
-      .catch(() => false)
-      .finally(() => {
-        refreshInFlight = null;
-      });
+    refreshInFlight = runRefresh().finally(() => {
+      refreshInFlight = null;
+    });
   }
   return refreshInFlight;
 }
 
 /** Runs one request; on a 401, tries ONE silent token refresh and retries
- * once before giving up. Only a 401 that survives a fresh access token means
- * the session is genuinely over - previously ANY 401 cleared the session
- * immediately, so a token expiring mid-session (often first surfaced by the
- * next sidebar navigation's data fetch) force-logged the user out instead of
- * silently renewing. */
+ * once. The session is cleared only when the gateway explicitly rejects the
+ * refresh token - never because a request or the gateway itself failed. */
 async function fetchWithAuthRetry(request: () => Promise<Response>): Promise<Response> {
+  const tokenUsedForRequest = getAccessToken();
   const response = await request();
   if (response.status !== 401) return response;
 
-  const refreshed = await refreshAccessToken();
-  if (!refreshed) {
+  const outcome = await refreshAccessToken(tokenUsedForRequest);
+  if (outcome === "invalid") {
     clearAuthTokens();
     return response;
   }
-
-  const retryResponse = await request();
-  if (retryResponse.status === 401) {
-    // The gateway accepted the refresh but the session still isn't valid -
-    // genuinely logged out (e.g. the refresh token itself was revoked).
-    clearAuthTokens();
+  if (outcome === "unavailable") {
+    // Keep the session and let the caller surface a normal error. The user
+    // stays signed in and the next request succeeds once the gateway is back.
+    return response;
   }
-  return retryResponse;
+
+  // Refreshed: the gateway confirmed this session is live. If our own backend
+  // still answers 401 the problem is on that side (most often its JWKS fetch
+  // failing), so the error is surfaced without signing the user out - logging
+  // them out would not fix it, since signing back in returns the same token.
+  return request();
 }
 
 export class ApiError extends Error {

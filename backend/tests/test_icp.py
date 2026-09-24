@@ -172,6 +172,7 @@ async def test_departments_come_from_real_contacts_ranked_by_frequency(org_ctx, 
             session.add(
                 DecisionMaker(
                     organisation_id=organisation_id,
+                    workspace_id=workspace_id,
                     company_id=company.company_id,
                     zi_person_id=uuid.uuid4().int % 1_000_000_000 + index,
                     department=department,

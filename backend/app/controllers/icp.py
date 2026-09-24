@@ -104,7 +104,7 @@ async def generate(
 
     try:
         result = await lead_generation.generate_leads(
-            db, workspace.organisation_id, icp, payload.target
+            db, workspace.organisation_id, workspace_id, icp, payload.target
         )
     except lead_generation.LeadGenerationError as exc:
         # Configuration problem (no LLM / no search), not a user error - 503
@@ -117,8 +117,8 @@ async def generate(
             detail = f"{detail} {' '.join(result.warnings)}"
         raise HTTPException(status_code=422, detail=detail)
 
-    rows = lead_generation.to_company_rows(result.verified, workspace.organisation_id)
-    zi_to_company_id = await excel_pipeline.run_pipeline(db, workspace.organisation_id, rows)
+    rows = lead_generation.to_company_rows(result.verified)
+    zi_to_company_id = await excel_pipeline.run_pipeline(db, workspace.organisation_id, workspace_id, rows)
 
     batch = await excel_pipeline.record_import_batch(
         db,

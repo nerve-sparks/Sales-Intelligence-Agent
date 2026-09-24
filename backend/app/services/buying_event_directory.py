@@ -39,11 +39,11 @@ def _in_batch(import_batch_id: UUID):
     )
 
 
-def _base_stmt(organisation_id: UUID, include_stale: bool = False):
+def _base_stmt(workspace_id: UUID, include_stale: bool = False):
     stmt = (
         select(BuyingEvent, Company.company_name)
         .join(Company, Company.company_id == BuyingEvent.company_id)
-        .where(Company.organisation_id == organisation_id, BuyingEvent.is_negative.is_(False))
+        .where(Company.workspace_id == workspace_id, BuyingEvent.is_negative.is_(False))
     )
     if not include_stale:
         stmt = stmt.where(BuyingEvent.is_stale.is_(False))
@@ -60,7 +60,7 @@ SORT_KEYS = ("date", "oldest", "score", "company")
 
 async def list_events(
     session: AsyncSession,
-    organisation_id: UUID,
+    workspace_id: UUID,
     page: int,
     page_size: int,
     category: str | None = None,
@@ -71,7 +71,7 @@ async def list_events(
     sort: str = "date",
     days: int | None = None,
 ):
-    stmt = _base_stmt(organisation_id)
+    stmt = _base_stmt(workspace_id)
     if category:
         stmt = stmt.where(BuyingEvent.category == category)
     if import_batch_id is not None:
@@ -124,22 +124,22 @@ async def list_events(
     return rows, total
 
 
-async def get_event(session: AsyncSession, organisation_id: UUID, buying_event_id: UUID):
+async def get_event(session: AsyncSession, workspace_id: UUID, buying_event_id: UUID):
     stmt = (
         select(BuyingEvent, Company.company_name)
         .join(Company, Company.company_id == BuyingEvent.company_id)
-        .where(BuyingEvent.buying_event_id == buying_event_id, Company.organisation_id == organisation_id)
+        .where(BuyingEvent.buying_event_id == buying_event_id, Company.workspace_id == workspace_id)
     )
     return (await session.execute(stmt)).first()
 
 
-async def get_events_for_company(session: AsyncSession, organisation_id: UUID, company_id: UUID):
+async def get_events_for_company(session: AsyncSession, workspace_id: UUID, company_id: UUID):
     stmt = (
         select(BuyingEvent)
         .join(Company, Company.company_id == BuyingEvent.company_id)
         .where(
             BuyingEvent.company_id == company_id,
-            Company.organisation_id == organisation_id,
+            Company.workspace_id == workspace_id,
             BuyingEvent.is_negative.is_(False),
             BuyingEvent.is_stale.is_(False),
         )
@@ -157,12 +157,12 @@ def _relevance_tier():
 
 
 async def relevance_counts(
-    session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None
+    session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None
 ) -> dict[str, int]:
     tier = _relevance_tier()
     stmt = select(tier.label("tier"), func.count()).select_from(BuyingEvent).join(
         Company, Company.company_id == BuyingEvent.company_id
-    ).where(Company.organisation_id == organisation_id, BuyingEvent.is_negative.is_(False), BuyingEvent.is_stale.is_(False)).group_by(tier)
+    ).where(Company.workspace_id == workspace_id, BuyingEvent.is_negative.is_(False), BuyingEvent.is_stale.is_(False)).group_by(tier)
     if import_batch_id is not None:
         stmt = stmt.where(_in_batch(import_batch_id))
     rows = (await session.execute(stmt)).all()
@@ -171,7 +171,7 @@ async def relevance_counts(
     return counts
 
 
-async def counts_by_category(session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None):
+async def counts_by_category(session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None):
     stmt = (
         select(
             BuyingEvent.category,
@@ -180,7 +180,7 @@ async def counts_by_category(session: AsyncSession, organisation_id: UUID, impor
             func.avg(BuyingEvent.extraction_confidence),
         )
         .join(Company, Company.company_id == BuyingEvent.company_id)
-        .where(Company.organisation_id == organisation_id, BuyingEvent.is_negative.is_(False), BuyingEvent.is_stale.is_(False))
+        .where(Company.workspace_id == workspace_id, BuyingEvent.is_negative.is_(False), BuyingEvent.is_stale.is_(False))
         .group_by(BuyingEvent.category)
         .order_by(func.count().desc())
     )
@@ -189,7 +189,7 @@ async def counts_by_category(session: AsyncSession, organisation_id: UUID, impor
     return (await session.execute(stmt)).all()
 
 
-async def org_totals(session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None) -> dict:
+async def org_totals(session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None) -> dict:
     stmt = (
         select(
             func.count(),
@@ -197,7 +197,7 @@ async def org_totals(session: AsyncSession, organisation_id: UUID, import_batch_
             func.avg(BuyingEvent.extraction_confidence),
         )
         .join(Company, Company.company_id == BuyingEvent.company_id)
-        .where(Company.organisation_id == organisation_id, BuyingEvent.is_negative.is_(False), BuyingEvent.is_stale.is_(False))
+        .where(Company.workspace_id == workspace_id, BuyingEvent.is_negative.is_(False), BuyingEvent.is_stale.is_(False))
     )
     if import_batch_id is not None:
         stmt = stmt.where(_in_batch(import_batch_id))
@@ -226,7 +226,7 @@ TREND_MAX_POINTS = 60
 TREND_EARLIEST_YEAR = 2015
 
 
-async def trend_by_day(session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None):
+async def trend_by_day(session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None):
     """Signal activity over time, bucketed by real event date.
 
     Returns (points, granularity) where granularity is "day" | "week" | "month".
@@ -246,7 +246,7 @@ async def trend_by_day(session: AsyncSession, organisation_id: UUID, import_batc
         select(day.label("day"), tier.label("tier"), func.count())
         .join(Company, Company.company_id == BuyingEvent.company_id)
         .where(
-            Company.organisation_id == organisation_id,
+            Company.workspace_id == workspace_id,
             BuyingEvent.is_negative.is_(False),
             BuyingEvent.is_stale.is_(False),
             BuyingEvent.published_at.isnot(None),
@@ -308,8 +308,8 @@ async def trend_by_day(session: AsyncSession, organisation_id: UUID, import_batc
     ], granularity
 
 
-async def top_events(session: AsyncSession, organisation_id: UUID, limit: int = 5, import_batch_id: UUID | None = None):
-    stmt = _base_stmt(organisation_id).order_by(BuyingEvent.event_score.desc().nulls_last()).limit(limit)
+async def top_events(session: AsyncSession, workspace_id: UUID, limit: int = 5, import_batch_id: UUID | None = None):
+    stmt = _base_stmt(workspace_id).order_by(BuyingEvent.event_score.desc().nulls_last()).limit(limit)
     if import_batch_id is not None:
         stmt = stmt.where(_in_batch(import_batch_id))
     return (await session.execute(stmt)).all()
@@ -318,7 +318,7 @@ async def top_events(session: AsyncSession, organisation_id: UUID, limit: int = 
 CONFIDENCE_BUCKETS = ["0-20", "20-40", "40-60", "60-80", "80-100"]
 
 
-async def confidence_histogram(session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None):
+async def confidence_histogram(session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None):
     pct = BuyingEvent.extraction_confidence * 100
     bucket = case(
         (pct < 20, "0-20"),
@@ -331,7 +331,7 @@ async def confidence_histogram(session: AsyncSession, organisation_id: UUID, imp
         select(bucket.label("bucket"), func.count())
         .join(Company, Company.company_id == BuyingEvent.company_id)
         .where(
-            Company.organisation_id == organisation_id,
+            Company.workspace_id == workspace_id,
             BuyingEvent.extraction_confidence.is_not(None),
             BuyingEvent.is_negative.is_(False),
             BuyingEvent.is_stale.is_(False),
@@ -344,13 +344,13 @@ async def confidence_histogram(session: AsyncSession, organisation_id: UUID, imp
     return [{"bucket": b, "count": rows.get(b, 0)} for b in CONFIDENCE_BUCKETS]
 
 
-async def counts_by_country(session: AsyncSession, organisation_id: UUID, limit: int = 10, import_batch_id: UUID | None = None):
+async def counts_by_country(session: AsyncSession, workspace_id: UUID, limit: int = 10, import_batch_id: UUID | None = None):
     stmt = (
         select(Company.country, func.count())
         .select_from(BuyingEvent)
         .join(Company, Company.company_id == BuyingEvent.company_id)
         .where(
-            Company.organisation_id == organisation_id,
+            Company.workspace_id == workspace_id,
             Company.country.is_not(None),
             BuyingEvent.is_negative.is_(False),
             BuyingEvent.is_stale.is_(False),
@@ -364,11 +364,11 @@ async def counts_by_country(session: AsyncSession, organisation_id: UUID, limit:
     return (await session.execute(stmt)).all()
 
 
-async def executives_impacted(session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None) -> int:
+async def executives_impacted(session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None) -> int:
     companies_with_events = (
         select(BuyingEvent.company_id)
         .join(Company, Company.company_id == BuyingEvent.company_id)
-        .where(Company.organisation_id == organisation_id, BuyingEvent.is_negative.is_(False), BuyingEvent.is_stale.is_(False))
+        .where(Company.workspace_id == workspace_id, BuyingEvent.is_negative.is_(False), BuyingEvent.is_stale.is_(False))
         .distinct()
     )
     if import_batch_id is not None:
@@ -377,13 +377,13 @@ async def executives_impacted(session: AsyncSession, organisation_id: UUID, impo
     return (await session.execute(stmt)).scalar_one()
 
 
-async def actionable_count(session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None) -> int:
+async def actionable_count(session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None) -> int:
     stmt = (
         select(func.count())
         .select_from(BuyingEvent)
         .join(Company, Company.company_id == BuyingEvent.company_id)
         .where(
-            Company.organisation_id == organisation_id,
+            Company.workspace_id == workspace_id,
             BuyingEvent.is_negative.is_(False),
             BuyingEvent.is_stale.is_(False),
             BuyingEvent.status_factor >= ACTIONABLE_STATUS_FACTOR,
@@ -397,7 +397,7 @@ async def actionable_count(session: AsyncSession, organisation_id: UUID, import_
 _HOST_RE = re.compile(r"^www\.")
 
 
-async def top_sources(session: AsyncSession, organisation_id: UUID, limit: int = 5, import_batch_id: UUID | None = None):
+async def top_sources(session: AsyncSession, workspace_id: UUID, limit: int = 5, import_batch_id: UUID | None = None):
     """Each BuyingEvent carries a list of evidence sources (JSONB) with a
     domain per source - counts every corroborating source across every event,
     grouped by domain (brief item 15: real source breakdown, not a single
@@ -405,7 +405,7 @@ async def top_sources(session: AsyncSession, organisation_id: UUID, limit: int =
     stmt = (
         select(BuyingEvent.evidence)
         .join(Company, Company.company_id == BuyingEvent.company_id)
-        .where(Company.organisation_id == organisation_id, BuyingEvent.is_negative.is_(False), BuyingEvent.is_stale.is_(False))
+        .where(Company.workspace_id == workspace_id, BuyingEvent.is_negative.is_(False), BuyingEvent.is_stale.is_(False))
     )
     if import_batch_id is not None:
         stmt = stmt.where(_in_batch(import_batch_id))

@@ -72,14 +72,16 @@ async def org_ctx():
 @pytest_asyncio.fixture
 async def make_company(org_ctx):
     """Factory fixture: make_company(**overrides) -> Company, already
-    committed, scoped to this test's throwaway organisation."""
-    organisation_id, _workspace_id = org_ctx
+    committed, scoped to this test's throwaway workspace (companies are
+    workspace-scoped - migration a3f8d21c6b94)."""
+    organisation_id, workspace_id = org_ctx
     created: list[uuid.UUID] = []
 
     async def _make(**overrides) -> Company:
         async with async_session_maker() as session:
             values = dict(
                 organisation_id=organisation_id,
+                workspace_id=workspace_id,
                 zi_company_id=overrides.pop("zi_company_id", uuid.uuid4().int % 1_000_000_000),
                 company_name=overrides.pop("company_name", "Acme Test Corp"),
                 company_domain=overrides.pop("company_domain", f"{uuid.uuid4().hex[:10]}.example.com"),

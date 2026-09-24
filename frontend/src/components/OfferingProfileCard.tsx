@@ -47,6 +47,15 @@ export function OfferingProfileCard() {
 
   useEffect(load, []);
 
+  // The Organization card (Settings) also has its own "Research" trigger next
+  // to the Website field, calling the same syncOfferingProfile endpoint - it
+  // broadcasts this event so this card's copy of the profile updates
+  // immediately instead of only on next page load.
+  useEffect(() => {
+    window.addEventListener("offering-profile-synced", load);
+    return () => window.removeEventListener("offering-profile-synced", load);
+  }, []);
+
   const handleRefresh = async () => {
     const orgId = getOrganisationId();
     if (!orgId) return;

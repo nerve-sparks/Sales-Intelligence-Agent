@@ -1,7 +1,7 @@
 /* Mirrors backend/app/routes/signals.py - Signal Intelligence backed by
  * BuyingEvent (brief item 15), the active evidence pipeline. extractSignals/
  * rescoreSignals are legacy no-ops kept for backward compatibility only. */
-import { apiGet, apiPost } from "./client";
+import { apiGet, apiPost, withWorkspace, workspaceQuery } from "./client";
 import type { EvidenceSource } from "./scores";
 
 export type SignalOut = {
@@ -95,16 +95,18 @@ export function listSignals(
   if (params.sector) query.set("sector", params.sector);
   if (params.sort) query.set("sort", params.sort);
   if (params.days !== undefined) query.set("days", String(params.days));
-  const qs = query.toString();
+  const qs = withWorkspace(query).toString();
   return apiGet<SignalListOut>(`/organisations/${organisationId}/signals${qs ? `?${qs}` : ""}`);
 }
 
 export function getSignalById(organisationId: string, signalId: string): Promise<SignalWithCompanyOut> {
-  return apiGet<SignalWithCompanyOut>(`/organisations/${organisationId}/signals/detail/${signalId}`);
+  return apiGet<SignalWithCompanyOut>(
+    `/organisations/${organisationId}/signals/detail/${signalId}${workspaceQuery()}`,
+  );
 }
 
 export function getSignals(organisationId: string, companyId: string): Promise<SignalOut[]> {
-  return apiGet<SignalOut[]>(`/organisations/${organisationId}/signals/${companyId}`);
+  return apiGet<SignalOut[]>(`/organisations/${organisationId}/signals/${companyId}${workspaceQuery()}`);
 }
 
 export type SignalCategoryCount = {
@@ -160,6 +162,6 @@ export type SignalStatsOut = {
 };
 
 export function getSignalStats(organisationId: string, importBatchId?: string): Promise<SignalStatsOut> {
-  const qs = importBatchId ? `?import_batch_id=${importBatchId}` : "";
+  const qs = workspaceQuery({ import_batch_id: importBatchId });
   return apiGet<SignalStatsOut>(`/organisations/${organisationId}/signals/stats${qs}`);
 }

@@ -21,7 +21,7 @@ MEDIUM_CONFIDENCE = 0.40
 
 async def list_signals(
     session: AsyncSession,
-    organisation_id: UUID,
+    workspace_id: UUID,
     page: int,
     page_size: int,
     category: str | None = None,
@@ -30,7 +30,7 @@ async def list_signals(
     stmt = (
         select(Signal, Company.company_name)
         .join(Company, Company.company_id == Signal.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
     )
     if category:
         stmt = stmt.where(Signal.signal_category == category)
@@ -44,11 +44,11 @@ async def list_signals(
     return rows, total
 
 
-async def get_signal(session: AsyncSession, organisation_id: UUID, signal_id: UUID):
+async def get_signal(session: AsyncSession, workspace_id: UUID, signal_id: UUID):
     stmt = (
         select(Signal, Company.company_name)
         .join(Company, Company.company_id == Signal.company_id)
-        .where(Signal.signal_id == signal_id, Company.organisation_id == organisation_id)
+        .where(Signal.signal_id == signal_id, Company.workspace_id == workspace_id)
     )
     return (await session.execute(stmt)).first()
 
@@ -62,13 +62,13 @@ def _confidence_tier():
 
 
 async def intent_counts(
-    session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None
+    session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None
 ) -> dict[str, int]:
     tier = _confidence_tier()
     stmt = (
         select(tier.label("tier"), func.count())
         .join(Company, Company.company_id == Signal.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
         .group_by(tier)
     )
     if import_batch_id is not None:
@@ -79,7 +79,7 @@ async def intent_counts(
     return counts
 
 
-async def counts_by_category(session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None):
+async def counts_by_category(session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None):
     stmt = (
         select(
             Signal.signal_category,
@@ -88,7 +88,7 @@ async def counts_by_category(session: AsyncSession, organisation_id: UUID, impor
             func.avg(Signal.signal_confidence),
         )
         .join(Company, Company.company_id == Signal.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
         .group_by(Signal.signal_category)
         .order_by(func.count().desc())
     )
@@ -97,7 +97,7 @@ async def counts_by_category(session: AsyncSession, organisation_id: UUID, impor
     return (await session.execute(stmt)).all()
 
 
-async def org_totals(session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None) -> dict:
+async def org_totals(session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None) -> dict:
     stmt = (
         select(
             func.count(),
@@ -105,7 +105,7 @@ async def org_totals(session: AsyncSession, organisation_id: UUID, import_batch_
             func.avg(Signal.signal_confidence),
         )
         .join(Company, Company.company_id == Signal.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
     )
     if import_batch_id is not None:
         stmt = stmt.where(Company.import_batch_id == import_batch_id)
@@ -117,13 +117,13 @@ async def org_totals(session: AsyncSession, organisation_id: UUID, import_batch_
     }
 
 
-async def trend_by_day(session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None):
+async def trend_by_day(session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None):
     tier = _confidence_tier()
     day = func.date(Signal.ingested_at)
     stmt = (
         select(day.label("day"), tier.label("tier"), func.count())
         .join(Company, Company.company_id == Signal.company_id)
-        .where(Company.organisation_id == organisation_id, Signal.ingested_at.is_not(None))
+        .where(Company.workspace_id == workspace_id, Signal.ingested_at.is_not(None))
         .group_by(day, tier)
         .order_by(day)
     )
@@ -142,12 +142,12 @@ async def trend_by_day(session: AsyncSession, organisation_id: UUID, import_batc
 
 
 async def top_signals(
-    session: AsyncSession, organisation_id: UUID, limit: int = 5, import_batch_id: UUID | None = None
+    session: AsyncSession, workspace_id: UUID, limit: int = 5, import_batch_id: UUID | None = None
 ):
     stmt = (
         select(Signal, Company.company_name)
         .join(Company, Company.company_id == Signal.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
         .order_by(Signal.signal_confidence.desc().nulls_last())
         .limit(limit)
     )
@@ -159,7 +159,7 @@ async def top_signals(
 CONFIDENCE_BUCKETS = ["0-20", "20-40", "40-60", "60-80", "80-100"]
 
 
-async def confidence_histogram(session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None):
+async def confidence_histogram(session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None):
     pct = Signal.signal_confidence * 100
     bucket = case(
         (pct < 20, "0-20"),
@@ -171,7 +171,7 @@ async def confidence_histogram(session: AsyncSession, organisation_id: UUID, imp
     stmt = (
         select(bucket.label("bucket"), func.count())
         .join(Company, Company.company_id == Signal.company_id)
-        .where(Company.organisation_id == organisation_id, Signal.signal_confidence.is_not(None))
+        .where(Company.workspace_id == workspace_id, Signal.signal_confidence.is_not(None))
         .group_by(bucket)
     )
     if import_batch_id is not None:
@@ -181,13 +181,13 @@ async def confidence_histogram(session: AsyncSession, organisation_id: UUID, imp
 
 
 async def counts_by_country(
-    session: AsyncSession, organisation_id: UUID, limit: int = 10, import_batch_id: UUID | None = None
+    session: AsyncSession, workspace_id: UUID, limit: int = 10, import_batch_id: UUID | None = None
 ):
     stmt = (
         select(Company.country, func.count())
         .select_from(Signal)
         .join(Company, Company.company_id == Signal.company_id)
-        .where(Company.organisation_id == organisation_id, Company.country.is_not(None))
+        .where(Company.workspace_id == workspace_id, Company.country.is_not(None))
         .group_by(Company.country)
         .order_by(func.count().desc())
         .limit(limit)
@@ -198,12 +198,12 @@ async def counts_by_country(
 
 
 async def executives_impacted(
-    session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None
+    session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None
 ) -> int:
     companies_with_signals = (
         select(Signal.company_id)
         .join(Company, Company.company_id == Signal.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
         .distinct()
     )
     if import_batch_id is not None:
@@ -215,13 +215,13 @@ async def executives_impacted(
 
 
 async def actionable_count(
-    session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None
+    session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None
 ) -> int:
     stmt = (
         select(func.count())
         .select_from(Signal)
         .join(Company, Company.company_id == Signal.company_id)
-        .where(Company.organisation_id == organisation_id, Signal.is_action.is_(True))
+        .where(Company.workspace_id == workspace_id, Signal.is_action.is_(True))
     )
     if import_batch_id is not None:
         stmt = stmt.where(Company.import_batch_id == import_batch_id)
@@ -232,7 +232,7 @@ _URL_RE = re.compile(r"https?://([^/\s]+)")
 
 
 async def top_sources(
-    session: AsyncSession, organisation_id: UUID, limit: int = 5, import_batch_id: UUID | None = None
+    session: AsyncSession, workspace_id: UUID, limit: int = 5, import_batch_id: UUID | None = None
 ):
     """original_source is "news:{news_id}" (news_id embeds the article URL)
     or "scoop:{scoop_id}" (no URL - internal deal intelligence). Grouping by
@@ -241,7 +241,7 @@ async def top_sources(
     stmt = (
         select(Signal.original_source)
         .join(Company, Company.company_id == Signal.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
     )
     if import_batch_id is not None:
         stmt = stmt.where(Company.import_batch_id == import_batch_id)

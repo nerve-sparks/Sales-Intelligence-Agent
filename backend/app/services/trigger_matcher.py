@@ -32,7 +32,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import BuyingEvent, Company, TriggerDefinition, TriggerEvent, Workspace
+from app.models import BuyingEvent, Company, TriggerDefinition, TriggerEvent
 
 
 async def create_trigger(session: AsyncSession, workspace_id: UUID, values: dict) -> TriggerDefinition:
@@ -97,10 +97,10 @@ async def detect_trigger_events(
     empty/half-configured rule is visibly inert rather than silently matching
     the entire organisation.
     """
-    # A trigger's Workspace belongs to exactly one Organisation - buying events
-    # are shared across all Workspaces in that Organisation (same as company
-    # data), so scope by organisation_id (via the workspace), not workspace_id.
-    workspace = await session.get(Workspace, trigger.workspace_id)
+    # Companies (and therefore their buying events) are workspace-scoped as of
+    # migration a3f8d21c6b94, so a trigger matches only its OWN workspace's
+    # events - it previously scoped to the whole organisation because the
+    # company pool was shared across every workspace in it.
 
     if trigger.signal_categories:
         min_score = float(trigger.min_event_score or 0)
@@ -109,7 +109,7 @@ async def detect_trigger_events(
                 select(BuyingEvent.buying_event_id, BuyingEvent.company_id)
                 .join(Company, Company.company_id == BuyingEvent.company_id)
                 .where(
-                    Company.organisation_id == workspace.organisation_id,
+                    Company.workspace_id == trigger.workspace_id,
                     BuyingEvent.category.in_(trigger.signal_categories),
                     BuyingEvent.event_score >= min_score,
                     # Same exclusions the Lead Score applies - see module docstring.

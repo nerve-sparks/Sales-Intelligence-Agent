@@ -41,7 +41,10 @@ def _primary_contact(dms: list[DecisionMaker]) -> tuple[str | None, str | None]:
     return best.email, name
 
 
-async def run(organisation_id: UUID, import_batch_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
+async def run(
+    organisation_id: UUID, workspace_id: UUID, import_batch_id: UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     """Re-scores the org (or one upload's companies) from stored BuyingEvents.
     No ICP (brief section 22). Returns per-sales-status counts."""
     company_ids = None
@@ -49,12 +52,12 @@ async def run(organisation_id: UUID, import_batch_id: UUID | None = None, db: As
         company_ids = (
             await db.execute(
                 select(Company.company_id).where(
-                    Company.organisation_id == organisation_id,
+                    Company.workspace_id == workspace_id,
                     _in_batch(import_batch_id),
                 )
             )
         ).scalars().all()
-    counts = await run_scoring(db, organisation_id, company_ids=company_ids)
+    counts = await run_scoring(db, workspace_id, company_ids=company_ids)
     return {
         "sales_ready": counts["Sales Ready"],
         "high_priority": counts["High Priority"],
@@ -64,13 +67,16 @@ async def run(organisation_id: UUID, import_batch_id: UUID | None = None, db: As
     }
 
 
-async def ranked(organisation_id: UUID, import_batch_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
+async def ranked(
+    organisation_id: UUID, workspace_id: UUID, import_batch_id: UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     """Every scored company (brief section 22) - NO gate filter. Ordered by
     lead score, then confidence, then most-recent score, then name."""
     stmt = (
         select(Company.company_id, Company.company_name, LeadScore)
         .join(LeadScore, LeadScore.company_id == Company.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
         .order_by(
             LeadScore.lead_score.desc().nullslast(),
             LeadScore.evidence_confidence.desc().nullslast(),
@@ -117,13 +123,15 @@ async def ranked(organisation_id: UUID, import_batch_id: UUID | None = None, db:
     return out
 
 
-async def get_score(organisation_id: UUID, company_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_score(
+    organisation_id: UUID, workspace_id: UUID, company_id: UUID, db: AsyncSession = Depends(get_db)
+):
     """Full evidence-based score for one company, including its canonical
     events with source URLs (brief section 21)."""
     stmt = (
         select(LeadScore)
         .join(Company, Company.company_id == LeadScore.company_id)
-        .where(LeadScore.company_id == company_id, Company.organisation_id == organisation_id)
+        .where(LeadScore.company_id == company_id, Company.workspace_id == workspace_id)
     )
     score = (await db.execute(stmt)).scalar_one_or_none()
     if score is None:

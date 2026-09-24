@@ -232,20 +232,20 @@ async def enrich_company(company: Company) -> dict:
 
 
 async def enrich_missing_domains(
-    session: AsyncSession, organisation_id, company_ids=None, limit: int | None = None,
+    session: AsyncSession, workspace_id, company_ids=None, limit: int | None = None,
 ) -> dict:
     """Fills company_domain for companies that have none, so the research stage
     stops skipping them.
 
     Scoped to company_ids when given (one upload's companies) - otherwise it
-    would re-attempt every unresolvable company in the organisation on every
+    would re-attempt every unresolvable company in the workspace on every
     upload, paying for the same failed searches repeatedly."""
     if not you_client.is_configured():
         return {"attempted": 0, "resolved": 0, "unresolved": 0, "failed": 0,
                 "search_not_configured": True, "details": []}
 
     stmt = select(Company).where(
-        Company.organisation_id == organisation_id,
+        Company.workspace_id == workspace_id,
         Company.company_domain.is_(None),
     )
     if company_ids is not None:
@@ -655,7 +655,7 @@ async def enrich_firmographics(company: Company) -> dict:
 
 async def enrich_missing_firmographics(
     session: AsyncSession,
-    organisation_id,
+    workspace_id,
     company_ids=None,
     limit: int | None = None,
     processed_only: bool = False,
@@ -679,7 +679,7 @@ async def enrich_missing_firmographics(
             "search_not_configured": True, "details": [],
         }
 
-    stmt = select(Company).where(Company.organisation_id == organisation_id)
+    stmt = select(Company).where(Company.workspace_id == workspace_id)
     if company_ids is not None:
         stmt = stmt.where(Company.company_id.in_(company_ids))
     if processed_only:

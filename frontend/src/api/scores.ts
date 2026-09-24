@@ -1,5 +1,5 @@
 /* Mirrors backend/app/routes/scores.py - evidence-based pipeline (no gates/D1-D7/ICP) */
-import { apiGet, apiPost } from "./client";
+import { apiGet, apiPost, workspaceQuery } from "./client";
 
 export type EvidenceSource = {
   url: string | null;
@@ -100,17 +100,19 @@ export type ScoreRunResult = {
 };
 
 export function runScoring(organisationId: string, importBatchId?: string): Promise<ScoreRunResult> {
-  const qs = importBatchId ? `?import_batch_id=${importBatchId}` : "";
+  const qs = workspaceQuery({ import_batch_id: importBatchId });
   return apiPost<ScoreRunResult>(`/organisations/${organisationId}/scores/run${qs}`);
 }
 
 export function getRankedScores(organisationId: string, importBatchId?: string): Promise<RankedLeadScoreOut[]> {
-  const qs = importBatchId ? `?import_batch_id=${importBatchId}` : "";
+  const qs = workspaceQuery({ import_batch_id: importBatchId });
   return apiGet<RankedLeadScoreOut[]>(`/organisations/${organisationId}/scores/ranked${qs}`);
 }
 
 export function getScore(organisationId: string, companyId: string): Promise<ScoreDetailOut | NotScoredOut> {
-  return apiGet<ScoreDetailOut | NotScoredOut>(`/organisations/${organisationId}/scores/${companyId}`);
+  return apiGet<ScoreDetailOut | NotScoredOut>(
+    `/organisations/${organisationId}/scores/${companyId}${workspaceQuery()}`,
+  );
 }
 
 export function isScored(score: ScoreDetailOut | NotScoredOut): score is ScoreDetailOut {

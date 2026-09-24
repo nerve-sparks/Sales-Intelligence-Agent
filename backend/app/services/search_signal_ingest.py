@@ -135,9 +135,10 @@ async def _process_company(
 
 
 async def research_companies(
-    session: AsyncSession, organisation_id, company_ids=None, force_refresh: bool = False, import_batch_id=None,
+    session: AsyncSession, organisation_id, workspace_id, company_ids=None,
+    force_refresh: bool = False, import_batch_id=None,
 ) -> dict:
-    """Researches the given companies (or all in the org) whose research is
+    """Researches the given companies (or all in the workspace) whose research is
     missing or stale. Each company runs concurrently up to
     settings.research_concurrency (RESEARCH_CONCURRENCY env var - see
     config.py). Returns a rich summary (item 7) distinguishing successes from
@@ -177,7 +178,9 @@ async def research_companies(
         Company.company_id, Company.company_name, Company.company_domain,
         Company.industries, Company.city, Company.country,
     ).where(
-        Company.organisation_id == organisation_id,
+        # Companies are workspace-scoped; the Offering Profile they are judged
+        # against is organisation-level, which is why both ids are needed here.
+        Company.workspace_id == workspace_id,
         Company.company_name.isnot(None),
     )
     if company_ids is not None:

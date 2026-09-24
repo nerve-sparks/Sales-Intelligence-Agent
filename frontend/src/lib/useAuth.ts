@@ -5,13 +5,9 @@ import { getAuthUser, type AuthUser } from "./authToken";
  * auth-changed (login/logout) and storage events from other tabs. */
 export function useAuth(): { user: AuthUser | null; loading: boolean } {
   const [user, setUser] = useState<AuthUser | null>(() => getAuthUser());
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const sync = () => {
-      setUser(getAuthUser());
-      setLoading(false);
-    };
+    const sync = () => setUser(getAuthUser());
     sync();
     window.addEventListener("auth-changed", sync);
     window.addEventListener("storage", sync);
@@ -21,5 +17,12 @@ export function useAuth(): { user: AuthUser | null; loading: boolean } {
     };
   }, []);
 
-  return { user, loading };
+  // Never "loading": the token is read synchronously from localStorage in the
+  // state initializer above, so the answer is already known on the very first
+  // render. Starting at loading=true instead made RequireAuth paint a
+  // full-screen "Loading..." panel for one frame on EVERY client-side
+  // navigation (it remounts per route), which is what made sidebar navigation
+  // flash white before the page appeared. Kept in the return shape because
+  // callers destructure it.
+  return { user, loading: false };
 }

@@ -1,15 +1,22 @@
 import { CircleDollarSign, Cloud, Layers, Rocket, UserPlus, Wrench, type LucideIcon } from "lucide-react";
 
-/* Real signal_category values from backend/app/services/signal_extractor.py's
- * SIGNAL_CATEGORY_MAP - the only 6 values the Trigger Editor and Trigger
+/* Category vocabulary from backend/app/core/scoring_config.py's
+ * EVENT_CATEGORIES - the only 6 values the Trigger Editor and Trigger
  * Library both let a user act on (the map has two more - company_identity,
  * reachability - but those are enrichment/firmographic categories, not
  * buying-intent categories, so they're not offered as trigger targets).
  * Single source of truth so every page that shows or filters by category
- * agrees on the same labels, descriptions, and icons. */
+ * agrees on the same labels, descriptions, and icons.
+ *
+ * "buyer_seriousness"/"buyer_pain_points" were renamed from "ai_seriousness"/
+ * "ai_pain_points" - seller_relevance is judged against each tenant's own
+ * Offering Profile (never hardcoded to AI), so a category label implying
+ * every signal is AI-related misrepresented that for any non-AI tenant. See
+ * scoring_config.py's BASE_STRENGTH comment for the matching event_type
+ * renames and scripts/rename_ai_event_taxonomy.py for the data backfill. */
 export const SIGNAL_CATEGORY_OPTIONS = [
-  "ai_seriousness",
-  "ai_pain_points",
+  "buyer_seriousness",
+  "buyer_pain_points",
   "buying_stage",
   "budget_and_capital",
   "urgency_and_catalysts",
@@ -17,8 +24,8 @@ export const SIGNAL_CATEGORY_OPTIONS = [
 ] as const;
 
 export const CATEGORY_LABELS: Record<string, string> = {
-  ai_seriousness: "AI Seriousness",
-  ai_pain_points: "AI Pain Points",
+  buyer_seriousness: "Buyer Seriousness",
+  buyer_pain_points: "Buyer Pain Points",
   buying_stage: "Buying Stage",
   budget_and_capital: "Budget & Capital",
   urgency_and_catalysts: "Urgency & Catalysts",
@@ -26,26 +33,27 @@ export const CATEGORY_LABELS: Record<string, string> = {
 };
 
 export const CATEGORY_DESCRIPTIONS: Record<string, string> = {
-  ai_seriousness: "AI hiring, budget, and tooling signals - job postings, budget announcements, pilots, and partnerships.",
-  ai_pain_points: "Operational strain AI could address - inefficiency, quality issues, supply chain and labour shortages.",
+  buyer_seriousness: "Signals of serious buying intent for what you sell - budget commitments, pilots, tool adoption, and transformation programs.",
+  buyer_pain_points: "Operational strain your offerings could address - inefficiency, quality issues, supply chain and labour shortages.",
   buying_stage: "Active procurement motion - RFPs, vendor evaluations, pilots in progress, and awarded contracts.",
   budget_and_capital: "Fresh capital and budget events - funding rounds, PE investment, acquisitions, IPOs.",
   urgency_and_catalysts: "Leadership changes and forcing events - new CEO/CTO/CFO, regulatory change, mergers, expansion.",
   competitive_context: "Vendor landscape signals - existing vendors mentioned, replacement signals, competitive evaluation.",
 };
 
-/* Real signal_type values per category, from SIGNAL_CATEGORY_MAP in
- * backend/app/services/signal_extractor.py (company_identity/reachability
+/* Real event_type values per category, from BASE_STRENGTH in
+ * backend/app/core/scoring_config.py (company_identity/reachability
  * types omitted - same 6-category scope as SIGNAL_CATEGORY_OPTIONS above).
  * Lets the Trigger Editor offer specific types, not just whole categories. */
 export const SIGNAL_TYPES_BY_CATEGORY: Record<string, string[]> = {
-  ai_seriousness: [
-    "ai_engineer_job_posting", "ai_budget_announcement", "ai_tool_adoption",
-    "ai_partnership_signed", "ai_pilot_announced", "ai_transformation_program",
+  buyer_seriousness: [
+    "explicit_solution_budget", "technology_budget", "solution_adoption",
+    "transformation_program", "pilot_program_announced", "active_pilot",
+    "new_tech_mandate", "relevant_hiring",
   ],
-  ai_pain_points: [
-    "operational_inefficiency", "quality_control_issue", "supply_chain_disruption",
-    "labour_shortage", "cost_pressure_mentioned", "compliance_burden",
+  buyer_pain_points: [
+    "operational_inefficiency", "quality_control_problem", "supply_chain_disruption",
+    "labour_shortage", "regulatory_compliance_pressure",
   ],
   buying_stage: [
     "rfp_published", "procurement_signal", "vendor_evaluation_mentioned",
@@ -75,8 +83,8 @@ export function typeLabel(type: string): string {
 export type CategoryStyle = { icon: LucideIcon; color: string; bg: string };
 
 export const CATEGORY_STYLE: Record<string, CategoryStyle> = {
-  ai_seriousness: { icon: Rocket, bg: "#fff1e8", color: "#f97316" },
-  ai_pain_points: { icon: Wrench, bg: "#fee2e2", color: "#ef4444" },
+  buyer_seriousness: { icon: Rocket, bg: "#fff1e8", color: "#f97316" },
+  buyer_pain_points: { icon: Wrench, bg: "#fee2e2", color: "#ef4444" },
   buying_stage: { icon: Layers, bg: "#dcfce7", color: "#16a34a" },
   budget_and_capital: { icon: CircleDollarSign, bg: "#f3e8ff", color: "#7c3aed" },
   urgency_and_catalysts: { icon: UserPlus, bg: "#fce7f3", color: "#db2777" },

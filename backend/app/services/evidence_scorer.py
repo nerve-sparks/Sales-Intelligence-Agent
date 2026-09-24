@@ -472,12 +472,12 @@ async def _score_chunk(company_ids: list, now: datetime, import_batch_id=None) -
     return counts
 
 
-async def run_scoring(session: AsyncSession, organisation_id, company_ids=None, import_batch_id=None) -> dict:
-    """Scores every company in the org (or just company_ids) from its stored
+async def run_scoring(session: AsyncSession, workspace_id, company_ids=None, import_batch_id=None) -> dict:
+    """Scores every company in the workspace (or just company_ids) from its stored
     BuyingEvents. Chunked with bounded concurrency, each chunk committing
     independently. Returns per-sales-status counts. No ICP, no gates - every
     company gets a score."""
-    stmt = select(Company.company_id).where(Company.organisation_id == organisation_id)
+    stmt = select(Company.company_id).where(Company.workspace_id == workspace_id)
     if company_ids is not None:
         stmt = stmt.where(Company.company_id.in_(company_ids))
     ids = [cid for cid in (await session.execute(stmt)).scalars().all()]

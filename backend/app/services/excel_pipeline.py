@@ -21,8 +21,14 @@ from app.services import company_enrichment, evidence_scorer, search_signal_inge
 from app.services import zoominfo_mapper as mapper
 from app.services.offering_profile_service import ensure_offering_profile
 
-COMPANY_UPDATE_COLS = [c for c in mapper.COMPANY_COLUMNS if c not in ("zi_company_id", "company_id", "organisation_id")]
-DM_UPDATE_COLS = [c for c in mapper.DECISION_MAKER_COLUMNS if c not in ("zi_person_id", "organisation_id", "company_id")]
+COMPANY_UPDATE_COLS = [
+    c for c in mapper.COMPANY_COLUMNS
+    if c not in ("zi_company_id", "company_id", "organisation_id", "workspace_id")
+]
+DM_UPDATE_COLS = [
+    c for c in mapper.DECISION_MAKER_COLUMNS
+    if c not in ("zi_person_id", "organisation_id", "workspace_id", "company_id")
+]
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +72,7 @@ async def _upsert_companies(session: AsyncSession, company_rows: list[dict]) -> 
         chunk = company_rows[start : start + COMPANY_INSERT_CHUNK]
         stmt = pg_insert(Company).values(chunk)
         update_cols = {c: getattr(stmt.excluded, c) for c in COMPANY_UPDATE_COLS}
-        stmt = stmt.on_conflict_do_update(index_elements=["organisation_id", "zi_company_id"], set_=update_cols)
+        stmt = stmt.on_conflict_do_update(index_elements=["workspace_id", "zi_company_id"], set_=update_cols)
         await session.execute(stmt)
 
 
@@ -75,22 +81,47 @@ async def _upsert_decision_makers(session: AsyncSession, dm_rows: list[dict]) ->
         chunk = dm_rows[start : start + DM_INSERT_CHUNK]
         stmt = pg_insert(DecisionMaker).values(chunk)
         update_cols = {c: getattr(stmt.excluded, c) for c in DM_UPDATE_COLS}
-        stmt = stmt.on_conflict_do_update(index_elements=["organisation_id", "zi_person_id"], set_=update_cols)
+        stmt = stmt.on_conflict_do_update(index_elements=["workspace_id", "zi_person_id"], set_=update_cols)
         await session.execute(stmt)
 
 
-async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: list[dict]) -> dict[int, UUID]:
+async def _existing_company_ids(session: AsyncSession, workspace_id: UUID, zi_ids: list[int]) -> dict[int, UUID]:
+    """{zi_company_id: stored company_id} for companies this workspace already
+    has. company_id is derived from (workspace_id, zi_company_id), but rows
+    created before that derivation changed (migration a3f8d21c6b94) carry an
+    organisation-derived id instead. Re-deriving would hand this upload's
+    contacts a company_id no row actually has - an FK violation - so the
+    STORED id always wins over the derived one."""
+    if not zi_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(Company.zi_company_id, Company.company_id).where(
+                Company.workspace_id == workspace_id,
+                Company.zi_company_id.in_(zi_ids),
+            )
+        )
+    ).all()
+    return {zi: cid for zi, cid in rows}
+
+
+async def upsert_rows(
+    session: AsyncSession, organisation_id: UUID, workspace_id: UUID, raw_rows: list[dict]
+) -> dict[int, UUID]:
     """Parses prospect rows and upserts ONLY identity + firmographic + contact
     data (brief item 14). External buying evidence (news/scoops/intent) no
     longer comes from spreadsheet columns - it all originates through Tavily
     research into buying_event, so build_intent_row/build_scoop_row/
     build_news_row are deliberately not called here.
 
+    Scoped to ONE workspace: companies and contacts belong to a workspace, not
+    the whole organisation, so the same prospect uploaded into two workspaces
+    becomes two independent rows (migration a3f8d21c6b94).
+
     Returns a {zi_company_id: company_id} map for every company referenced.
     """
     seen_companies: dict[int, dict] = {}
     seen_dms: dict[int, dict] = {}
-    zi_to_company_id: dict[int, UUID] = {}
 
     for row in raw_rows:
         zi_company_id = mapper.parse_int(row.get("ZoomInfo Company ID"))
@@ -98,15 +129,13 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
             continue  # orphaned contact row with no linked company
 
         if zi_company_id not in seen_companies:
-            company_row = mapper.build_company_row(row, organisation_id)
-            seen_companies[zi_company_id] = company_row
-            zi_to_company_id[zi_company_id] = company_row["company_id"]
+            seen_companies[zi_company_id] = mapper.build_company_row(row, organisation_id, workspace_id)
 
         # Multiple uploaded files can legitimately contain the same contact -
         # a single bulk INSERT can't ON CONFLICT DO UPDATE the same
-        # (organisation_id, zi_person_id) row twice, so duplicates within this
+        # (workspace_id, zi_person_id) row twice, so duplicates within this
         # batch are collapsed here (last occurrence wins).
-        dm_row = mapper.build_decision_maker_row(row, organisation_id)
+        dm_row = mapper.build_decision_maker_row(row, organisation_id, workspace_id)
         zi_person_id = dm_row["zi_person_id"]
         if zi_person_id is not None:
             seen_dms[zi_person_id] = dm_row
@@ -118,15 +147,29 @@ async def upsert_rows(session: AsyncSession, organisation_id: UUID, raw_rows: li
         # which has no contacts by construction), so they are skipped here
         # rather than rejected upstream.
 
+    # Companies this workspace already holds keep their stored company_id, so
+    # the contacts below (and every existing buying_event / lead_score row)
+    # keep pointing at the same company instead of a freshly-derived id.
+    stored_ids = await _existing_company_ids(session, workspace_id, list(seen_companies))
+    if stored_ids:
+        derived_to_stored = {
+            mapper.company_uuid(workspace_id, zi): stored for zi, stored in stored_ids.items()
+        }
+        for zi, company_row in seen_companies.items():
+            if zi in stored_ids:
+                company_row["company_id"] = stored_ids[zi]
+        for dm_row in seen_dms.values():
+            dm_row["company_id"] = derived_to_stored.get(dm_row["company_id"], dm_row["company_id"])
+
     await _upsert_companies(session, list(seen_companies.values()))
     await _upsert_decision_makers(session, list(seen_dms.values()))
     await session.commit()
 
-    return zi_to_company_id
+    return {zi: company_row["company_id"] for zi, company_row in seen_companies.items()}
 
 
 async def run_pipeline(
-    session: AsyncSession, organisation_id: UUID, raw_rows: list[dict]
+    session: AsyncSession, organisation_id: UUID, workspace_id: UUID, raw_rows: list[dict]
 ) -> dict[int, UUID]:
     """The fast, synchronous half of a prospect upload: parse + upsert
     company/contact identity data only (brief section 4). No ICP, no signals,
@@ -134,7 +177,7 @@ async def run_pipeline(
     the slow parts and run afterward in the background task, so the upload
     endpoint returns immediately. Returns {zi_company_id: company_id}.
     """
-    return await upsert_rows(session, organisation_id, raw_rows)
+    return await upsert_rows(session, organisation_id, workspace_id, raw_rows)
 
 
 async def _company_ids_for_batch(session: AsyncSession, import_batch_id: UUID) -> list[UUID]:
@@ -257,6 +300,7 @@ async def score_companies_in_background(
             research_summary = await search_signal_ingest.research_companies(
                 session,
                 organisation_id,
+                workspace_id,
                 company_ids=company_id_list,
                 force_refresh=True,
                 import_batch_id=import_batch_id,
@@ -276,7 +320,7 @@ async def score_companies_in_background(
             # use a newly found revenue figure. Only NULL columns are written.
             firmographic_start = datetime.now(timezone.utc)
             firmographic_summary = await company_enrichment.enrich_missing_firmographics(
-                session, organisation_id, company_ids=company_id_list,
+                session, workspace_id, company_ids=company_id_list,
             )
             firmographic_elapsed = (datetime.now(timezone.utc) - firmographic_start).total_seconds()
             print(f"[UPLOAD] === FIRMOGRAPHICS STAGE COMPLETE in {firmographic_elapsed:.1f}s ===")
@@ -309,7 +353,7 @@ async def score_companies_in_background(
             print(f"[UPLOAD] Handing off to run_scoring() for {len(company_id_list)} companies...")
             scoring_start = datetime.now(timezone.utc)
             counts = await evidence_scorer.run_scoring(
-                session, organisation_id, company_ids=company_id_list, import_batch_id=import_batch_id,
+                session, workspace_id, company_ids=company_id_list, import_batch_id=import_batch_id,
             )
             scoring_elapsed = (datetime.now(timezone.utc) - scoring_start).total_seconds()
             print(f"\n[UPLOAD] === SCORING STAGE COMPLETE in {scoring_elapsed:.1f}s ===")
@@ -409,7 +453,7 @@ async def _refresh_batch_sales_status_counts(session: AsyncSession, import_batch
 
 
 async def retry_failed_companies_in_background(
-    organisation_id: UUID, import_batch_id: UUID, company_ids: list[UUID]
+    organisation_id: UUID, workspace_id: UUID, import_batch_id: UUID, company_ids: list[UUID]
 ) -> None:
     """POST .../retry-failed's background work: re-runs research+scoring for
     exactly the given (previously-failed, non-permanent) companies, then
@@ -424,12 +468,13 @@ async def retry_failed_companies_in_background(
             await search_signal_ingest.research_companies(
                 session,
                 organisation_id,
+                workspace_id,
                 company_ids=company_ids,
                 force_refresh=True,
                 import_batch_id=import_batch_id,
             )
             await evidence_scorer.run_scoring(
-                session, organisation_id, company_ids=company_ids, import_batch_id=import_batch_id,
+                session, workspace_id, company_ids=company_ids, import_batch_id=import_batch_id,
             )
             await _refresh_batch_sales_status_counts(session, import_batch_id)
             await session.commit()

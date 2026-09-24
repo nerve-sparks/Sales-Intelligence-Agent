@@ -7,6 +7,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  Upload,
   Users,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -125,7 +126,16 @@ function formatBatchLabel(batch: ImportBatchOut): string {
 
 /* Filters the list to one specific prospect upload (Company.import_batch_id).
  * Batches still mid-scoring show a "Scoring…" suffix so it's clear that
- * upload's numbers aren't final yet. */
+ * upload's numbers aren't final yet.
+ *
+ * Previously just an unlabeled select reading "Every Upload" sitting beside
+ * the search box, with no icon and nothing distinguishing it from a generic
+ * control - functionally correct (Settings' identical Upload History for the
+ * same workspace confirms the batches are really there) but easy to miss
+ * entirely, which is exactly what happened: someone with 3 real upload
+ * batches in Settings didn't realize the Enterprise List could be split by
+ * them. The icon + "Upload:" label make its purpose legible at a glance,
+ * matching the Search icon already sitting in the search box beside it. */
 function UploadFilterSelect({
   batches,
   selectedBatchId,
@@ -136,7 +146,9 @@ function UploadFilterSelect({
   onChange: (batchId: string) => void;
 }) {
   return (
-    <div className="relative flex h-[42px] items-center rounded-[10px] border border-[#e9edf5] bg-white px-[14px]">
+    <div className="relative flex h-[42px] items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px]">
+      <Upload className="pointer-events-none size-[15px] shrink-0 text-[#94a3b8]" />
+      <span className="pointer-events-none shrink-0 text-[13px] font-semibold text-[#64748b]">Upload:</span>
       <select
         className="h-full max-w-[220px] appearance-none bg-transparent pr-[24px] text-[14px] font-medium text-[#334155] outline-none"
         onChange={(e) => onChange(e.target.value)}
@@ -295,7 +307,7 @@ function EnterpriseTable({ enterprises }: { enterprises: Enterprise[] }) {
           <span className="flex items-center gap-[4px]">Lead Score <ChevronDown className="size-[13px]" /></span>
           <span>Sales Status</span>
           <span>Confidence</span>
-          <span>Best XSparks Offering</span>
+          <span>Best Offering</span>
           <span>Expected Deal</span>
         </div>
 
@@ -476,6 +488,8 @@ export function EnterpriseListPage() {
 
   const handleBatchChange = (batchId: string) => setSelectedBatchId(batchId);
 
+  const anyScoring = batches.some((b) => b.scoring_status === "pending");
+
   // Debounce the search box so a keystroke doesn't fire a request each time.
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput.trim()), 300);
@@ -497,18 +511,24 @@ export function EnterpriseListPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Org-wide totals for the stat cards - independent of filter/page/search.
+  // Org-wide totals for the stat cards. Refresh while scoring so Sales Ready /
+  // High Priority etc. move with the live Offering Profile re-score.
   useEffect(() => {
     const organisationId = getOrganisationId();
     if (!organisationId) {
       return;
     }
-    getCompanyStats(organisationId)
-      .then((data) => setStatCards(toStatCards(data)))
-      .catch(() => {
-        // No backend/org yet - keep the zero stat cards.
-      });
-  }, []);
+    const load = () =>
+      getCompanyStats(organisationId)
+        .then((data) => setStatCards(toStatCards(data)))
+        .catch(() => {
+          // No backend/org yet - keep the zero stat cards.
+        });
+    load();
+    if (!anyScoring) return;
+    const interval = setInterval(load, 5000);
+    return () => clearInterval(interval);
+  }, [anyScoring]);
 
   // Reset to page 1 whenever the filter or search changes.
   useEffect(() => {
@@ -517,24 +537,30 @@ export function EnterpriseListPage() {
 
   // Every scored company, paginated + searched server-side, ordered by lead
   // score. selectedBatchId narrows to one upload's companies. No ICP filter -
-  // every company appears (brief section 26).
+  // every company appears (brief section 26). Poll while a batch is scoring
+  // so ranks update as re-research against the current Offering Profile lands.
   useEffect(() => {
     const organisationId = getOrganisationId();
     if (!organisationId) {
       return;
     }
-    listCompanies(organisationId, {
-      page,
-      page_size: PAGE_SIZE,
-      search: search || undefined,
-      import_batch_id: selectedBatchId !== "all" ? selectedBatchId : undefined,
-    })
-      .then((res) => {
-        setTotal(res.total);
-        setEnterprises(res.items.map(toEnterprise));
+    const load = () =>
+      listCompanies(organisationId, {
+        page,
+        page_size: PAGE_SIZE,
+        search: search || undefined,
+        import_batch_id: selectedBatchId !== "all" ? selectedBatchId : undefined,
       })
-      .catch(() => setEnterprises([]));
-  }, [selectedBatchId, page, search]);
+        .then((res) => {
+          setTotal(res.total);
+          setEnterprises(res.items.map(toEnterprise));
+        })
+        .catch(() => setEnterprises([]));
+    load();
+    if (!anyScoring) return;
+    const interval = setInterval(load, 5000);
+    return () => clearInterval(interval);
+  }, [selectedBatchId, page, search, anyScoring]);
 
   // Exports the companies currently shown, with evidence-based score columns.
   const handleExport = async () => {

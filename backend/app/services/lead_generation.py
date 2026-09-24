@@ -382,11 +382,11 @@ async def verify_candidates(candidates: list[Candidate]) -> tuple[list[VerifiedL
 
 async def existing_company_names(
     session: AsyncSession,
-    organisation_id: UUID,
+    workspace_id: UUID,
     icp: IcpProfile,
     limit: int = EXCLUDE_NAME_LIMIT,
 ) -> list[str]:
-    """Names the organisation already holds, for the prompt's exclusion list.
+    """Names this WORKSPACE already holds, for the prompt's exclusion list.
 
     Without this the model is only told what it proposed earlier in the SAME
     run, so on every subsequent run it proposes the same well-known companies,
@@ -401,7 +401,7 @@ async def existing_company_names(
     the ones the model is likely to propose for this ICP.
     """
     stmt = select(Company.company_name).where(
-        Company.organisation_id == organisation_id,
+        Company.workspace_id == workspace_id,
         Company.company_name.isnot(None),
     )
 
@@ -419,9 +419,9 @@ async def existing_company_names(
 
 
 async def drop_existing_companies(
-    session: AsyncSession, organisation_id: UUID, leads: list[VerifiedLead]
+    session: AsyncSession, workspace_id: UUID, leads: list[VerifiedLead]
 ) -> tuple[list[VerifiedLead], int]:
-    """Removes leads whose domain the organisation already has.
+    """Removes leads whose domain this workspace already has.
 
     Deliberately runs on the RESOLVED domain, after verification - matching on
     the LLM's guessed domain would both miss real duplicates (wrong guess) and
@@ -435,7 +435,7 @@ async def drop_existing_companies(
         (
             await session.execute(
                 select(Company.company_domain).where(
-                    Company.organisation_id == organisation_id,
+                    Company.workspace_id == workspace_id,
                     Company.company_domain.in_(domains),
                 )
             )
@@ -454,6 +454,7 @@ async def drop_existing_companies(
 async def generate_leads(
     session: AsyncSession,
     organisation_id: UUID,
+    workspace_id: UUID,
     icp: IcpProfile,
     target: int,
 ) -> GenerationResult:
@@ -468,7 +469,9 @@ async def generate_leads(
     org = await session.get(Organisation, organisation_id)
     offering_profile = offering_profile_service.profile_for_scoring(org)
 
-    owned = await existing_company_names(session, organisation_id, icp)
+    # Dedup against THIS workspace's companies (the Offering Profile above is
+    # still organisation-level, which is why both ids are needed here).
+    owned = await existing_company_names(session, workspace_id, icp)
 
     candidates, warnings = await propose_candidates(
         icp,
@@ -484,7 +487,7 @@ async def generate_leads(
     verified, rejected = await verify_candidates(candidates)
     result.rejected_unresolvable = rejected
 
-    kept, duplicates = await drop_existing_companies(session, organisation_id, verified)
+    kept, duplicates = await drop_existing_companies(session, workspace_id, verified)
     result.rejected_duplicate = duplicates
 
     # Highest-confidence first, so trimming to the target keeps the best
@@ -505,7 +508,7 @@ async def generate_leads(
     return result
 
 
-def to_company_rows(leads: list[VerifiedLead], organisation_id: UUID) -> list[dict]:
+def to_company_rows(leads: list[VerifiedLead]) -> list[dict]:
     """Verified leads as `company` insert rows, in the canonical shape
     excel_pipeline already upserts.
 

@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Building2, ChevronDown, ChevronUp, Pencil, Trash2, X } from "lucide-react";
+import { Building2, ChevronDown, ChevronUp, Pencil, RadioTower, Trash2 } from "lucide-react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { OfferingProfileCard } from "../../components/OfferingProfileCard";
 import { cn } from "../../lib/cn";
-import { ApiError, BASE_URL } from "../../api/client";
+import { ApiError } from "../../api/client";
 import {
   cancelJob,
   deleteImportBatch,
@@ -20,7 +20,6 @@ import {
 } from "../../api/icp";
 import { exportCompanies } from "../../api/companies";
 import { uploadProspects } from "../../api/prospectImports";
-import { uploadLogo } from "../../api/uploads";
 import {
   createWorkspace,
   listWorkspaces,
@@ -28,7 +27,13 @@ import {
   type MemberOut,
   type WorkspaceOut,
 } from "../../api/workspaces";
-import { getOrganisation, updateOrganisation, type OrganisationOut } from "../../api/organisations";
+import {
+  getOrganisation,
+  prefillFromWebsite,
+  seedOfferingProfile,
+  updateOrganisation,
+  type OrganisationOut,
+} from "../../api/organisations";
 import { updateUser } from "../../api/users";
 import { getAuthUser } from "../../lib/authToken";
 import { useRefreshCurrentUser } from "../../lib/CurrentUserContext";
@@ -173,92 +178,12 @@ function ExcelUploadButton({
   );
 }
 
-const LOGO_ACCEPT = "image/png,image/jpeg,image/svg+xml";
-const MAX_LOGO_BYTES = 2 * 1024 * 1024;
-
-function OrgLogoUpload({ value, onChange }: { value: string; onChange: (url: string) => void }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleFile = async (file: File | undefined) => {
-    if (!file) return;
-    if (!["image/png", "image/jpeg", "image/svg+xml"].includes(file.type)) {
-      setError("Logo must be a PNG, JPG, or SVG image.");
-      return;
-    }
-    if (file.size > MAX_LOGO_BYTES) {
-      setError("Logo must be 2MB or smaller.");
-      return;
-    }
-    setError(null);
-    setUploading(true);
-    try {
-      const { url } = await uploadLogo(file);
-      onChange(url);
-    } catch (err) {
-      setError(err instanceof ApiError ? String(err.detail) : "Upload failed. Please try again.");
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  return (
-    <div className="flex flex-col gap-[8px]">
-      <FieldLabel>Company Logo</FieldLabel>
-      <input
-        accept={LOGO_ACCEPT}
-        className="hidden"
-        onChange={(e) => {
-          void handleFile(e.target.files?.[0]);
-          e.target.value = "";
-        }}
-        ref={inputRef}
-        type="file"
-      />
-      <div className="relative flex h-[42px] w-fit items-center gap-[10px] rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc] px-[10px]">
-        {value ? (
-          <img alt="Company logo" className="size-[26px] rounded-full object-cover" src={`${BASE_URL}${value}`} />
-        ) : (
-          <span className="flex size-[26px] items-center justify-center rounded-full bg-white">
-            <img alt="" className="size-[13px]" src={icons.upload} />
-          </span>
-        )}
-        <button
-          className="font-['Inter'] text-[12px] font-bold text-[#005bff] disabled:opacity-60"
-          disabled={uploading}
-          onClick={() => inputRef.current?.click()}
-          type="button"
-        >
-          {uploading ? "Uploading..." : value ? "Change" : "Upload"}
-        </button>
-        {value && !uploading && (
-          <button
-            aria-label="Remove logo"
-            className="text-[#94a3b8] hover:text-[#dc2626]"
-            onClick={() => {
-              onChange("");
-              setError(null);
-            }}
-            type="button"
-          >
-            <X className="size-[13px]" strokeWidth={2.5} />
-          </button>
-        )}
-      </div>
-      {error && <p className="m-0 font-['Inter'] text-[11px] text-[#dc2626]">{error}</p>}
-    </div>
-  );
-}
-
 type OrgFormState = {
   company_name: string;
   website: string;
-  legal_business_name: string;
   industry: string;
   headquarters_location: string;
   company_description: string;
-  account_logo_url: string;
   designation: string;
 };
 
@@ -266,11 +191,9 @@ function orgFormFrom(org: OrganisationOut, me: MemberOut | null): OrgFormState {
   return {
     company_name: org.company_name ?? "",
     website: org.website ?? "",
-    legal_business_name: org.legal_business_name ?? "",
     industry: org.industry ?? "",
     headquarters_location: org.headquarters_location ?? "",
     company_description: org.company_description ?? "",
-    account_logo_url: org.account_logo_url ?? "",
     designation: me?.designation ?? "",
   };
 }
@@ -294,6 +217,8 @@ function OrganizationPanel({
   const [form, setForm] = useState<OrgFormState | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [researching, setResearching] = useState(false);
+  const [researchHint, setResearchHint] = useState<string | null>(null);
   const refreshCurrentUser = useRefreshCurrentUser();
 
   useEffect(() => {
@@ -331,11 +256,9 @@ function OrganizationPanel({
       const updated = await updateOrganisation(organisationId, {
         company_name: form.company_name,
         website: form.website || null,
-        legal_business_name: form.legal_business_name || null,
         industry: form.industry || null,
         headquarters_location: form.headquarters_location || null,
         company_description: form.company_description || null,
-        account_logo_url: form.account_logo_url || null,
       });
       setOrg(updated);
       if (me && form.designation !== (me.designation ?? "")) {
@@ -355,10 +278,103 @@ function OrganizationPanel({
     setSaving(false);
   };
 
+  // Same "Research" affordance as onboarding: you.com + LLM prefills company
+  // details and the offering profile from the typed website. Persists org
+  // fields immediately so view mode and edit mode both reflect the result,
+  // then seeds the offering profile and notifies OfferingProfileCard.
+  const researchWebsite = (form?.website ?? org.website ?? "").trim();
+  const canResearch = researchWebsite.length >= 4 && researchWebsite.includes(".");
+
+  const handleResearch = async () => {
+    if (!canResearch) return;
+    setResearching(true);
+    setResearchHint(null);
+    setError(null);
+    try {
+      const result = await prefillFromWebsite(researchWebsite);
+      if (result.status !== "ok") {
+        setResearchHint(
+          result.status === "not_configured"
+            ? "Website research is unavailable (you.com or LLM not configured)."
+            : result.status === "invalid_url"
+              ? "Enter a valid website URL first."
+              : "Could not find enough public information for that URL yet.",
+        );
+        setResearching(false);
+        return;
+      }
+
+      const researched = result.organisation ?? {};
+      const pick = (key: string, fallback: string) => {
+        const value = researched[key];
+        return typeof value === "string" && value.trim() ? value.trim() : fallback;
+      };
+
+      const nextFields = {
+        company_name: pick("company_name", form?.company_name || org.company_name || ""),
+        website: result.website || researchWebsite,
+        industry: pick("industry", form?.industry || org.industry || ""),
+        headquarters_location: pick(
+          "headquarters_location",
+          form?.headquarters_location || org.headquarters_location || "",
+        ),
+        company_description: pick(
+          "company_description",
+          form?.company_description || org.company_description || "",
+        ),
+      };
+
+      if (!nextFields.company_name.trim()) {
+        setResearchHint("Research returned no company name — fill Company Name and try again.");
+        setResearching(false);
+        return;
+      }
+
+      const updated = await updateOrganisation(organisationId, {
+        company_name: nextFields.company_name,
+        website: nextFields.website || null,
+        industry: nextFields.industry || null,
+        headquarters_location: nextFields.headquarters_location || null,
+        company_description: nextFields.company_description || null,
+      });
+      setOrg(updated);
+      if (editing) {
+        setForm((prev) =>
+          prev
+            ? {
+                ...prev,
+                company_name: updated.company_name ?? nextFields.company_name,
+                website: updated.website ?? nextFields.website,
+                industry: updated.industry ?? nextFields.industry,
+                headquarters_location: updated.headquarters_location ?? nextFields.headquarters_location,
+                company_description: updated.company_description ?? nextFields.company_description,
+              }
+            : prev,
+        );
+      }
+
+      if (result.offering_profile && (result.website || researchWebsite)) {
+        await seedOfferingProfile(organisationId, {
+          profile: result.offering_profile,
+          source_url: result.website || researchWebsite,
+        });
+        window.dispatchEvent(new Event("offering-profile-synced"));
+      }
+
+      setResearchHint("Company details and Offering Profile updated from your website.");
+    } catch (err) {
+      setResearchHint(
+        err instanceof ApiError ? String(err.detail) : "Could not research this website right now.",
+      );
+    }
+    setResearching(false);
+  };
+
+  // Company Name and Website are rendered separately (above/below) - Company
+  // Name so it stays first alongside Website's Research button, Website so
+  // the Research button can sit next to it (matching onboarding's
+  // Organization Setup step).
   const rows: [string, string][] = [
-    ["Company Name", org.company_name || "—"],
-    ["Website", org.website || "—"],
-    ["Legal Business Name", org.legal_business_name || "—"],
     ["Industry", org.industry || "—"],
     ["Headquarters Location", org.headquarters_location || "—"],
     ["Your Designation", me?.designation || "—"],
@@ -392,6 +408,37 @@ function OrganizationPanel({
 
       {!editing ? (
         <div className="mt-[14px] grid grid-cols-1 gap-[10px] sm:grid-cols-2 xl:grid-cols-3">
+          <div key="Company Name">
+            <p className="m-0 font-['Inter'] text-[11px] font-semibold uppercase tracking-[0.4px] text-[#94a3b8]">
+              Company Name
+            </p>
+            <p className="m-0 mt-[2px] truncate font-['Inter'] text-[13px] font-medium text-[#0f172a]">
+              {org.company_name || "—"}
+            </p>
+          </div>
+          <div key="Website">
+            <p className="m-0 font-['Inter'] text-[11px] font-semibold uppercase tracking-[0.4px] text-[#94a3b8]">
+              Website
+            </p>
+            <div className="mt-[2px] flex items-center gap-[8px]">
+              <p className="m-0 truncate font-['Inter'] text-[13px] font-medium text-[#0f172a]">{org.website || "—"}</p>
+              {canResearch && (
+                <button
+                  className="flex h-[24px] shrink-0 items-center gap-[5px] rounded-[6px] bg-[#0f1f6f] px-[9px] font-['Inter'] text-[11px] font-bold text-white disabled:opacity-50"
+                  disabled={researching}
+                  onClick={handleResearch}
+                  title="Research this website to fill company details and the Offering Profile"
+                  type="button"
+                >
+                  <RadioTower className="size-[11px]" />
+                  {researching ? "Researching…" : "Research"}
+                </button>
+              )}
+            </div>
+            {researchHint && (
+              <p className="m-0 mt-[4px] font-['Inter'] text-[11px] font-medium text-[#64748b]">{researchHint}</p>
+            )}
+          </div>
           {rows.map(([label, value]) => (
             <div key={label}>
               <p className="m-0 font-['Inter'] text-[11px] font-semibold uppercase tracking-[0.4px] text-[#94a3b8]">
@@ -421,18 +468,32 @@ function OrganizationPanel({
                 onChange={(v) => handleFieldChange("company_name", v)}
                 value={form.company_name}
               />
-              <TextField
-                icon={icons.globe}
-                label="Website"
-                onChange={(v) => handleFieldChange("website", v)}
-                value={form.website}
-              />
-              <TextField
-                icon={icons.workspace}
-                label="Legal Business Name"
-                onChange={(v) => handleFieldChange("legal_business_name", v)}
-                value={form.legal_business_name}
-              />
+              <div className="flex flex-col gap-[8px]">
+                <FieldLabel>Website</FieldLabel>
+                <div className="flex items-center gap-[8px]">
+                  <div className="relative flex h-[42px] min-w-0 flex-1 items-center rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc]">
+                    <img alt="" className="pointer-events-none absolute left-[12px] size-[20px]" src={icons.globe} />
+                    <input
+                      className="h-full w-full rounded-[8px] bg-transparent pl-[41px] pr-[17px] font-['Inter'] text-[14px] leading-[20px] text-[#0f172a] outline-none placeholder:text-[#94a3b8]"
+                      onChange={(e) => handleFieldChange("website", e.target.value)}
+                      type="text"
+                      value={form.website}
+                    />
+                  </div>
+                  <button
+                    className="flex h-[42px] shrink-0 items-center gap-[6px] rounded-[8px] bg-[#0f1f6f] px-[14px] font-['Inter'] text-[13px] font-semibold text-white disabled:opacity-50"
+                    disabled={!canResearch || researching}
+                    onClick={handleResearch}
+                    type="button"
+                  >
+                    <RadioTower aria-hidden="true" className="size-[15px]" />
+                    {researching ? "Researching…" : "Research"}
+                  </button>
+                </div>
+                {researchHint && (
+                  <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#64748b]">{researchHint}</p>
+                )}
+              </div>
               <TextField
                 icon={icons.workspace}
                 label="Industry"
@@ -453,7 +514,6 @@ function OrganizationPanel({
                 placeholder="e.g. VP of Sales"
                 value={form.designation}
               />
-              <OrgLogoUpload onChange={(v) => handleFieldChange("account_logo_url", v)} value={form.account_logo_url} />
             </div>
             <div className="flex flex-col gap-[8px]">
               <FieldLabel>Company Description</FieldLabel>
@@ -1034,7 +1094,7 @@ export function SettingsIcpDataPage() {
               Offering &amp; Prospect Data
             </h1>
             <p className="m-0 mt-[4px] font-['Inter'] text-[14px] text-[#64748b]">
-              Review the XSparks Offering Profile, upload prospect data, and see every past upload. Research and
+              Review your Offering Profile, upload prospect data, and see every past upload. Research and
               scoring run automatically - no ICP required.
             </p>
           </div>

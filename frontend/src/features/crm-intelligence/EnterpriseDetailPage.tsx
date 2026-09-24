@@ -353,7 +353,7 @@ function LeadScoreSummary({ score, companyId }: { score: LeadScoreOut | NotScore
       </div>
       {score.best_offering && (
         <div className="mt-[14px]">
-          <p className="m-0 text-[12px] text-[#94a3b8]">Best XSparks offering</p>
+          <p className="m-0 text-[12px] text-[#94a3b8]">Best offering</p>
           <p className="m-0 mt-[3px] text-[13px] font-semibold text-[#334155]">{score.best_offering}</p>
         </div>
       )}
@@ -432,8 +432,8 @@ function BuyingCommittee({ company, companyId }: { company: CompanyOut | null; c
 /* ------------------------------------------------------------------ */
 
 const categoryTone: Record<string, string> = {
-  ai_seriousness: "purple",
-  ai_pain_points: "orange",
+  buyer_seriousness: "purple",
+  buyer_pain_points: "orange",
   buying_stage: "blue",
   budget_and_capital: "green",
   urgency_and_catalysts: "orange",
@@ -455,7 +455,13 @@ function CompanySignals({ signals }: { signals: SignalOut[] }) {
       ) : (
         <div className="flex flex-col divide-y divide-[#f1f5f9]">
           {sorted.slice(0, 12).map((s) => (
-            <div className="flex items-center gap-[12px] py-[12px] first:pt-0" key={s.buying_event_id}>
+            <div
+              className="flex cursor-pointer items-center gap-[12px] rounded-[8px] px-[8px] py-[12px] transition first:pt-0 hover:bg-[#fafbff]"
+              key={s.buying_event_id}
+              onClick={() => {
+                window.location.href = `/signal-detail?id=${s.buying_event_id}`;
+              }}
+            >
               <span className="flex size-[34px] shrink-0 items-center justify-center rounded-[9px] bg-[#eef1ff] text-[#5b3df5]">
                 <Radio className="size-[16px]" />
               </span>

@@ -19,17 +19,30 @@ import { useCurrentUser } from "../../lib/CurrentUserContext";
  * site reads that value fresh on mount rather than through any shared/
  * global state - see also the fuller create/switch UI on the Settings page
  * (SettingsIcpDataPage's WorkspacesPanel). */
+
+// Cached for the life of the page. Every page renders its own TopBar, so this
+// component remounts on EVERY client-side navigation - re-fetching each time
+// meant an extra API round trip per page change, and because the switcher
+// renders nothing until the list arrives, the whole header visibly reflowed
+// as it popped back in. The set of workspaces only changes on create/switch,
+// and switching reloads the page (see switchTo below), which clears this.
+let workspacesCache: WorkspaceOut[] | null = null;
+
 function WorkspaceSwitcher() {
-  const [workspaces, setWorkspaces] = useState<WorkspaceOut[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceOut[]>(() => workspacesCache ?? []);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const currentWorkspaceId = getWorkspaceId();
 
   useEffect(() => {
+    if (workspacesCache) return;
     const organisationId = getOrganisationId();
     if (!organisationId) return;
     listWorkspaces(organisationId)
-      .then(setWorkspaces)
+      .then((list) => {
+        workspacesCache = list;
+        setWorkspaces(list);
+      })
       .catch(() => setWorkspaces([]));
   }, []);
 

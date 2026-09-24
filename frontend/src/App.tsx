@@ -1,7 +1,6 @@
 import type { ReactElement } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { CurrentUserProvider } from "./lib/CurrentUserContext";
-import { PageTransition } from "./components/layout/PageTransition";
 import { RequireAuth } from "./components/auth/RequireAuth";
 import { RequireOnboarding } from "./components/auth/RequireOnboarding";
 import { LoginPage } from "./features/auth/LoginPage";
@@ -57,11 +56,9 @@ export default function App() {
           {routes.map(({ path, element }) => (
             <Route
               element={
-                <PageTransition>
-                  <RequireAuth>
-                    {path === "/onboarding" ? element : <RequireOnboarding>{element}</RequireOnboarding>}
-                  </RequireAuth>
-                </PageTransition>
+                <RequireAuth>
+                  {path === "/onboarding" ? element : <RequireOnboarding>{element}</RequireOnboarding>}
+                </RequireAuth>
               }
               key={path}
               path={path}
@@ -71,7 +68,7 @@ export default function App() {
               (reads window.location.pathname to pick a mode) - the wildcard
               catches all three plus anything unrecognized, same as the old
               fallback. */}
-          <Route element={<PageTransition><LoginPage /></PageTransition>} path="*" />
+          <Route element={<LoginPage />} path="*" />
         </Routes>
       </CurrentUserProvider>
     </BrowserRouter>

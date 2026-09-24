@@ -154,13 +154,13 @@ async def test_no_candidates_needs_no_search(monkeypatch):
 
 
 async def test_leads_already_in_the_org_are_dropped(org_ctx, make_company):
-    organisation_id, _workspace_id = org_ctx
+    _organisation_id, workspace_id = org_ctx
     await make_company(company_name="Existing Co", company_domain="existing.com")
 
     async with async_session_maker() as session:
         kept, dropped = await lead_generation.drop_existing_companies(
             session,
-            organisation_id,
+            workspace_id,
             [
                 VerifiedLead(name="Existing Co", domain="existing.com", country=None, confidence=0.9),
                 VerifiedLead(name="Brand New Co", domain="brandnew.com", country=None, confidence=0.9),
@@ -197,11 +197,9 @@ def test_company_identity_is_derived_from_the_resolved_domain():
     if the LLM phrased its name differently."""
     first = lead_generation.to_company_rows(
         [VerifiedLead(name="Acme Corp", domain="acme.com", country="United States", confidence=0.9)],
-        uuid.uuid4(),
     )
     second = lead_generation.to_company_rows(
         [VerifiedLead(name="Acme Corporation", domain="acme.com", country=None, confidence=0.4)],
-        uuid.uuid4(),
     )
 
     assert first[0]["ZoomInfo Company ID"] == second[0]["ZoomInfo Company ID"]
@@ -213,7 +211,6 @@ def test_different_domains_get_different_identities():
             VerifiedLead(name="A", domain="a.com", country=None, confidence=0.9),
             VerifiedLead(name="B", domain="b.com", country=None, confidence=0.9),
         ],
-        uuid.uuid4(),
     )
 
     assert rows[0]["ZoomInfo Company ID"] != rows[1]["ZoomInfo Company ID"]
@@ -224,7 +221,6 @@ def test_generated_rows_carry_no_invented_firmographics():
     Anything the LLM offered would be fabrication, so none is carried."""
     rows = lead_generation.to_company_rows(
         [VerifiedLead(name="Acme", domain="acme.com", country="United States", confidence=0.9)],
-        uuid.uuid4(),
     )
 
     assert set(rows[0]) == {
@@ -248,9 +244,8 @@ def test_generated_rows_map_onto_real_company_columns():
     organisation_id = uuid.uuid4()
     row = lead_generation.to_company_rows(
         [VerifiedLead(name="Acme", domain="acme.com", country="United States", confidence=0.9)],
-        organisation_id,
     )[0]
-    built = build_company_row(row, organisation_id)
+    built = build_company_row(row, organisation_id, uuid.uuid4())
 
     assert built["company_name"] == "Acme"
     assert built["company_domain"] == "acme.com"
@@ -340,7 +335,7 @@ async def test_full_pass_verifies_deduplicates_and_caps_to_target(
 
     async with async_session_maker() as session:
         icp = await create_icp(session, workspace_id, {"name": "Any"})
-        result = await lead_generation.generate_leads(session, organisation_id, icp, target=1)
+        result = await lead_generation.generate_leads(session, organisation_id, workspace_id, icp, target=1)
 
     # Ghost Co unverifiable, Known Co already owned, and target=1 trims the rest.
     assert result.rejected_unresolvable == 1
@@ -366,7 +361,7 @@ async def test_target_is_capped_regardless_of_what_is_asked_for(org_ctx, monkeyp
 
     async with async_session_maker() as session:
         icp = await create_icp(session, workspace_id, {"name": "Any"})
-        await lead_generation.generate_leads(session, organisation_id, icp, target=10_000)
+        await lead_generation.generate_leads(session, organisation_id, workspace_id, icp, target=10_000)
 
     assert seen_targets == [lead_generation.MAX_TARGET]
 
@@ -625,7 +620,7 @@ async def test_a_row_with_a_company_but_no_contact_ingests_the_company(org_ctx):
     from app.models import DecisionMaker
     from app.services.excel_pipeline import upsert_rows
 
-    organisation_id, _workspace_id = org_ctx
+    organisation_id, workspace_id = org_ctx
     rows = [
         {
             "ZoomInfo Company ID": 987654321,
@@ -637,7 +632,7 @@ async def test_a_row_with_a_company_but_no_contact_ingests_the_company(org_ctx):
     ]
 
     async with async_session_maker() as session:
-        await upsert_rows(session, organisation_id, rows)
+        await upsert_rows(session, organisation_id, workspace_id, rows)
 
         companies = (
             await session.execute(select(Company).where(Company.organisation_id == organisation_id))
@@ -679,7 +674,7 @@ async def test_existing_companies_are_named_in_the_prompt(org_ctx, make_company,
 
     async with async_session_maker() as session:
         icp = await create_icp(session, workspace_id, {"name": "Any", "industries": ["Software"]})
-        await lead_generation.generate_leads(session, organisation_id, icp, 5)
+        await lead_generation.generate_leads(session, organisation_id, workspace_id, icp, 5)
 
     assert seen_excludes, "propose_candidates was never called"
     assert "Already Owned Ltd" in seen_excludes[0]
@@ -696,7 +691,7 @@ async def test_exclusion_list_prefers_companies_matching_the_icp_industry(org_ct
     async with async_session_maker() as session:
         icp = await create_icp(session, workspace_id, {"name": "SW", "industries": ["Software"]})
         names = await lead_generation.existing_company_names(
-            session, organisation_id, icp, limit=2
+            session, workspace_id, icp, limit=2
         )
 
     assert names[0] == "Zeta Software Co", (

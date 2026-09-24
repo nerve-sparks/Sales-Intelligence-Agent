@@ -280,7 +280,8 @@ async def test_company_without_a_domain_is_still_researched(org_ctx, make_compan
 
     async with async_session_maker() as session:
         await search_signal_ingest.research_companies(
-            session, organisation_id, company_ids=[company.company_id], import_batch_id=batch.import_batch_id,
+            session, organisation_id, workspace_id, company_ids=[company.company_id],
+            import_batch_id=batch.import_batch_id,
         )
         await session.commit()
 
@@ -333,7 +334,8 @@ async def test_scoring_exception_for_one_company_does_not_abort_chunk_mate(org_c
 
     async with async_session_maker() as session:
         await evidence_scorer.run_scoring(
-            session, organisation_id, company_ids=[good_co.company_id, bad_co.company_id], import_batch_id=batch.import_batch_id,
+            session, workspace_id, company_ids=[good_co.company_id, bad_co.company_id],
+            import_batch_id=batch.import_batch_id,
         )
         await session.commit()
 

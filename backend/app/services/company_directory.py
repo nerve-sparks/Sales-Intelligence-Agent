@@ -30,7 +30,7 @@ def _in_batch(import_batch_id: UUID):
 
 async def list_companies(
     session: AsyncSession,
-    organisation_id: UUID,
+    workspace_id: UUID,
     page: int,
     page_size: int,
     search: str | None = None,
@@ -39,7 +39,7 @@ async def list_companies(
     stmt = (
         select(Company, LeadScore)
         .outerjoin(LeadScore, LeadScore.company_id == Company.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
     )
     if search:
         stmt = stmt.where(Company.company_name.ilike(f"%{search}%"))
@@ -58,7 +58,7 @@ async def list_companies(
 
 
 async def intent_counts(
-    session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None
+    session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None
 ) -> dict[str, int]:
     tier = case(
         (LeadScore.lead_score >= HIGH_SCORE, "high"),
@@ -69,7 +69,7 @@ async def intent_counts(
         select(tier.label("tier"), func.count())
         .select_from(Company)
         .outerjoin(LeadScore, LeadScore.company_id == Company.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
         .group_by(tier)
     )
     if import_batch_id is not None:
@@ -81,14 +81,14 @@ async def intent_counts(
 
 
 async def sales_status_summary(
-    session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None
+    session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None
 ) -> dict:
     """Evidence-based rollup for the Dashboard/stats API (brief items 22, 29):
     total/scored/unscored, the five sales-status band counts, average lead
     score, high-confidence count, and provisional pipeline value (sum of
     expected deal values). No gates/intent tiers. Optionally batch-scoped via
     the membership table."""
-    scope = [Company.organisation_id == organisation_id]
+    scope = [Company.workspace_id == workspace_id]
     if import_batch_id is not None:
         scope.append(_in_batch(import_batch_id))
 
@@ -145,7 +145,7 @@ async def sales_status_summary(
 
 
 async def lead_score_by_country(
-    session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None,
+    session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None,
     sector: str | None = None,
 ) -> list[tuple[str, float | None, int, float | None]]:
     """Real average AND max LeadScore.lead_score per Company.country
@@ -163,7 +163,7 @@ async def lead_score_by_country(
         select(Company.country, func.avg(LeadScore.lead_score), func.count(), func.max(LeadScore.lead_score))
         .select_from(Company)
         .outerjoin(LeadScore, LeadScore.company_id == Company.company_id)
-        .where(Company.organisation_id == organisation_id, Company.country.isnot(None))
+        .where(Company.workspace_id == workspace_id, Company.country.isnot(None))
         .group_by(Company.country)
     )
     if import_batch_id is not None:
@@ -177,7 +177,7 @@ async def lead_score_by_country(
 
 
 async def list_companies_for_export(
-    session: AsyncSession, organisation_id: UUID, company_ids: set[UUID] | None = None
+    session: AsyncSession, workspace_id: UUID, company_ids: set[UUID] | None = None
 ):
     """Every matching company with its full LeadScore row (not just
     lead_score/gate_status like list_companies) - feeds the Enterprise
@@ -186,7 +186,7 @@ async def list_companies_for_export(
     stmt = (
         select(Company, LeadScore)
         .outerjoin(LeadScore, LeadScore.company_id == Company.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
     )
     if company_ids is not None:
         stmt = stmt.where(Company.company_id.in_(company_ids))
@@ -194,36 +194,36 @@ async def list_companies_for_export(
     return (await session.execute(stmt)).all()
 
 
-async def get_company(session: AsyncSession, organisation_id: UUID, company_id: UUID) -> Company | None:
+async def get_company(session: AsyncSession, workspace_id: UUID, company_id: UUID) -> Company | None:
     stmt = (
         select(Company)
         .options(selectinload(Company.decision_makers))
-        .where(Company.company_id == company_id, Company.organisation_id == organisation_id)
+        .where(Company.company_id == company_id, Company.workspace_id == workspace_id)
     )
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def list_decision_makers(
-    session: AsyncSession, organisation_id: UUID, company_id: UUID
+    session: AsyncSession, workspace_id: UUID, company_id: UUID
 ) -> list[DecisionMaker]:
     stmt = select(DecisionMaker).where(
-        DecisionMaker.company_id == company_id, DecisionMaker.organisation_id == organisation_id
+        DecisionMaker.company_id == company_id, DecisionMaker.workspace_id == workspace_id
     )
     return (await session.execute(stmt)).scalars().all()
 
 
 async def get_decision_maker(
-    session: AsyncSession, organisation_id: UUID, decision_maker_id: UUID
+    session: AsyncSession, workspace_id: UUID, decision_maker_id: UUID
 ) -> DecisionMaker | None:
     stmt = select(DecisionMaker).where(
         DecisionMaker.decision_maker_id == decision_maker_id,
-        DecisionMaker.organisation_id == organisation_id,
+        DecisionMaker.workspace_id == workspace_id,
     )
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def export_bundle(
-    session: AsyncSession, organisation_id: UUID, company_ids: set[UUID] | None = None
+    session: AsyncSession, workspace_id: UUID, company_ids: set[UUID] | None = None
 ) -> tuple[list, list, list]:
     """Everything the export workbook needs: (companies_with_scores, contacts,
     buying_events).
@@ -234,17 +234,17 @@ async def export_bundle(
     """
     from app.models import BuyingEvent  # local: avoids a circular import at module load
 
-    companies = await list_companies_for_export(session, organisation_id, company_ids)
+    companies = await list_companies_for_export(session, workspace_id, company_ids)
 
     contact_stmt = (
         select(DecisionMaker, Company.company_name)
         .join(Company, Company.company_id == DecisionMaker.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
     )
     event_stmt = (
         select(BuyingEvent, Company.company_name)
         .join(Company, Company.company_id == BuyingEvent.company_id)
-        .where(Company.organisation_id == organisation_id, BuyingEvent.is_stale.is_(False))
+        .where(Company.workspace_id == workspace_id, BuyingEvent.is_stale.is_(False))
     )
     if company_ids is not None:
         contact_stmt = contact_stmt.where(Company.company_id.in_(company_ids))
@@ -285,7 +285,7 @@ def _sector_condition(sector: str | None):
 
 
 async def sector_breakdown(
-    session: AsyncSession, organisation_id: UUID, import_batch_id: UUID | None = None
+    session: AsyncSession, workspace_id: UUID, import_batch_id: UUID | None = None
 ) -> list[dict]:
     """Company + Sales-Ready counts per industry SECTOR, ordered for display.
 
@@ -303,7 +303,7 @@ async def sector_breakdown(
         )
         .select_from(Company)
         .outerjoin(LeadScore, LeadScore.company_id == Company.company_id)
-        .where(Company.organisation_id == organisation_id)
+        .where(Company.workspace_id == workspace_id)
         .group_by(Company.primary_industry, Company.industries, LeadScore.sales_status)
     )
     if import_batch_id is not None:

@@ -64,6 +64,8 @@ async def gather_website_research_text(website: str) -> str:
             batch = await you_client.search_query(query, num=12)
         except Exception:
             continue
+        print(f"[YOU.COM] query={query!r} -> {len(batch)} result(s)")
+        print(json.dumps(batch, indent=2, default=str))
         for item in batch:
             link = str(item.get("link") or "")
             if link and link in seen_links:
@@ -74,6 +76,7 @@ async def gather_website_research_text(website: str) -> str:
         if len(merged) >= 24:
             break
     return _results_to_text(merged)
+
 
 
 def _parse_json_object(raw: str) -> dict | None:

@@ -23,6 +23,7 @@ XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.s
 
 async def list_companies(
     organisation_id: UUID,
+    workspace_id: UUID,
     page: int = 1,
     page_size: int = 25,
     search: str | None = None,
@@ -31,7 +32,7 @@ async def list_companies(
 ):
     page_size = min(page_size, 100)
     rows, total = await company_directory.list_companies(
-        db, organisation_id, page, page_size, search, import_batch_id
+        db, workspace_id, page, page_size, search, import_batch_id
     )
     def _num(v):
         return float(v) if v is not None else None
@@ -67,20 +68,21 @@ async def list_companies(
 
 async def stats(
     organisation_id: UUID,
+    workspace_id: UUID,
     import_batch_id: UUID | None = None,
     sector: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Evidence-based company stats (brief items 22, 4): sales-status bands +
     confidence + provisional pipeline value, optionally batch-scoped."""
-    summary = await company_directory.sales_status_summary(db, organisation_id, import_batch_id)
+    summary = await company_directory.sales_status_summary(db, workspace_id, import_batch_id)
     # by_country honours the sector filter (the globe re-colours); by_sector
     # deliberately does NOT, so the dropdown keeps showing every sector with its
     # true total rather than collapsing to the one already selected.
     country_rows = await company_directory.lead_score_by_country(
-        db, organisation_id, import_batch_id, sector=sector
+        db, workspace_id, import_batch_id, sector=sector
     )
-    sector_rows = await company_directory.sector_breakdown(db, organisation_id, import_batch_id)
+    sector_rows = await company_directory.sector_breakdown(db, workspace_id, import_batch_id)
     return CompanyStatsOut(
         total=summary["total"],
         scored=summary["scored"],
@@ -102,16 +104,16 @@ async def stats(
     )
 
 
-async def insight(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
+async def insight(organisation_id: UUID, workspace_id: UUID, db: AsyncSession = Depends(get_db)):
     """Dashboard briefing over the evidence-based pipeline (brief section 29).
     No gates, no ICP - framed around Buying Evidence + Contact Access -
     Negative Evidence, sales-status bands, and expected pipeline value."""
-    summary_data = await company_directory.sales_status_summary(db, organisation_id)
+    summary_data = await company_directory.sales_status_summary(db, workspace_id)
     total = summary_data["total_scored"]
     if total == 0:
         return CompanyInsightOut(summary="No scored companies yet - upload prospect data to begin research and scoring.")
 
-    rows, _ = await company_directory.list_companies(db, organisation_id, page=1, page_size=5)
+    rows, _ = await company_directory.list_companies(db, workspace_id, page=1, page_size=5)
     top_companies = [
         {
             "name": company.company_name,
@@ -179,7 +181,10 @@ async def insight(organisation_id: UUID, db: AsyncSession = Depends(get_db)):
     return CompanyInsightOut(summary=summary)
 
 
-async def export(organisation_id: UUID, import_batch_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
+async def export(
+    organisation_id: UUID, workspace_id: UUID, import_batch_id: UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     """Evidence-based company export (brief section 23). Optionally scoped to a
     single upload via import_batch_id; no ICP."""
     print(f"\n[EXPORT] >>> Download requested: organisation_id={organisation_id}, "
@@ -193,7 +198,7 @@ async def export(organisation_id: UUID, import_batch_id: UUID | None = None, db:
             (
                 await db.execute(
                     select(Company.company_id).where(
-                        Company.organisation_id == organisation_id,
+                        Company.workspace_id == workspace_id,
                         Company.company_id.in_(
                             select(CompanyImportBatch.company_id).where(
                                 CompanyImportBatch.import_batch_id == import_batch_id
@@ -205,7 +210,7 @@ async def export(organisation_id: UUID, import_batch_id: UUID | None = None, db:
         )
         print(f"[EXPORT]     scoped to {len(company_ids)} companies from this batch's membership table")
 
-    rows, contacts, events = await company_directory.export_bundle(db, organisation_id, company_ids)
+    rows, contacts, events = await company_directory.export_bundle(db, workspace_id, company_ids)
     print(f"[EXPORT]     pulled {len(rows)} company(ies), {len(contacts)} contact(s), "
           f"{len(events)} buying event(s) to write into the workbook")
     workbook_bytes = excel_pipeline.build_company_export_workbook(rows, contacts, events)
@@ -219,21 +224,25 @@ async def export(organisation_id: UUID, import_batch_id: UUID | None = None, db:
     )
 
 
-async def get_company(organisation_id: UUID, company_id: UUID, db: AsyncSession = Depends(get_db)):
-    company = await company_directory.get_company(db, organisation_id, company_id)
+async def get_company(
+    organisation_id: UUID, workspace_id: UUID, company_id: UUID, db: AsyncSession = Depends(get_db)
+):
+    company = await company_directory.get_company(db, workspace_id, company_id)
     if company is None:
         raise HTTPException(status_code=404, detail="company not found")
     return company
 
 
-async def list_decision_makers(organisation_id: UUID, company_id: UUID, db: AsyncSession = Depends(get_db)):
-    return await company_directory.list_decision_makers(db, organisation_id, company_id)
+async def list_decision_makers(
+    organisation_id: UUID, workspace_id: UUID, company_id: UUID, db: AsyncSession = Depends(get_db)
+):
+    return await company_directory.list_decision_makers(db, workspace_id, company_id)
 
 
 async def get_decision_maker(
-    organisation_id: UUID, decision_maker_id: UUID, db: AsyncSession = Depends(get_db)
+    organisation_id: UUID, workspace_id: UUID, decision_maker_id: UUID, db: AsyncSession = Depends(get_db)
 ):
-    dm = await company_directory.get_decision_maker(db, organisation_id, decision_maker_id)
+    dm = await company_directory.get_decision_maker(db, workspace_id, decision_maker_id)
     if dm is None:
         raise HTTPException(status_code=404, detail="decision maker not found")
     return dm

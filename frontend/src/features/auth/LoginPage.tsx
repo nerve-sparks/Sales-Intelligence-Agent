@@ -265,9 +265,11 @@ function getInitialMode(): AuthMode {
     return "mfa";
   }
 
-  if (window.location.pathname.includes("signup")) {
-    return "signup";
-  }
+  // Signup disabled - commented out (not deleted) so it's a one-line revert.
+  // Hitting /signup directly now just falls through to the login screen.
+  // if (window.location.pathname.includes("signup")) {
+  //   return "signup";
+  // }
 
   return "login";
 }
@@ -677,7 +679,10 @@ function LoginForm({
             </button>
           </form>
 
-          <div className="flex w-full flex-wrap items-center justify-center gap-x-[8px] gap-y-1 pt-[8px]">
+          {/* Signup disabled - commented out (not deleted) so it's a one-line
+              revert. This was the only UI entry point into signup mode
+              (getInitialMode's /signup URL detection above is the other one). */}
+          {/* <div className="flex w-full flex-wrap items-center justify-center gap-x-[8px] gap-y-1 pt-[8px]">
             <p className="m-0 text-center font-['IBM_Plex_Sans'] text-[16px] font-normal leading-[24px] text-[#64748b]">
               {isSignup ? "Already have an account?" : "New to xsparks.ai?"}
             </p>
@@ -688,7 +693,7 @@ function LoginForm({
             >
               {isSignup ? "Sign in" : "Create an Account"}
             </button>
-          </div>
+          </div> */}
       </>
     </div>
   );

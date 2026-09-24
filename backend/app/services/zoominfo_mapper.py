@@ -149,8 +149,17 @@ def parse_iso_date(value):
         return None
 
 
-def company_uuid(organisation_id, zi_company_id: int) -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_URL, f"zoominfo-company-{organisation_id}-{zi_company_id}")
+def company_uuid(workspace_id, zi_company_id: int) -> uuid.UUID:
+    """Deterministic company_id, keyed on the WORKSPACE (migration
+    a3f8d21c6b94). Keying it on the organisation meant two workspaces
+    uploading the same prospect derived the same primary key, so the second
+    upload collided instead of creating that workspace's own isolated row.
+
+    Rows created before that change carry an organisation-derived id;
+    excel_pipeline.upsert_rows reuses the STORED id whenever the workspace
+    already has that company, so this derivation only ever names new rows.
+    """
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"zoominfo-company-{workspace_id}-{zi_company_id}")
 
 
 def _stable_id(*parts: str) -> str:
@@ -161,7 +170,7 @@ def _stable_id(*parts: str) -> str:
 # ── ROW BUILDERS ──────────────────────────────────────────────────────────────
 
 COMPANY_COLUMNS = [
-    "zi_company_id", "company_id", "organisation_id", "company_name", "company_domain",
+    "zi_company_id", "company_id", "organisation_id", "workspace_id", "company_name", "company_domain",
     "company_type", "company_status", "is_verified",
     "employee_count", "employee_range", "revenue_usd", "revenue_range",
     "ownership_type", "founded_year", "description", "logo_url",
@@ -174,14 +183,14 @@ COMPANY_COLUMNS = [
 ]
 
 DECISION_MAKER_COLUMNS = [
-    "zi_person_id", "organisation_id", "company_id",
+    "zi_person_id", "organisation_id", "workspace_id", "company_id",
     "first_name", "last_name", "picture_url",
     "job_title", "department", "years_of_experience",
     "persona", "email", "phone", "mobile_phone", "linkedin_url",
 ]
 
 
-def build_company_row(row: dict, organisation_id) -> dict:
+def build_company_row(row: dict, organisation_id, workspace_id) -> dict:
     zi_company_id = parse_int(row["ZoomInfo Company ID"])
     country = (row.get("Company Country") or "").strip()
     ownership_type = OWNERSHIP_MAP.get((row.get("Ownership Type") or "").strip().lower())
@@ -204,8 +213,9 @@ def build_company_row(row: dict, organisation_id) -> dict:
 
     return {
         "zi_company_id": zi_company_id,
-        "company_id": company_uuid(organisation_id, zi_company_id),
+        "company_id": company_uuid(workspace_id, zi_company_id),
         "organisation_id": organisation_id,
+        "workspace_id": workspace_id,
         "company_name": row.get("Company Name") or None,
         "company_domain": normalize_domain(row.get("Website")),
         "company_type": None,
@@ -239,13 +249,14 @@ def build_company_row(row: dict, organisation_id) -> dict:
     }
 
 
-def build_decision_maker_row(row: dict, organisation_id) -> dict:
+def build_decision_maker_row(row: dict, organisation_id, workspace_id) -> dict:
     zi_company_id = parse_int(row["ZoomInfo Company ID"])
     job_title = row.get("Job Title") or None
     return {
         "zi_person_id": parse_int(row["ZoomInfo Contact ID"]),
         "organisation_id": organisation_id,
-        "company_id": company_uuid(organisation_id, zi_company_id),
+        "workspace_id": workspace_id,
+        "company_id": company_uuid(workspace_id, zi_company_id),
         "first_name": row.get("First Name") or None,
         "last_name": row.get("Last Name") or None,
         "picture_url": None,

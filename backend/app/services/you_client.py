@@ -189,6 +189,7 @@ async def search(
     print(f"[YOU]     query: {query!r}")
     async with httpx.AsyncClient(timeout=45.0) as client:
         response = await client.get(SEARCH_URL, params={"query": query}, headers=_headers())
+        print(f"[YOU] <<< Response {response} for '{company_name}' ({domain or 'no domain'})")
     if response.status_code != 200:
         print(f"[YOU] <<< FAILED ({response.status_code}) for '{company_name}': {response.text[:200]}")
         raise YouError(f"you.com search failed ({response.status_code}): {response.text}")

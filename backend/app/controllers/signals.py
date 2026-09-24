@@ -67,6 +67,7 @@ def _with_company(event: BuyingEvent, company_name: str) -> SignalWithCompanyOut
 
 async def list_all(
     organisation_id: UUID,
+    workspace_id: UUID,
     page: int = 1,
     page_size: int = 25,
     category: str | None = None,
@@ -85,34 +86,39 @@ async def list_all(
     if sort not in buying_event_directory.SORT_KEYS:
         sort = "date"
     rows, total = await buying_event_directory.list_events(
-        db, organisation_id, page, page_size, category, import_batch_id,
+        db, workspace_id, page, page_size, category, import_batch_id,
         event_type=event_type, min_score=min_score, sector=sector, sort=sort, days=days,
     )
     items = [_with_company(event, company_name) for event, company_name in rows]
     return SignalListOut(items=items, total=total, page=page, page_size=page_size)
 
 
-async def get_by_id(organisation_id: UUID, signal_id: UUID, db: AsyncSession = Depends(get_db)):
-    row = await buying_event_directory.get_event(db, organisation_id, signal_id)
+async def get_by_id(
+    organisation_id: UUID, workspace_id: UUID, signal_id: UUID, db: AsyncSession = Depends(get_db)
+):
+    row = await buying_event_directory.get_event(db, workspace_id, signal_id)
     if row is None:
         raise HTTPException(status_code=404, detail="signal not found")
     event, company_name = row
     return _with_company(event, company_name)
 
 
-async def stats(organisation_id: UUID, import_batch_id: UUID | None = None, db: AsyncSession = Depends(get_db)):
-    counts = await buying_event_directory.relevance_counts(db, organisation_id, import_batch_id)
-    category_rows = await buying_event_directory.counts_by_category(db, organisation_id, import_batch_id)
+async def stats(
+    organisation_id: UUID, workspace_id: UUID, import_batch_id: UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    counts = await buying_event_directory.relevance_counts(db, workspace_id, import_batch_id)
+    category_rows = await buying_event_directory.counts_by_category(db, workspace_id, import_batch_id)
     trend_rows, trend_granularity = await buying_event_directory.trend_by_day(
-        db, organisation_id, import_batch_id
+        db, workspace_id, import_batch_id
     )
-    top_rows = await buying_event_directory.top_events(db, organisation_id, import_batch_id=import_batch_id)
-    totals = await buying_event_directory.org_totals(db, organisation_id, import_batch_id)
-    histogram_rows = await buying_event_directory.confidence_histogram(db, organisation_id, import_batch_id)
-    country_rows = await buying_event_directory.counts_by_country(db, organisation_id, import_batch_id=import_batch_id)
-    source_rows = await buying_event_directory.top_sources(db, organisation_id, import_batch_id=import_batch_id)
-    executives_impacted = await buying_event_directory.executives_impacted(db, organisation_id, import_batch_id)
-    actionable = await buying_event_directory.actionable_count(db, organisation_id, import_batch_id)
+    top_rows = await buying_event_directory.top_events(db, workspace_id, import_batch_id=import_batch_id)
+    totals = await buying_event_directory.org_totals(db, workspace_id, import_batch_id)
+    histogram_rows = await buying_event_directory.confidence_histogram(db, workspace_id, import_batch_id)
+    country_rows = await buying_event_directory.counts_by_country(db, workspace_id, import_batch_id=import_batch_id)
+    source_rows = await buying_event_directory.top_sources(db, workspace_id, import_batch_id=import_batch_id)
+    executives_impacted = await buying_event_directory.executives_impacted(db, workspace_id, import_batch_id)
+    actionable = await buying_event_directory.actionable_count(db, workspace_id, import_batch_id)
 
     return SignalStatsOut(
         total=counts["high"] + counts["medium"] + counts["low"],
@@ -144,6 +150,8 @@ async def stats(organisation_id: UUID, import_batch_id: UUID | None = None, db: 
     )
 
 
-async def get_signals(organisation_id: UUID, company_id: UUID, db: AsyncSession = Depends(get_db)):
-    events = await buying_event_directory.get_events_for_company(db, organisation_id, company_id)
+async def get_signals(
+    organisation_id: UUID, workspace_id: UUID, company_id: UUID, db: AsyncSession = Depends(get_db)
+):
+    events = await buying_event_directory.get_events_for_company(db, workspace_id, company_id)
     return [SignalOut(company_id=e.company_id, **_event_fields(e)) for e in events]

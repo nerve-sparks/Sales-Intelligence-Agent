@@ -69,7 +69,7 @@ async def _ingest_and_schedule(
         ingest_reports.append(report)
         raw_rows.extend(mapped_rows)
 
-    zi_to_company_id = await excel_pipeline.run_pipeline(db, workspace.organisation_id, raw_rows)
+    zi_to_company_id = await excel_pipeline.run_pipeline(db, workspace.organisation_id, workspace_id, raw_rows)
 
     batch = await excel_pipeline.record_import_batch(
         db,
@@ -167,6 +167,7 @@ async def retry_failed(
         background_tasks.add_task(
             excel_pipeline.retry_failed_companies_in_background,
             workspace.organisation_id,
+            workspace_id,
             import_batch_id,
             failed_ids,
         )

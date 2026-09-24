@@ -1,5 +1,5 @@
 /* Mirrors backend/app/routes/companies.py */
-import { apiGet, apiGetForBlob } from "./client";
+import { apiGet, apiGetForBlob, withWorkspace, workspaceQuery } from "./client";
 import type { CompanyOut, DecisionMakerOut } from "./icp";
 
 export type CompanyListItemOut = {
@@ -42,7 +42,7 @@ export function listCompanies(
   if (params.page_size) query.set("page_size", String(params.page_size));
   if (params.search) query.set("search", params.search);
   if (params.import_batch_id) query.set("import_batch_id", params.import_batch_id);
-  const qs = query.toString();
+  const qs = withWorkspace(query).toString();
   return apiGet<CompanyListOut>(`/organisations/${organisationId}/companies${qs ? `?${qs}` : ""}`);
 }
 
@@ -97,7 +97,7 @@ export function getCompanyStats(
    * by_sector, so the dropdown keeps listing every sector with its real total
    * instead of collapsing to whichever one is selected. */
   if (sector) params.set("sector", sector);
-  const qs = params.toString();
+  const qs = withWorkspace(params).toString();
   return apiGet<CompanyStatsOut>(
     `/organisations/${organisationId}/companies/stats${qs ? `?${qs}` : ""}`,
   );
@@ -112,26 +112,30 @@ export type CompanyInsightOut = {
  * sentence server-side if LLM_API_KEY isn't configured, so this never
  * throws just because the key is missing. */
 export function getCompanyInsight(organisationId: string): Promise<CompanyInsightOut> {
-  return apiGet<CompanyInsightOut>(`/organisations/${organisationId}/companies/insight`);
+  return apiGet<CompanyInsightOut>(`/organisations/${organisationId}/companies/insight${workspaceQuery()}`);
 }
 
 /* Company Directory + evidence-based score columns as an .xlsx download -
  * importBatchId narrows the export to one uploaded batch's companies, omit it
  * to export every company. */
 export async function exportCompanies(organisationId: string, importBatchId?: string): Promise<Blob> {
-  const qs = importBatchId ? `?import_batch_id=${importBatchId}` : "";
+  const qs = workspaceQuery({ import_batch_id: importBatchId });
   const { blob } = await apiGetForBlob(`/organisations/${organisationId}/companies/export${qs}`);
   return blob;
 }
 
 export function getCompany(organisationId: string, companyId: string): Promise<CompanyOut> {
-  return apiGet<CompanyOut>(`/organisations/${organisationId}/companies/${companyId}`);
+  return apiGet<CompanyOut>(`/organisations/${organisationId}/companies/${companyId}${workspaceQuery()}`);
 }
 
 export function listDecisionMakers(organisationId: string, companyId: string): Promise<DecisionMakerOut[]> {
-  return apiGet<DecisionMakerOut[]>(`/organisations/${organisationId}/companies/${companyId}/decision-makers`);
+  return apiGet<DecisionMakerOut[]>(
+    `/organisations/${organisationId}/companies/${companyId}/decision-makers${workspaceQuery()}`,
+  );
 }
 
 export function getDecisionMaker(organisationId: string, decisionMakerId: string): Promise<DecisionMakerOut> {
-  return apiGet<DecisionMakerOut>(`/organisations/${organisationId}/decision-makers/${decisionMakerId}`);
+  return apiGet<DecisionMakerOut>(
+    `/organisations/${organisationId}/decision-makers/${decisionMakerId}${workspaceQuery()}`,
+  );
 }

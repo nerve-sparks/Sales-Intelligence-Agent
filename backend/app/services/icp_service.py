@@ -77,7 +77,7 @@ async def list_distinct_departments(session: AsyncSession, workspace_id: UUID) -
     rather than showing invented options.
 
     Scoped through Workspace to the organisation because DecisionMaker is
-    organisation-scoped, not workspace-scoped.
+    workspace-scoped (migration a3f8d21c6b94).
     """
     workspace = await session.get(Workspace, workspace_id)
     if workspace is None:
@@ -86,7 +86,7 @@ async def list_distinct_departments(session: AsyncSession, workspace_id: UUID) -
     stmt = (
         select(DecisionMaker.department)
         .where(
-            DecisionMaker.organisation_id == workspace.organisation_id,
+            DecisionMaker.workspace_id == workspace_id,
             DecisionMaker.department.isnot(None),
             DecisionMaker.department != "",
         )

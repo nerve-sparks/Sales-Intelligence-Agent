@@ -34,15 +34,29 @@ class Company(Base):
             "ownership_type IN ('public', 'private', 'pe_backed')",
             name="company_ownership_type_check",
         ),
-        UniqueConstraint("organisation_id", "zi_company_id", name="company_org_zi_id_key"),
+        # Workspace-scoped, NOT organisation-scoped: the same prospect uploaded
+        # into two workspaces is two independent rows with their own research,
+        # signals and score. Scoping this to the organisation instead made every
+        # workspace share one company pool, so switching workspace changed the
+        # Upload History but left the Enterprise List identical and a brand-new
+        # workspace opened already full (migration a3f8d21c6b94).
+        UniqueConstraint("workspace_id", "zi_company_id", name="company_workspace_zi_id_key"),
         Index("idx_company_domain", "company_domain"),
         Index("idx_company_zi_id", "zi_company_id"),
         Index("idx_company_organisation_id", "organisation_id"),
+        Index("idx_company_workspace_id", "workspace_id"),
     )
 
-    # Tenancy
+    # Tenancy. workspace_id is the DATA scope (what you see in the Enterprise
+    # List); organisation_id is kept as the AUTHORISATION scope, since
+    # require_organisation_member checks membership at the org level and every
+    # workspace belongs to exactly one organisation - keeping it denormalised
+    # here avoids a workspace join on every permission check.
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("organisation.organisation_id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspace.workspace_id", ondelete="CASCADE"), nullable=False
     )
 
     # Which Excel upload most recently created/updated this company (see
