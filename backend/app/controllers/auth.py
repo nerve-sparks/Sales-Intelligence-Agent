@@ -44,4 +44,8 @@ async def me(
         has_account=True,
         organisation_id=user.organisation_id,
         workspace_id=membership.workspace_id if membership else None,
+        user_id=user.user_id,
+        email=user.email,
+        full_name=user.full_name,
+        designation=user.designation,
     )

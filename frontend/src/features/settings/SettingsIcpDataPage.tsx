@@ -23,8 +23,6 @@ import { uploadProspects } from "../../api/prospectImports";
 import {
   createWorkspace,
   listWorkspaces,
-  listWorkspaceMembers,
-  type MemberOut,
   type WorkspaceOut,
 } from "../../api/workspaces";
 import {
@@ -35,7 +33,7 @@ import {
   type OrganisationOut,
 } from "../../api/organisations";
 import { updateUser } from "../../api/users";
-import { getAuthUser } from "../../lib/authToken";
+import { getCurrentUser, type CurrentUserOut } from "../../api/auth";
 import { useRefreshCurrentUser } from "../../lib/CurrentUserContext";
 import { getOrganisationId, getWorkspaceId, setWorkspaceId } from "../../lib/session";
 import uploadIconAsset from "../../assets/figma/onboarding/icons/upload.svg";
@@ -187,7 +185,7 @@ type OrgFormState = {
   designation: string;
 };
 
-function orgFormFrom(org: OrganisationOut, me: MemberOut | null): OrgFormState {
+function orgFormFrom(org: OrganisationOut, me: CurrentUserOut | null): OrgFormState {
   return {
     company_name: org.company_name ?? "",
     website: org.website ?? "",
@@ -212,7 +210,7 @@ function OrganizationPanel({
   workspaceId: string | null;
 }) {
   const [org, setOrg] = useState<OrganisationOut | null>(null);
-  const [me, setMe] = useState<MemberOut | null>(null);
+  const [me, setMe] = useState<CurrentUserOut | null>(null);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<OrgFormState | null>(null);
   const [saving, setSaving] = useState(false);
@@ -226,13 +224,17 @@ function OrganizationPanel({
     getOrganisation(organisationId).then(setOrg).catch(() => setOrg(null));
   }, [organisationId]);
 
+  // GET /auth/me, not listWorkspaceMembers(workspaceId): the caller's own
+  // designation must never depend on which workspace happens to be active
+  // (see CurrentUserContext.tsx for the identical bug this mirrors - looking
+  // up "me" by email within one workspace's member list silently showed
+  // nothing, or someone else's data, whenever the workspace switcher landed
+  // on a workspace the caller isn't a member of).
   useEffect(() => {
-    if (!workspaceId) return;
-    const email = getAuthUser()?.email;
-    listWorkspaceMembers(workspaceId)
-      .then((members) => setMe(members.find((m) => m.email === email) ?? null))
+    getCurrentUser()
+      .then(setMe)
       .catch(() => setMe(null));
-  }, [workspaceId]);
+  }, []);
 
   if (!organisationId || !org) {
     return null;
@@ -261,14 +263,14 @@ function OrganizationPanel({
         company_description: form.company_description || null,
       });
       setOrg(updated);
-      if (me && form.designation !== (me.designation ?? "")) {
+      if (me?.user_id && form.designation !== (me.designation ?? "")) {
         const updatedUser = await updateUser(organisationId, me.user_id, {
           designation: form.designation || null,
         });
         setMe({ ...me, designation: updatedUser.designation });
         // TopBar's UserMenu reads the shared CurrentUserContext, which only
-        // re-fetches when the workspace changes - without this it would keep
-        // showing the old designation until a full page reload.
+        // re-fetches on auth-changed - without this it would keep showing the
+        // old designation until that fires or the page reloads.
         refreshCurrentUser();
       }
       setEditing(false);

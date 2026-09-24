@@ -5,6 +5,10 @@ export type CurrentUserOut = {
   has_account: boolean;
   organisation_id: string | null;
   workspace_id: string | null;
+  user_id: string | null;
+  email: string | null;
+  full_name: string | null;
+  designation: string | null;
 };
 
 /* Looks up whether the currently-authenticated Firebase account (the token
