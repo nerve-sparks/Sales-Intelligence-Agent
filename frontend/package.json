@@ -7,7 +7,8 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "deploy": "npm run build && pm2 startOrReload ecosystem.config.cjs && pm2 save"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.11",
