@@ -19,5 +19,6 @@ RUN mkdir -p /app/static
 
 EXPOSE 8175
 
-# Apply pending migrations, then start the API.
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8175"]
+# Migrations are applied by the `migrate` service in docker-compose.yml
+# before this container starts.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8175"]

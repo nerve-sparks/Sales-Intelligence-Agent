@@ -28,6 +28,25 @@ services:
       timeout: 5s
       retries: 10
 
+  # One-shot: applies pending Alembic migrations on every `docker compose up`,
+  # then exits. The backend only starts once this has succeeded.
+  migrate:
+    build:
+      context: ./backend
+    container_name: signal-migrate
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signal_user}:${POSTGRES_PASSWORD:-signal_password}@db:5432/${POSTGRES_DB:-signal}
+    volumes:
+      # Mounted so newly added migration files apply without an image rebuild.
+      - ./backend/alembic:/app/alembic
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
   backend:
     build:
       context: ./backend
@@ -44,6 +63,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   pgadmin:
     image: dpage/pgadmin4:latest
