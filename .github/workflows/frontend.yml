@@ -1,0 +1,79 @@
+# Frontend CI/CD
+#   CI (every push / PR touching the frontend): lint + typecheck/build.
+#   CD (push to main only, after CI passes): SSH to the server, pull, and
+#   `npm run deploy` (build + pm2 startOrReload + pm2 save).
+#
+# Required repo secrets: same as backend.yml
+#   SSH_HOST, SSH_USER, SSH_PRIVATE_KEY, (optional) SSH_PORT
+# Optional repo variable VITE_API_BASE_URL - used for the CI build only; the
+# server build reads frontend/.env on the server.
+name: Frontend
+
+on:
+  push:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # package-lock.json is gitignored, so `npm ci` isn't possible.
+      - name: Install dependencies
+        run: npm install
+
+      # Non-blocking until the existing unused-variable errors are cleaned up;
+      # remove continue-on-error to make lint a hard gate.
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Typecheck and build
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'http://localhost:8175' }}
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Shared with backend.yml so two deploys never `git pull` on the server at once.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            # Non-interactive SSH doesn't load nvm; make node/npm/pm2 available.
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            cd /root/Sales-Intelligence-Agent
+            git fetch origin main
+            git checkout main
+            git pull --ff-only origin main
+            cd frontend
+            npm install
+            npm run deploy
+            pm2 ls
