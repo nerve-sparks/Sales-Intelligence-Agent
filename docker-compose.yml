@@ -1,0 +1,68 @@
+# Starts the backend API, Postgres and pgAdmin together:
+#   docker compose up -d --build
+#
+# Backend secrets (LLM keys, auth, scraper, Langfuse, ...) are read from
+# backend/.env. DATABASE_URL from that file is overridden below so the API
+# talks to the `db` container instead of a host-installed Postgres.
+#
+# Optional overrides go in a root-level .env (read by Compose for the
+# ${VAR:-default} substitutions below), e.g. POSTGRES_PASSWORD=...
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: signal-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-signal_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-signal_password}
+      POSTGRES_DB: ${POSTGRES_DB:-signal}
+    ports:
+      # Host port 5433 by default so it doesn't clash with a native Postgres on 5432.
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    container_name: signal-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signal_user}:${POSTGRES_PASSWORD:-signal_password}@db:5432/${POSTGRES_DB:-signal}
+    ports:
+      - "${BACKEND_HOST_PORT:-8175}:8175"
+    volumes:
+      - backend_static:/app/static
+    depends_on:
+      db:
+        condition: service_healthy
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: signal-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "${PGADMIN_HOST_PORT:-5050}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
+  backend_static:
+  pgadmin_data:

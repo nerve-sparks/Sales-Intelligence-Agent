@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "SIGNAL (docker)",
+      "Group": "Servers",
+      "Host": "db",
+      "Port": 5432,
+      "MaintenanceDB": "postgres",
+      "Username": "signal_user",
+      "SSLMode": "prefer"
+    }
+  }
+}
