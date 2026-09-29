@@ -27,3 +27,27 @@ class CurrentUserOut(BaseModel):
     email: str | None = None
     full_name: str | None = None
     designation: str | None = None
+
+
+# Request bodies for the auth-gateway proxy (controllers/auth.py). Responses
+# are the gateway's own JSON, passed through unchanged.
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+class RegisterIn(BaseModel):
+    email: str
+    password: str
+    display_name: str
+
+
+class RefreshIn(BaseModel):
+    refresh_token: str
+
+
+class LogoutIn(BaseModel):
+    refresh_token: str
+    access_token: str | None = None

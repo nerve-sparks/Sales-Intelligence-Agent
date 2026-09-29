@@ -1,17 +1,20 @@
-/* Talks to the NervesParks auth-gateway for login / register / logout.
- * Our backend only verifies the resulting JWT — it never sees passwords.
+/* Login / register / refresh / logout. These go to OUR backend's /auth/*
+ * endpoints, which forward them to the NervesParks auth-gateway and return
+ * the gateway's response unchanged - the browser never calls the gateway
+ * directly. Tokens are still issued by the gateway.
  *
  * Login is email + password only (no tenant id). */
 import { clearAuthTokens, setAuthTokens } from "./authToken";
 
-const GATEWAY_BASE =
-  (import.meta.env.VITE_AUTH_GATEWAY_BASE_URL as string | undefined)?.replace(/\/$/, "") ??
-  "https://auth.nervesparks.com";
-const GATEWAY_PREFIX = (import.meta.env.VITE_AUTH_GATEWAY_PREFIX as string | undefined) ?? "/api/v1/auth";
+// Same source as api/client.ts's BASE_URL (not imported from there - client.ts
+// already imports this module).
+const API_BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8175").replace(
+  /\/$/,
+  "",
+);
 
 function gatewayUrl(path: string): string {
-  const prefix = GATEWAY_PREFIX.startsWith("/") ? GATEWAY_PREFIX : `/${GATEWAY_PREFIX}`;
-  return `${GATEWAY_BASE}${prefix}${path.startsWith("/") ? path : `/${path}`}`;
+  return `${API_BASE}/auth${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 function unwrapData(body: Record<string, unknown>): Record<string, unknown> {
@@ -77,13 +80,11 @@ export async function gatewayRegister(
   password: string,
   displayName: string,
 ): Promise<void> {
-  // Gateway register schema still asks for tenant_id; send a neutral default
-  // so signup works without any local tenant config. Login never needs this.
+  // The backend adds the gateway's required tenant_id (AUTH_TENANT_ID, or "default").
   const data = await gatewayPost("/register", {
     email,
     password,
     display_name: displayName,
-    tenant_id: "default",
   });
   const { access, refresh } = pickTokens(data);
   setAuthTokens(access, refresh);

@@ -1,11 +1,34 @@
 from fastapi import Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import VerifiedAuthUser, require_auth_user
 from app.core.db import get_db
 from app.models import User, WorkspaceMember
-from app.schemas.auth import CurrentUserOut
+from app.schemas.auth import CurrentUserOut, LoginIn, LogoutIn, RefreshIn, RegisterIn
+from app.services import auth_gateway
+
+
+async def _proxy(path: str, body: dict) -> JSONResponse:
+    status, payload = await auth_gateway.forward(path, body)
+    return JSONResponse(status_code=status, content=payload)
+
+
+async def login(body: LoginIn) -> JSONResponse:
+    return await _proxy("/login", body.model_dump())
+
+
+async def register(body: RegisterIn) -> JSONResponse:
+    return await _proxy("/register", {**body.model_dump(), "tenant_id": auth_gateway.default_tenant_id()})
+
+
+async def refresh(body: RefreshIn) -> JSONResponse:
+    return await _proxy("/refresh", body.model_dump())
+
+
+async def logout(body: LogoutIn) -> JSONResponse:
+    return await _proxy("/logout", body.model_dump(exclude_none=True))
 
 
 async def me(
