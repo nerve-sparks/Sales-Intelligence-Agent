@@ -272,6 +272,7 @@ def _build_prompt(company: dict, offering_profile: dict, items: list[dict], now:
         ", ".join(f'"{n}"' for n in offering_names[:12])
         if offering_names
         else "(none listed - leave best_offering null)"
+
     )
     example_offering = offering_names[0] if offering_names else None
     item_lines = "\n".join(
