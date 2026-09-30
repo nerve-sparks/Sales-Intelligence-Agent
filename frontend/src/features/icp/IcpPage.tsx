@@ -114,7 +114,6 @@ type IcpFormState = {
   countries: string[];
   technologies: string;
   buying_committee_personas: string[];
-  departments: string[];
 };
 
 const emptyForm: IcpFormState = {
@@ -127,7 +126,6 @@ const emptyForm: IcpFormState = {
   countries: [],
   technologies: "",
   buying_committee_personas: [],
-  departments: [],
 };
 
 function formFromIcp(icp: IcpOut): IcpFormState {
@@ -141,7 +139,6 @@ function formFromIcp(icp: IcpOut): IcpFormState {
     countries: icp.countries ?? [],
     technologies: (icp.technologies ?? []).join(", "),
     buying_committee_personas: icp.buying_committee_personas ?? [],
-    departments: icp.departments ?? [],
   };
 }
 
@@ -161,7 +158,9 @@ function payloadFromForm(form: IcpFormState): IcpCreate {
     countries: list(form.countries),
     technologies: csv(form.technologies),
     buying_committee_personas: list(form.buying_committee_personas),
-    departments: list(form.departments),
+    // Departments are no longer offered in the form; saving clears any old
+    // value so an invisible criterion can't linger on the ICP.
+    departments: null,
   };
 }
 
@@ -602,11 +601,6 @@ function IcpCard({
         : "Any",
       muted: !icp.buying_committee_personas?.length,
     },
-    {
-      label: "Departments",
-      value: icp.departments?.length ? icp.departments.join(", ") : "Any",
-      muted: !icp.departments?.length,
-    },
   ];
 
   return (
@@ -621,7 +615,9 @@ function IcpCard({
               {icp.name || "Untitled ICP"}
             </h3>
             <p className="m-0 font-['Inter'] text-[12px] text-[#94a3b8]">
-              Created {formatDate(icp.created_at)}
+              {icp.auto_generated
+                ? "Auto-generated from your company profile · edit to make it your own"
+                : `Created ${formatDate(icp.created_at)}`}
             </p>
           </div>
         </div>
@@ -755,15 +751,6 @@ function IcpForm({
           options={(options?.personas ?? []).map(prettyPersona)}
           placeholder="Any persona"
           values={form.buying_committee_personas.map(prettyPersona)}
-        />
-
-        <MultiSelectField
-          hint="Read from the department labels on your own uploaded contacts, so the options always match your data."
-          label="Departments"
-          onChange={(v) => onFieldChange("departments", v)}
-          options={options?.departments ?? []}
-          placeholder="Any department"
-          values={form.departments}
         />
 
         <div className="flex flex-col gap-[8px] md:col-span-2">

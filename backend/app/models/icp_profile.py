@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BIGINT, TIMESTAMP, CheckConstraint, ForeignKey, Index, Integer, Text, text
+from sqlalchemy import BIGINT, TIMESTAMP, Boolean, CheckConstraint, ForeignKey, Index, Integer, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -42,6 +42,11 @@ class IcpProfile(Base):
     # kept only for historical rows/FK integrity (icp_import_batch.icp_id);
     # the active pipeline never creates, reads, or scores against an ICP.
     fit_mode: Mapped[str] = mapped_column(Text, server_default="flexible", nullable=False)
+
+    # True for the Starter ICP the system creates for a new organisation
+    # (icp_service.create_starter_icp). While True it may be re-filled from
+    # the Offering Profile; any user edit (update_icp) clears it for good.
+    auto_generated: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
 
     created_at: Mapped[object | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")

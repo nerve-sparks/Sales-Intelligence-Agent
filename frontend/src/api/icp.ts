@@ -222,6 +222,8 @@ export type IcpOut = {
   technologies: string[] | null;
   buying_committee_personas: string[] | null;
   departments: string[] | null;
+  // The system-created Starter ICP, until the user edits it.
+  auto_generated: boolean;
   created_at: string | null;
   updated_at: string | null;
 };

@@ -108,6 +108,8 @@ class IcpOut(IcpBase):
 
     icp_id: UUID
     workspace_id: UUID
+    # The system-created Starter ICP, until the user edits it.
+    auto_generated: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

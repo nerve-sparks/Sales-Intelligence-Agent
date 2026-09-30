@@ -15,13 +15,8 @@ from app.core.auth import VerifiedAuthUser, require_workspace_member
 from app.core.db import async_session_maker
 from app.models import Organisation, WorkspaceMember
 from app.services import user_service, workspace_service
-from app.services.icp_service import (
-    STARTER_ICP_NAME,
-    _starter_countries,
-    _starter_industries,
-    create_icp,
-    list_icps,
-)
+from app.services.icp_service import create_icp, list_icps
+from app.services.starter_icp import _starter_countries, _starter_industries
 
 
 async def _make_owner(organisation_id, workspace_id) -> VerifiedAuthUser:
@@ -108,9 +103,12 @@ async def test_onboarding_first_workspace_gets_a_starter_icp_and_no_member_yet(o
         assert members == []
 
         [starter] = await list_icps(session, created.workspace_id)
-        assert starter.name == STARTER_ICP_NAME
+        assert starter.auto_generated is True
+        assert starter.name == "Software companies in United States"
         assert starter.industries == ["Software"]
         assert starter.countries == ["United States"]
+        assert starter.buying_committee_personas == ["ceo", "cto", "cio"]
+        assert starter.departments is None
 
 
 @pytest.mark.parametrize(

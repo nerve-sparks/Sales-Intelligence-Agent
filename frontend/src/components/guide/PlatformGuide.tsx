@@ -747,7 +747,7 @@ const TOPICS: GuideTopic[] = [
       {
         kind: "text",
         text:
-          "An ICP is a saved description of the kind of company worth selling to: industry, size, revenue, location, technologies, and the roles and departments you need to reach. Each one belongs to a workspace, so different teams can target different markets from the same book of companies.",
+          "An ICP is a saved description of the kind of company worth selling to: industry, size, revenue, location, technologies, and the roles you need to reach. Each one belongs to a workspace, so different teams can target different markets from the same book of companies.",
       },
       { kind: "sub", text: "What an ICP does and does not do" },
       {
@@ -761,7 +761,7 @@ const TOPICS: GuideTopic[] = [
         items: [
           "Every field is optional. A field left blank places no constraint - an ICP with only an industry set is perfectly valid.",
           "Industries and personas are picked from the values the platform actually recognises, so a criterion can never silently match nothing.",
-          "Departments are read from the contacts you have already uploaded, which is why the list is empty until your first upload.",
+          "Your first workspace starts with a Starter ICP built from your company profile and Offering Profile. It is marked auto-generated and keeps itself up to date when you sync your website, until you edit it - from then on it is yours and never changes on its own.",
         ],
       },
       { kind: "sub", text: "Finding companies from an ICP" },

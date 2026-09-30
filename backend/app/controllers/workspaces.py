@@ -14,7 +14,7 @@ from app.core.auth import (
 )
 from app.core.db import get_db
 from app.models import Organisation, User, Workspace
-from app.services.icp_service import create_starter_icp
+from app.services.starter_icp import create_starter_icp
 from app.services.workspace_service import add_member, create_workspace, list_members, list_workspaces
 from app.schemas.workspace import MemberOut
 
@@ -65,8 +65,10 @@ async def create(
     else:
         # (b) onboarding's first workspace: seed an editable Starter ICP from
         # the industry/headquarters just entered, so the ICP page isn't empty
-        # after setup. Additional workspaces (case a) deliberately start with
-        # none. Best-effort - a failure here must never block onboarding.
+        # after setup (no LLM here - it's re-filled with the LLM once the
+        # Offering Profile is saved). Additional workspaces (case a)
+        # deliberately start with none. Best-effort - a failure here must
+        # never block onboarding.
         org = await db.get(Organisation, organisation_id)
         if org is not None:
             try:

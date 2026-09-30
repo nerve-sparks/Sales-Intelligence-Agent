@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import Depends, HTTPException
+from fastapi import BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from app.schemas.organisation import OfferingProfileSeedIn, WebsitePrefillIn
 from app.services.offering_profile_service import seed_offering_profile, sync_offering_profile
 from app.services.organisation_service import create_organisation, get_organisation, update_organisation
 from app.services.organisation_website_intelligence import prefill_from_website
+from app.services.starter_icp import refresh_starter_icps_in_background
 
 
 class OrganisationCreate(BaseModel):
@@ -82,12 +83,16 @@ async def update(
 
 async def sync_offering_profile_endpoint(
     organisation_id: UUID,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     _member: object = Depends(require_organisation_member),
 ):
     """Re-fetch the tenant Offering Profile from their website (you.com + LLM),
     falling back cleanly if unavailable. Never 500s on failure."""
-    return await sync_offering_profile(db, organisation_id)
+    result = await sync_offering_profile(db, organisation_id)
+    # A (still-unedited) Starter ICP is re-filled from the new profile.
+    background_tasks.add_task(refresh_starter_icps_in_background, organisation_id)
+    return result
 
 
 async def prefill_from_website_endpoint(
@@ -102,8 +107,12 @@ async def prefill_from_website_endpoint(
 async def seed_offering_profile_endpoint(
     organisation_id: UUID,
     payload: OfferingProfileSeedIn,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     _member: object = Depends(require_organisation_member),
 ):
     del _member
-    return await seed_offering_profile(db, organisation_id, payload.profile, payload.source_url)
+    result = await seed_offering_profile(db, organisation_id, payload.profile, payload.source_url)
+    # A (still-unedited) Starter ICP is re-filled from the new profile.
+    background_tasks.add_task(refresh_starter_icps_in_background, organisation_id)
+    return result
