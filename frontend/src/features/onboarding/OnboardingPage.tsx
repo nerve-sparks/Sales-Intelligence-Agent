@@ -1482,13 +1482,10 @@ function OnboardingCard() {
         });
         setOrganisationId(org.organisation_id);
         setSessionOrganisationId(org.organisation_id);
-        if (pendingOffering) {
-          try {
-            await seedOfferingProfile(org.organisation_id, pendingOffering);
-          } catch {
-            /* offering step can sync manually */
-          }
-        }
+        // The researched Offering Profile is NOT saved here: seeding requires
+        // organisation membership, and this caller has no app_user row until
+        // the Workspace Setup step - so it always 403'd and the profile was
+        // silently lost. It's seeded right after createUser instead.
       } catch (err) {
         setSubmitError(
           err instanceof ApiError ? String(err.detail) : "Something went wrong. Please try again.",
@@ -1537,6 +1534,19 @@ function OnboardingCard() {
         // The TopBar's identity was resolved before this app_user row existed;
         // re-fetch /auth/me so it shows this name/designation straight away.
         refreshCurrentUser();
+        // Now that the caller is an organisation member, save the Offering
+        // Profile the website research produced on Organization Setup.
+        if (pendingOffering) {
+          try {
+            await seedOfferingProfile(organisationId, pendingOffering);
+            setPendingOffering(null);
+            // OfferingProfileCard (next step) is already mounted and loaded
+            // before this existed - tell it to re-read.
+            window.dispatchEvent(new Event("offering-profile-synced"));
+          } catch {
+            /* non-fatal: the Offering & Prospect Data step can re-sync it */
+          }
+        }
       } catch (err) {
         setSubmitError(
           err instanceof ApiError ? String(err.detail) : "Something went wrong. Please try again.",
