@@ -36,6 +36,7 @@ import { listImportBatches, type ImportBatchOut } from "../../api/icp";
 import { uploadProspects } from "../../api/prospectImports";
 import { OfferingProfileCard } from "../../components/OfferingProfileCard";
 import { useAuth } from "../../lib/useAuth";
+import { useRefreshCurrentUser } from "../../lib/CurrentUserContext";
 import { resolvePostLoginPath } from "../../lib/postLogin";
 import goLiveRocketImage from "../../assets/figma/onboarding/go-live-rocket.png";
 import heroImage from "../../assets/figma/onboarding/raw-image-1.png";
@@ -324,13 +325,18 @@ const setupSummaryItems = [
   "Go Live",
 ];
 
+/* Website research only fills in - it never overwrites a field the user typed
+ * themselves (`typedFields`). Fields that research filled earlier (not typed)
+ * can still be replaced by a later research run, e.g. after fixing the URL. */
 function applyOrganisationPrefill(
   current: OnboardingFormState,
   org: WebsitePrefillOut["organisation"],
+  typedFields: ReadonlySet<keyof OnboardingFormState>,
 ): OnboardingFormState {
   const next = { ...current };
   const assign = (key: keyof OnboardingFormState, value: unknown) => {
     if (typeof value !== "string" || !value.trim()) return;
+    if (typedFields.has(key) && String(current[key] ?? "").trim()) return;
     next[key] = value.trim() as OnboardingFormState[typeof key];
   };
   assign("company_name", org.company_name);
@@ -1294,6 +1300,7 @@ function OnboardingStepper({ activeStep }: { activeStep: number }) {
 
 function OnboardingCard() {
   const navigate = useNavigate();
+  const refreshCurrentUser = useRefreshCurrentUser();
   const { user: authUser } = useAuth();
   // Landing here can mean "genuinely new account" OR "RequireOnboarding
   // bounced a returning user here because this browser's cached session was
@@ -1322,6 +1329,8 @@ function OnboardingCard() {
   const [websiteLookupBusy, setWebsiteLookupBusy] = useState(false);
   const [websiteLookupHint, setWebsiteLookupHint] = useState<string | null>(null);
   const websitePrefillRequest = useRef(0);
+  // Fields the user has typed into - website research must not overwrite them.
+  const typedFields = useRef(new Set<keyof OnboardingFormState>());
 
   const handleWebsiteResearch = async () => {
     const raw = form.website.trim();
@@ -1336,14 +1345,14 @@ function OnboardingCard() {
       const result = await prefillFromWebsite(raw);
       if (requestId !== websitePrefillRequest.current) return;
       if (result.status === "ok") {
-        setForm((prev) => applyOrganisationPrefill(prev, result.organisation));
+        setForm((prev) => applyOrganisationPrefill(prev, result.organisation, typedFields.current));
         if (result.offering_profile && result.website) {
           setPendingOffering({ profile: result.offering_profile, source_url: result.website });
         }
         setWebsiteLookupHint(
-          result.offering_profile
+          (result.offering_profile
             ? "Company details and offering profile filled from your website."
-            : "Company details filled from your website.",
+            : "Company details filled from your website.") + " Fields you typed were kept.",
         );
       } else if (result.status === "not_configured") {
         setWebsiteLookupHint("Website research is unavailable (you.com or LLM not configured).");
@@ -1431,6 +1440,7 @@ function OnboardingCard() {
   }, [activeStep]);
 
   const handleFieldChange = <K extends keyof OnboardingFormState>(field: K, value: OnboardingFormState[K]) => {
+    typedFields.current.add(field);
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
@@ -1524,6 +1534,9 @@ function OnboardingCard() {
           user_id: user.user_id,
           role: "owner",
         });
+        // The TopBar's identity was resolved before this app_user row existed;
+        // re-fetch /auth/me so it shows this name/designation straight away.
+        refreshCurrentUser();
       } catch (err) {
         setSubmitError(
           err instanceof ApiError ? String(err.detail) : "Something went wrong. Please try again.",
@@ -1656,7 +1669,7 @@ function OnboardingCard() {
                 {submitting
                   ? "Saving..."
                   : isGoLiveStep
-                    ? "Start Using XSparks"
+                    ? "Continue Exploring"
                     : isAiBusinessStep
                       ? "Continue"
                       : isOfferingStep

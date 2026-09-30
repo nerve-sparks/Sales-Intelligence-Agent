@@ -11,12 +11,94 @@ would reintroduce the design the pipeline deliberately moved away from; see
 ICP_LEAD_GENERATION_INTENT.md and evidence_scorer.py.
 """
 
+import re
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import DecisionMaker, IcpProfile, Workspace
+from app.core.industry_sectors import SECTOR_INDUSTRIES
+from app.models import DecisionMaker, IcpProfile, Organisation, Workspace
+
+STARTER_ICP_NAME = "Starter ICP"
+
+# Same list as the ICP form's country picker (frontend IcpPage.tsx
+# COUNTRY_OPTIONS) - a starter country outside it couldn't be edited there.
+STARTER_COUNTRIES: tuple[str, ...] = (
+    "United States", "Canada", "United Kingdom", "Ireland", "Germany", "France",
+    "Belgium", "Denmark", "Sweden", "Finland", "Russia", "Israel", "India",
+    "Singapore", "Australia",
+)
+_COUNTRY_ALIASES: dict[str, tuple[str, ...]] = {
+    "usa": ("United States",),
+    "us": ("United States",),
+    "u.s.": ("United States",),
+    "u.s.a.": ("United States",),
+    "uk": ("United Kingdom",),
+    "england": ("United Kingdom",),
+    "north america": ("United States", "Canada"),
+}
+
+
+def _starter_industries(industry: str | None) -> list[str] | None:
+    """Map onboarding's free-text industry onto the ICP vocabulary
+    (industry_sectors). None = no industry criterion (any industry)."""
+    text = (industry or "").strip().lower()
+    if not text:
+        return None
+    for sector, industries in SECTOR_INDUSTRIES.items():
+        if text == sector.lower():
+            return list(industries)
+    all_industries = [i for industries in SECTOR_INDUSTRIES.values() for i in industries]
+    exact = [i for i in all_industries if i.lower() == text]
+    if exact:
+        return exact
+    # Whole-word containment either way ("SaaS Software" -> Software), never a
+    # substring - "IT" must not match "Hospitality".
+    if len(text) < 3:
+        return None
+
+    def contains_words(haystack: str, needle: str) -> bool:
+        return re.search(rf"(?<![a-z]){re.escape(needle)}(?![a-z])", haystack) is not None
+
+    partial = [
+        i for i in all_industries if contains_words(text, i.lower()) or contains_words(i.lower(), text)
+    ]
+    return partial or None
+
+
+def _starter_countries(headquarters: str | None) -> list[str] | None:
+    """Countries named in the headquarters location, e.g. "San Francisco,
+    California, USA" -> ["United States"]. None = any country."""
+    text = (headquarters or "").strip().lower()
+    if not text:
+        return None
+    found: list[str] = []
+
+    def add(countries) -> None:
+        found.extend(c for c in countries if c not in found)
+
+    for country in STARTER_COUNTRIES:
+        if re.search(rf"\b{re.escape(country.lower())}\b", text):
+            add([country])
+    for alias, countries in _COUNTRY_ALIASES.items():
+        if re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", text):
+            add(countries)
+    return found or None
+
+
+def starter_icp_values(org: Organisation) -> dict:
+    """A first, editable ICP built only from what onboarding collected -
+    industry and headquarters. Criteria it can't infer stay unset (= any)."""
+    return {
+        "name": STARTER_ICP_NAME,
+        "industries": _starter_industries(org.industry),
+        "countries": _starter_countries(org.headquarters_location),
+    }
+
+
+async def create_starter_icp(session: AsyncSession, workspace_id: UUID, org: Organisation) -> IcpProfile:
+    return await create_icp(session, workspace_id, starter_icp_values(org))
 
 
 async def create_icp(session: AsyncSession, workspace_id: UUID, values: dict) -> IcpProfile:

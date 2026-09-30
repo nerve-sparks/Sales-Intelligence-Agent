@@ -54,9 +54,9 @@ export function NotificationBell({ count = 12 }: { count?: number }) {
 }
 
 export function UserMenu({
-  initials = "AK",
-  name = "Arjun Kumar",
-  role = "Founder",
+  initials = "",
+  name = "",
+  role = "",
 }: {
   initials?: string;
   name?: string;

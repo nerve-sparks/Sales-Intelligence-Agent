@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi import Depends, HTTPException
@@ -12,9 +13,12 @@ from app.core.auth import (
     require_workspace_member,
 )
 from app.core.db import get_db
-from app.models import User, Workspace
+from app.models import Organisation, User, Workspace
+from app.services.icp_service import create_starter_icp
 from app.services.workspace_service import add_member, create_workspace, list_members, list_workspaces
 from app.schemas.workspace import MemberOut
+
+logger = logging.getLogger(__name__)
 
 
 class WorkspaceCreate(BaseModel):
@@ -51,7 +55,26 @@ async def create(
         ).scalar_one()
         if existing_users > 0:
             raise HTTPException(status_code=403, detail="This organisation already has an owner")
-    return await create_workspace(db, organisation_id, payload.model_dump())
+    workspace = await create_workspace(db, organisation_id, payload.model_dump())
+    # (a) above: make the creator a member of the workspace they just made.
+    # Without this every workspace-scoped route (ICP, imports, triggers)
+    # 403s for them the moment they switch to it. In case (b) onboarding
+    # adds the membership itself once createUser has run.
+    if user is not None:
+        await add_member(db, workspace.workspace_id, user.user_id, "owner")
+    else:
+        # (b) onboarding's first workspace: seed an editable Starter ICP from
+        # the industry/headquarters just entered, so the ICP page isn't empty
+        # after setup. Additional workspaces (case a) deliberately start with
+        # none. Best-effort - a failure here must never block onboarding.
+        org = await db.get(Organisation, organisation_id)
+        if org is not None:
+            try:
+                await create_starter_icp(db, workspace.workspace_id, org)
+            except Exception:
+                await db.rollback()
+                logger.exception("Could not create starter ICP for workspace %s", workspace.workspace_id)
+    return workspace
 
 
 async def list_all(

@@ -27,7 +27,7 @@ import { getRankedScores, type RankedLeadScoreOut } from "../../api/scores";
 import { getCompanyStats, type CompanyStatsOut, type SectorCountOut } from "../../api/companies";
 import { getSignalStats, listSignals, type SignalStatsOut, type SignalWithCompanyOut } from "../../api/signals";
 import { listImportBatches, type ImportBatchOut } from "../../api/icp";
-import { listWorkspaceMembers } from "../../api/workspaces";
+import { useCurrentUser } from "../../lib/CurrentUserContext";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
 
 /* Exact upload timestamp, not a relative/rounded one - the user explicitly
@@ -991,7 +991,12 @@ const emptySignalStats: SignalStatsOut = {
 export function DashboardPage() {
   const [prospects, setProspects] = useState<typeof dummyProspects>(dummyProspects);
   const [recentSignals, setRecentSignals] = useState<typeof dummyRecentSignals>(dummyRecentSignals);
-  const [firstName, setFirstName] = useState("Arjun");
+  // The signed-in user's OWN name (GET /auth/me via CurrentUserContext) -
+  // not the workspace owner's, which is someone else in a shared workspace.
+  // Omitted from the greeting while only the email fallback is known.
+  const currentUser = useCurrentUser();
+  const firstName =
+    currentUser && !currentUser.name.includes("@") ? currentUser.name.split(/\s+/)[0] : null;
   const [companyStats, setCompanyStats] = useState<CompanyStatsOut>(emptyCompanyStats);
   const [signalStats, setSignalStats] = useState<SignalStatsOut>(emptySignalStats);
   const [importBatches, setImportBatches] = useState<ImportBatchOut[]>([]);
@@ -1000,26 +1005,6 @@ export function DashboardPage() {
      refetches company stats so by_country - and therefore the map's
      colouring - narrows to that sector. */
   const [sector, setSector] = useState<string | null>(null);
-
-  // Same "workspace owner" lookup as TopBar's UserMenu (see OnboardingPage's
-  // Workspace Setup step: addWorkspaceMember(..., { role: "owner" })) - just
-  // the first name for the greeting instead of the full name + role.
-  useEffect(() => {
-    const workspaceId = getWorkspaceId();
-    if (!workspaceId) {
-      return;
-    }
-    listWorkspaceMembers(workspaceId)
-      .then((members) => {
-        const owner = members.find((m) => m.role === "owner") ?? members[0];
-        if (owner?.full_name) {
-          setFirstName(owner.full_name.split(/\s+/)[0]);
-        }
-      })
-      .catch(() => {
-        // No backend/workspace yet - keep the dummy name.
-      });
-  }, []);
 
   // Every upload ever made in this workspace, for the timeline picker -
   // fetched once (independent of which one is currently selected).
@@ -1086,7 +1071,7 @@ export function DashboardPage() {
           <div className="flex items-start justify-between gap-[16px]">
             <div>
               <h1 className="m-0 text-[26px] font-bold text-[#0f172a]">
-                Good morning, {firstName}!
+                Good morning{firstName ? `, ${firstName}` : ""}!
               </h1>
               <p className="m-0 mt-[6px] text-[15px] text-[#64748b]">
                 Here's what's happening across your pipeline today.

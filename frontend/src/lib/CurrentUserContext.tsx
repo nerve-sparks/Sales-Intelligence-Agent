@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { getCurrentUser } from "../api/auth";
+import { getAuthUser } from "./authToken";
 
 export type CurrentUser = {
   initials: string;
@@ -14,6 +15,19 @@ function initialsOf(name: string): string {
     .join("")
     .slice(0, 2)
     .toUpperCase();
+}
+
+/* Shown until /auth/me returns a name (e.g. mid-onboarding, before the
+ * app_user row exists, or when "Your Name" was left blank): the signed-in
+ * gateway account's own email - never a made-up person. */
+function fallbackUser(email: string | null | undefined, designation?: string | null): CurrentUser | null {
+  const address = email ?? getAuthUser()?.email ?? null;
+  if (!address) return null;
+  return {
+    initials: initialsOf(address.split("@")[0].replace(/[._-]+/g, " ")),
+    name: address,
+    role: designation?.trim() || "Member",
+  };
 }
 
 type CurrentUserContextValue = {
@@ -31,21 +45,25 @@ const CurrentUserContext = createContext<CurrentUserContextValue>({ user: null, 
  * owner, or its first member) in the TopBar - your own name and designation
  * must never depend on which workspace happens to be active. */
 export function CurrentUserProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<CurrentUser | null>(null);
+  const [user, setUser] = useState<CurrentUser | null>(() => fallbackUser(null));
 
   const loadUser = useCallback(() => {
     getCurrentUser()
       .then((current) => {
-        if (current.full_name) {
-          setUser({
-            initials: initialsOf(current.full_name),
-            name: current.full_name,
-            role: current.designation?.trim() || "Member",
-          });
-        }
+        const fullName = current.full_name?.trim();
+        setUser(
+          fullName
+            ? {
+                initials: initialsOf(fullName),
+                name: fullName,
+                role: current.designation?.trim() || "Member",
+              }
+            : fallbackUser(current.email, current.designation),
+        );
       })
       .catch(() => {
-        /* keep placeholders */
+        // Keep whatever is shown, but switch accounts correctly on sign-in/out.
+        setUser((prev) => prev ?? fallbackUser(null));
       });
   }, []);
 

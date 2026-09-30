@@ -123,8 +123,8 @@ export function TopBar({
   showWorkspaceSwitcher?: boolean;
 }) {
   // Resolved once, above the router (see lib/CurrentUserContext.tsx) - not
-  // re-fetched on every page navigation. UserMenu keeps its "Arjun Kumar" /
-  // "Founder" defaults until this resolves, or if there's no workspace yet.
+  // re-fetched on every page navigation. Until /auth/me returns a name it
+  // shows the signed-in account's email.
   const user = useCurrentUser();
 
   return (

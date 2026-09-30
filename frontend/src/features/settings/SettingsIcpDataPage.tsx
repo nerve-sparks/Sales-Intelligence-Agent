@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Building2, ChevronDown, ChevronUp, Pencil, RadioTower, Trash2 } from "lucide-react";
+import { Building2, ChevronDown, ChevronUp, Pencil, RadioTower, RefreshCw, Trash2 } from "lucide-react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { OfferingProfileCard } from "../../components/OfferingProfileCard";
@@ -280,10 +280,11 @@ function OrganizationPanel({
     setSaving(false);
   };
 
-  // Same "Research" affordance as onboarding: you.com + LLM prefills company
-  // details and the offering profile from the typed website. Persists org
-  // fields immediately so view mode and edit mode both reflect the result,
-  // then seeds the offering profile and notifies OfferingProfileCard.
+  // Same "Research" affordance as onboarding: you.com + LLM fills EMPTY
+  // company fields (never overwrites what the user entered) and refreshes the
+  // offering profile from the website. Persists org fields immediately so
+  // view mode and edit mode both reflect the result, then seeds the offering
+  // profile and notifies OfferingProfileCard.
   const researchWebsite = (form?.website ?? org.website ?? "").trim();
   const canResearch = researchWebsite.length >= 4 && researchWebsite.includes(".");
 
@@ -306,24 +307,22 @@ function OrganizationPanel({
         return;
       }
 
+      // What the user entered always wins: the value in the edit form (if
+      // editing) or the saved one. Research only fills fields that are empty.
       const researched = result.organisation ?? {};
-      const pick = (key: string, fallback: string) => {
+      const keepOrFill = (key: keyof OrgFormState & keyof OrganisationOut) => {
+        const current = ((editing ? form?.[key] : undefined) ?? org[key] ?? "").trim();
+        if (current) return current;
         const value = researched[key];
-        return typeof value === "string" && value.trim() ? value.trim() : fallback;
+        return typeof value === "string" ? value.trim() : "";
       };
 
       const nextFields = {
-        company_name: pick("company_name", form?.company_name || org.company_name || ""),
-        website: result.website || researchWebsite,
-        industry: pick("industry", form?.industry || org.industry || ""),
-        headquarters_location: pick(
-          "headquarters_location",
-          form?.headquarters_location || org.headquarters_location || "",
-        ),
-        company_description: pick(
-          "company_description",
-          form?.company_description || org.company_description || "",
-        ),
+        company_name: keepOrFill("company_name"),
+        website: keepOrFill("website") || result.website || researchWebsite,
+        industry: keepOrFill("industry"),
+        headquarters_location: keepOrFill("headquarters_location"),
+        company_description: keepOrFill("company_description"),
       };
 
       if (!nextFields.company_name.trim()) {
@@ -363,7 +362,7 @@ function OrganizationPanel({
         window.dispatchEvent(new Event("offering-profile-synced"));
       }
 
-      setResearchHint("Company details and Offering Profile updated from your website.");
+      setResearchHint("Offering Profile updated from your website. Empty company fields were filled; your entries were kept.");
     } catch (err) {
       setResearchHint(
         err instanceof ApiError ? String(err.detail) : "Could not research this website right now.",
@@ -419,24 +418,26 @@ function OrganizationPanel({
             </p>
           </div>
           <div key="Website">
-            <p className="m-0 font-['Inter'] text-[11px] font-semibold uppercase tracking-[0.4px] text-[#94a3b8]">
-              Website
-            </p>
-            <div className="mt-[2px] flex items-center gap-[8px]">
-              <p className="m-0 truncate font-['Inter'] text-[13px] font-medium text-[#0f172a]">{org.website || "—"}</p>
+            <div className="flex items-center gap-[6px]">
+              <p className="m-0 font-['Inter'] text-[11px] font-semibold uppercase tracking-[0.4px] text-[#94a3b8]">
+                Website
+              </p>
               {canResearch && (
                 <button
-                  className="flex h-[24px] shrink-0 items-center gap-[5px] rounded-[6px] bg-[#0f1f6f] px-[9px] font-['Inter'] text-[11px] font-bold text-white disabled:opacity-50"
+                  aria-label={researching ? "Syncing from website" : "Sync from website"}
+                  className="flex size-[20px] items-center justify-center rounded-[5px] text-[#4f46e5] hover:bg-[#eef1ff] disabled:opacity-50"
                   disabled={researching}
                   onClick={handleResearch}
-                  title="Research this website to fill company details and the Offering Profile"
+                  title="Sync from website: fills empty company fields and refreshes the Offering Profile"
                   type="button"
                 >
-                  <RadioTower className="size-[11px]" />
-                  {researching ? "Researching…" : "Research"}
+                  <RefreshCw className={cn("size-[13px]", researching && "animate-spin")} />
                 </button>
               )}
             </div>
+            <p className="m-0 mt-[2px] truncate font-['Inter'] text-[13px] font-medium text-[#0f172a]">
+              {org.website || "—"}
+            </p>
             {researchHint && (
               <p className="m-0 mt-[4px] font-['Inter'] text-[11px] font-medium text-[#64748b]">{researchHint}</p>
             )}
@@ -590,14 +591,17 @@ function WorkspacesPanel({ organisationId }: { organisationId: string | null }) 
     setCreating(true);
     setCreateError(null);
     try {
-      await createWorkspace(organisationId, {
+      const created = await createWorkspace(organisationId, {
         workspace_name: name.trim(),
         purpose: purpose.trim() || null,
       });
-      setName("");
-      setPurpose("");
-      setShowCreateForm(false);
-      refresh(organisationId);
+      // Switch to the new workspace straight away. Every page (ICP, imports,
+      // companies, triggers) reads the active workspace from session, so
+      // without this they kept showing the PREVIOUS workspace's data - which
+      // is why a new workspace looked like it reused the old ICP profiles.
+      setWorkspaceId(created.workspace_id);
+      window.location.reload();
+      return;
     } catch (err) {
       setCreateError(err instanceof ApiError ? String(err.detail) : "Could not create workspace.");
     }

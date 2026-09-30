@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Pencil, Plus, Sparkles, Target, Trash2, X } from "lucide-react";
+import { AlertCircle, ChevronDown, Pencil, Plus, RefreshCw, Sparkles, Target, Trash2, X } from "lucide-react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { InfoTooltip } from "../../components/ui/InfoTooltip";
@@ -805,6 +805,66 @@ function IcpForm({
   );
 }
 
+/* ── load errors ───────────────────────────────────────────────────────── */
+
+type ListLoadError = {
+  title: string;
+  detail: string;
+  action: "retry" | "settings" | "signin" | "onboarding";
+};
+
+const NO_WORKSPACE_ERROR: ListLoadError = {
+  title: "No workspace selected",
+  detail: "Finish onboarding to create your first workspace, then define its ICPs here.",
+  action: "onboarding",
+};
+
+function describeListError(err: unknown): ListLoadError {
+  if (err instanceof ApiError) {
+    if (err.status === 401) {
+      return {
+        title: "Your session has expired",
+        detail: "Sign in again to see this workspace's ICPs.",
+        action: "signin",
+      };
+    }
+    if (err.status === 403) {
+      return {
+        title: "You don't have access to this workspace",
+        detail:
+          "Your account isn't a member of the workspace that's currently selected, so its ICPs can't be shown or created. Switch to one of your workspaces in Settings, or ask its owner to add you.",
+        action: "settings",
+      };
+    }
+    if (err.status === 404) {
+      return {
+        title: "This workspace no longer exists",
+        detail: "It may have been deleted. Switch to another workspace in Settings.",
+        action: "settings",
+      };
+    }
+    if (err.status >= 500) {
+      return {
+        title: "The server couldn't load your ICPs",
+        detail: "Something went wrong on our side. Try again in a moment.",
+        action: "retry",
+      };
+    }
+  }
+  return {
+    title: "Couldn't reach the server",
+    detail: "Check your connection and try again.",
+    action: "retry",
+  };
+}
+
+const LIST_ERROR_ACTION: Record<ListLoadError["action"], { label: string; href?: string }> = {
+  retry: { label: "Try again" },
+  settings: { label: "Go to Settings", href: "/settings" },
+  signin: { label: "Sign in", href: "/" },
+  onboarding: { label: "Go to onboarding", href: "/onboarding" },
+};
+
 /* ── page ──────────────────────────────────────────────────────────────── */
 
 export function IcpPage() {
@@ -827,29 +887,42 @@ export function IcpPage() {
   // department list is derived from.
   const [generationTick, setGenerationTick] = useState(0);
 
+  // Why the ICP list itself couldn't be loaded - shown INSTEAD of the list /
+  // "No ICPs yet" state, since neither is true when the load failed.
+  const [listError, setListError] = useState<ListLoadError | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
+
   useEffect(() => {
     if (!workspaceId) {
       setLoading(false);
-      setLoadError("No workspace selected. Finish onboarding first.");
+      setListError(NO_WORKSPACE_ERROR);
       return;
     }
     let cancelled = false;
-    Promise.all([listIcps(workspaceId), getIcpOptions(workspaceId)])
-      .then(([icpRows, optionRows]) => {
-        if (cancelled) return;
-        setIcps(icpRows);
-        setOptions(optionRows);
+    setListError(null);
+    // Loaded independently: the picker options are optional (every picker has
+    // an empty-state), so an options failure must never block creating an ICP.
+    listIcps(workspaceId)
+      .then((icpRows) => {
+        if (!cancelled) setIcps(icpRows);
       })
-      .catch(() => {
-        if (!cancelled) setLoadError("Could not load ICPs for this workspace.");
+      .catch((err) => {
+        if (!cancelled) setListError(describeListError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
+    getIcpOptions(workspaceId)
+      .then((optionRows) => {
+        if (!cancelled) setOptions(optionRows);
+      })
+      .catch(() => {
+        /* pickers fall back to their empty-state text */
+      });
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, generationTick]);
+  }, [workspaceId, generationTick, reloadTick]);
 
   const handleFieldChange = <K extends keyof IcpFormState>(field: K, value: IcpFormState[K]) =>
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -943,7 +1016,7 @@ export function IcpPage() {
                   never changes how any company is scored.
                 </p>
               </div>
-              {!formOpen && (
+              {!formOpen && !listError && (
                 <button
                   className="flex h-[40px] shrink-0 items-center gap-[7px] rounded-[8px] bg-[#fa5a1e] px-[18px] font-['Inter'] text-[13px] font-bold text-white transition hover:bg-[#e14f18] disabled:opacity-50"
                   disabled={!workspaceId}
@@ -977,6 +1050,38 @@ export function IcpPage() {
 
             {loading ? (
               <p className="m-0 font-['Inter'] text-[14px] text-[#64748b]">Loading ICPs…</p>
+            ) : listError ? (
+              <div className="flex flex-col items-center rounded-[16px] border border-[#eef1f6] bg-white px-[24px] py-[52px] text-center shadow-[0px_1px_2px_rgba(15,23,42,0.04)]">
+                <span className="flex size-[46px] items-center justify-center rounded-[12px] bg-[#fff4ed]">
+                  <AlertCircle className="size-[22px] text-[#f97316]" strokeWidth={2} />
+                </span>
+                <h2 className="m-0 mt-[14px] font-['Inter'] text-[16px] font-bold text-[#0f172a]">
+                  {listError.title}
+                </h2>
+                <p className="m-0 mt-[5px] max-w-[460px] font-['Inter'] text-[13px] leading-[19px] text-[#64748b]">
+                  {listError.detail}
+                </p>
+                {LIST_ERROR_ACTION[listError.action].href ? (
+                  <a
+                    className="mt-[18px] flex h-[38px] items-center rounded-[8px] border border-[#e2e8f0] bg-white px-[18px] font-['Inter'] text-[13px] font-bold text-[#334155] transition hover:bg-[#f1f5f9]"
+                    href={LIST_ERROR_ACTION[listError.action].href}
+                  >
+                    {LIST_ERROR_ACTION[listError.action].label}
+                  </a>
+                ) : (
+                  <button
+                    className="mt-[18px] flex h-[38px] items-center gap-[7px] rounded-[8px] border border-[#e2e8f0] bg-white px-[18px] font-['Inter'] text-[13px] font-bold text-[#334155] transition hover:bg-[#f1f5f9]"
+                    onClick={() => {
+                      setLoading(true);
+                      setReloadTick((t) => t + 1);
+                    }}
+                    type="button"
+                  >
+                    <RefreshCw className="size-[14px]" />
+                    {LIST_ERROR_ACTION[listError.action].label}
+                  </button>
+                )}
+              </div>
             ) : icps.length === 0 ? (
               !formOpen && (
                 <div className="flex flex-col items-center rounded-[16px] border border-dashed border-[#d9e0ec] bg-white/60 px-[24px] py-[52px] text-center">
