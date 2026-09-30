@@ -35,6 +35,7 @@ from app.core.industry_sectors import SECTOR_INDUSTRIES
 from app.models import PERSONA_VALUES, IcpProfile, Organisation, Workspace
 from app.services import llm_client
 from app.services.icp_service import create_icp
+from app.services.offering_profile_service import normalize_profile
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,7 @@ def fallback_values(org: Organisation) -> dict:
     values = {
         "industries": _starter_industries(org.industry),
         "countries": _starter_countries(org.headquarters_location),
-        "technologies": _profile_technologies(org.offering_profile),
+        "technologies": _profile_technologies(normalize_profile(org.offering_profile or {})),
         "buying_committee_personas": list(DEFAULT_PERSONAS),
         "employee_min": None,
         "employee_max": None,
@@ -165,7 +166,7 @@ def fallback_values(org: Organisation) -> dict:
 
 
 def _llm_prompt(org: Organisation) -> str:
-    profile = org.offering_profile or {}
+    profile = normalize_profile(org.offering_profile or {})
     offerings = [
         {"name": o.get("name"), "problems_solved": o.get("problems_solved")}
         for o in (profile.get("offerings") or [])

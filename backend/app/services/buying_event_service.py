@@ -23,6 +23,7 @@ understands evidence; it never computes the final Lead Score.
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -32,6 +33,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import scoring_config as cfg
 from app.models import BuyingEvent
 from app.services import llm_client, you_client
+from app.services.offering_profile_service import normalize_profile
+
+logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 8
 MAX_CONCURRENCY = 6
@@ -163,7 +167,9 @@ def _offering_summary(offering_profile: dict) -> str:
     alternative-solution categories. Truncated so the prompt stays bounded.
     Never invents a product line - if the profile is empty, say so explicitly
     so the model cannot fall back to a hardcoded category list."""
-    p = offering_profile
+    # Normalised here too (not only at write/read time) so a malformed item -
+    # e.g. an object where a string was expected - can never crash research.
+    p = normalize_profile(offering_profile)
     lines = []
     seller = _seller_name(p)
     lines.append(f"Seller: {seller}")
@@ -414,9 +420,19 @@ async def _classify_chunk(
     company_name = company.get("company_name")
     print(f"[LLM] >>> Classifying {len(items)} evidence item(s) for '{company_name}' "
           f"(provider order: BridgeLLM -> DeepSeek -> Ollama)...")
+    # Built OUTSIDE the LLM try: a bug here used to be reported as "LLM
+    # unavailable" for every company (a malformed Offering Profile made the
+    # whole batch fail while the LLM itself was fine).
+    try:
+        prompt = _build_prompt(company, offering_profile, items, now)
+    except Exception as exc:
+        logger.exception("[LLM] prompt build failed for %r: %s", company_name, exc)
+        print(f"[LLM] <<< PROMPT BUILD FAILED for '{company_name}' (not an LLM outage): "
+              f"{type(exc).__name__}: {exc}")
+        return {}, False
     try:
         raw = await llm_client.complete(
-            [{"role": "user", "content": _build_prompt(company, offering_profile, items, now)}],
+            [{"role": "user", "content": prompt}],
             generation_name="extract-buying-events",
             temperature=0,
             # Langfuse session_id: every classification call made during ONE

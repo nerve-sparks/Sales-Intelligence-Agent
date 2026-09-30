@@ -124,12 +124,77 @@ def fallback_profile() -> dict:
     return profile
 
 
+_TEXT_KEYS = ("name", "title", "category", "label", "value", "description")
+_TEXT_LIST_FIELDS = ("problems_solved", "relevant_technologies", "accelerators")
+_OFFERING_TEXT_LIST_FIELDS = ("problems_solved", "technologies", "buying_signals")
+
+
+def _as_text(value) -> str:
+    """One list item as plain text. The LLM is shown `[]` for these lists and
+    sometimes fills them with objects ({"name": ..., "description": ...})
+    instead of strings - every consumer joins them as text."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, dict):
+        for key in _TEXT_KEYS:
+            if isinstance(value.get(key), str) and value[key].strip():
+                return value[key].strip()
+        return ", ".join(v.strip() for v in value.values() if isinstance(v, str) and v.strip())
+    return ""
+
+
+def _text_list(values) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [t for t in (_as_text(v) for v in values) if t]
+
+
+def normalize_profile(profile: dict) -> dict:
+    """Coerce an Offering Profile into the shape every consumer assumes:
+    string lists for problems/technologies/signals/accelerators, dict
+    offerings with a string name, and {category, inferred} alternatives.
+    Returns a new dict; unknown keys are kept as-is."""
+    p = dict(profile)
+    for field in _TEXT_LIST_FIELDS:
+        if field in p:
+            p[field] = _text_list(p.get(field))
+    offerings = []
+    for o in p.get("offerings") or []:
+        if isinstance(o, str):
+            o = {"name": o}
+        if not isinstance(o, dict):
+            continue
+        o = dict(o)
+        o["name"] = _as_text(o.get("name")) or _as_text(o)
+        for field in _OFFERING_TEXT_LIST_FIELDS:
+            if field in o:
+                o[field] = _text_list(o.get(field))
+        offerings.append(o)
+    if "offerings" in p:
+        p["offerings"] = offerings
+    if "alternative_solutions" in p:
+        alternatives = []
+        for a in p.get("alternative_solutions") or []:
+            if isinstance(a, dict):
+                category = _as_text(a.get("category")) or _as_text(a)
+                inferred = a.get("inferred", True)
+            else:
+                category, inferred = _as_text(a), True
+            if category:
+                alternatives.append({"category": category, "inferred": bool(inferred)})
+        p["alternative_solutions"] = alternatives
+    return p
+
+
 def profile_for_scoring(org: Organisation | None) -> dict:
     """The profile the scoring pipeline should use - the org's stored one if
     present, else the fallback. Guarantees relevance scoring always has a
-    profile, so a company is never left unscored for lack of one."""
+    profile, so a company is never left unscored for lack of one. Normalised
+    on read too, so profiles stored before normalize_profile existed work."""
     if org is not None and org.offering_profile:
-        return org.offering_profile
+        return normalize_profile(org.offering_profile)
     return fallback_profile()
 
 
@@ -257,6 +322,7 @@ async def sync_offering_profile(session: AsyncSession, organisation_id) -> dict:
     extracted = await _research_and_extract(source_url, company_name, organisation_id)
 
     if extracted is not None:
+        extracted = normalize_profile(extracted)
         extracted["source_url"] = source_url
         extracted["synced_at"] = now.isoformat()
         extracted["version"] = OFFERING_PROFILE_VERSION
@@ -287,7 +353,7 @@ async def seed_offering_profile(
 ) -> dict:
     """Apply a profile already extracted during onboarding (no second LLM call)."""
     now = datetime.now(timezone.utc)
-    seeded = json.loads(json.dumps(profile))
+    seeded = normalize_profile(json.loads(json.dumps(profile)))
     seeded["source_url"] = source_url
     seeded["synced_at"] = now.isoformat()
     seeded["version"] = OFFERING_PROFILE_VERSION
