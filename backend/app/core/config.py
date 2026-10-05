@@ -5,6 +5,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# The production frontend's domain. Overridable via CORS_ALLOW_ORIGINS.
+DEFAULT_CORS_ALLOW_ORIGINS = (
+    "https://intelligence-sales.nervesparks.com,http://intelligence-sales.nervesparks.com"
+)
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -47,6 +52,9 @@ class Settings:
     # for "waiting on a free DB connection" with no net throughput gain.
     db_pool_size: int
     db_max_overflow: int
+    # Exact browser origins allowed to call the API cross-origin (main.py's
+    # CORSMiddleware), on top of any localhost/127.0.0.1 port for local dev.
+    cors_allow_origins: list[str]
 
     @property
     def database_url_sync(self) -> str:
@@ -102,4 +110,10 @@ def get_settings() -> Settings:
         # normal request traffic, split across a base pool + overflow.
         db_pool_size=int(os.environ.get("DB_POOL_SIZE", str(max(research_concurrency, 5) + 5))),
         db_max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", str(max(research_concurrency, 5) + 5))),
+        # Comma-separated; scheme + host (+ port), no trailing slash or path.
+        cors_allow_origins=[
+            origin.strip().rstrip("/")
+            for origin in os.environ.get("CORS_ALLOW_ORIGINS", DEFAULT_CORS_ALLOW_ORIGINS).split(",")
+            if origin.strip()
+        ],
     )

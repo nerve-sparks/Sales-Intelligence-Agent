@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app.core.config import get_settings
 from app.core.logging_config import configure_logging
 from app.routes import (
     auth,
@@ -51,10 +52,13 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# Vite's dev server picks whatever port is free (5173, 5174, 5175, ...) - allow
-# any localhost/127.0.0.1 origin rather than hardcoding one port.
+# Allowed origins: the deployed frontend's domain(s) from CORS_ALLOW_ORIGINS
+# (default https://intelligence-sales.nervesparks.com, see config.py), plus any
+# localhost/127.0.0.1 port - Vite's dev server picks whatever port is free
+# (5173, 5174, 5175, ...), so that one stays a pattern rather than a list.
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=get_settings().cors_allow_origins,
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
