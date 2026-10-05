@@ -17,3 +17,4 @@ React, TypeScript, Vite, and Tailwind CSS frontend for the Agentic Sales Agent p
 - `src/assets` is reserved for exported Figma assets.
 
 The Figma node currently needs editor access for the connected MCP account before the login screen can be made pixel-exact.
+.
