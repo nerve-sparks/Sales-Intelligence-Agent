@@ -1662,13 +1662,15 @@ function OnboardingCard() {
           </div>
 
           <div className="flex items-center justify-end gap-[32px]">
-            <button
-              className="font-['Inter'] text-[14px] font-medium leading-[20px] text-[#64748b]"
-              onClick={handleSecondaryAction}
-              type="button"
-            >
-              {activeStep > 0 ? "Back" : "Skip for now"}
-            </button>
+            {activeStep > 0 && (
+              <button
+                className="font-['Inter'] text-[14px] font-medium leading-[20px] text-[#64748b]"
+                onClick={handleSecondaryAction}
+                type="button"
+              >
+                Back
+              </button>
+            )}
             <button
               className="flex h-[44px] items-center gap-[8px] rounded-[12px] bg-gradient-to-r from-[#f75317] via-[#7c3aed] via-[58.173%] to-[#0c20ff] to-[97.115%] px-[40px] py-[12px] shadow-[0px_10px_15px_-3px_#c7d2fe,0px_4px_6px_-4px_#c7d2fe] disabled:opacity-60"
               disabled={submitting}
