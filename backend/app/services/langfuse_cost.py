@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from typing import Any, Iterator
 
 import httpx
@@ -215,14 +215,23 @@ def trace_llm_generation(
         yield None
         return
 
-    try:
-        from langfuse import get_client
+    # Only SETUP is guarded by the except blocks below - each `yield` sits
+    # outside them. An exception raised by the caller's `with` body is thrown
+    # into this generator at the yield; if a broad except caught it there and
+    # fell through to another yield, contextlib would raise "generator didn't
+    # stop after throw()" and hide the caller's real error.
+    with ExitStack() as stack:
+        observation = None
+        try:
+            from langfuse import get_client
 
-        lf = get_client()
-        start = getattr(lf, "start_as_current_observation", None)
-        if start is None:
-            raise AttributeError("start_as_current_observation")
-        with start(as_type="generation", name=name, model=model, input=messages) as observation:
+            lf = get_client()
+            start = getattr(lf, "start_as_current_observation", None)
+            if start is None:
+                raise AttributeError("start_as_current_observation")
+            observation = stack.enter_context(
+                start(as_type="generation", name=name, model=model, input=messages)
+            )
             try:
                 from langfuse import propagate_attributes
 
@@ -234,16 +243,19 @@ def trace_llm_generation(
                 if tags:
                     attrs["tags"] = tags
                 if attrs:
-                    with propagate_attributes(**attrs):
-                        yield observation
-                else:
-                    yield observation
+                    stack.enter_context(propagate_attributes(**attrs))
             except ImportError:
-                yield observation
-        return
-    except Exception:
-        log.debug("Langfuse v4 generation API unavailable; trying v2", exc_info=True)
+                pass
+        except Exception:
+            log.debug("Langfuse v4 generation API unavailable; trying v2", exc_info=True)
+            stack.close()
+            observation = None
 
+        if observation is not None:
+            yield observation
+            return
+
+    observation = None
     try:
         from langfuse import Langfuse
 
@@ -258,17 +270,21 @@ def trace_llm_generation(
             trace_kwargs["tags"] = tags
         trace = lf.trace(**trace_kwargs)
         observation = trace.generation(name=name, model=model, input=messages)
-        try:
-            yield observation
-        finally:
-            try:
-                observation.end()
-            except Exception:
-                pass
-        return
     except Exception:
         log.warning("Langfuse tracing unavailable for this LLM call", exc_info=True)
+        observation = None
+
+    if observation is None:
         yield None
+        return
+
+    try:
+        yield observation
+    finally:
+        try:
+            observation.end()
+        except Exception:
+            pass
 
 
 def finish_llm_generation(
