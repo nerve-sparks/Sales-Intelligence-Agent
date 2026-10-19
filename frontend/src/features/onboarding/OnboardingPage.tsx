@@ -1588,17 +1588,17 @@ function OnboardingCard() {
                 ? "Organization Information"
                 : "Workspace Information"}
         </h2>
-        <p className="m-0 mt-[2px] font-['Inter'] text-[14px] font-normal leading-[21px] text-[#64748b]">
-          {isGoLiveStep
-            ? "Congratulations! Your XSparks AI platform is ready to drive outcomes."
-            : isAiBusinessStep
-            ? "We're analyzing your business to build a powerful foundation for personalized insights."
-            : isOfferingStep
-              ? "Review your offering profile, then upload prospect data."
-              : isOrganizationStep
-                ? "Enter your website, then click Research to prefill company details via you.com."
+        {!isOrganizationStep && (
+          <p className="m-0 mt-[2px] font-['Inter'] text-[14px] font-normal leading-[21px] text-[#64748b]">
+            {isGoLiveStep
+              ? "Congratulations! Your XSparks AI platform is ready to drive outcomes."
+              : isAiBusinessStep
+              ? "We're analyzing your business to build a powerful foundation for personalized insights."
+              : isOfferingStep
+                ? "Review your offering profile, then upload prospect data."
                 : "This will be your organization's dedicated workspace in XSparks."}
-        </p>
+          </p>
+        )}
       </div>
 
       <div className={formViewportClassName}>
