@@ -555,11 +555,6 @@ function OrganizationSetupForm({
         value={form.designation}
       />
 
-      {websiteLookupBusy && (
-        <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#2563eb] md:col-span-2">
-          Researching your website via you.com…
-        </p>
-      )}
       {!websiteLookupBusy && websiteLookupHint && (
         <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#64748b] md:col-span-2">{websiteLookupHint}</p>
       )}
