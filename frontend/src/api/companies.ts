@@ -1,6 +1,23 @@
 /* Mirrors backend/app/routes/companies.py */
-import { apiGet, apiGetForBlob, withWorkspace, workspaceQuery } from "./client";
+import { apiGet, apiGetForBlob, apiPost, withWorkspace, workspaceQuery } from "./client";
 import type { CompanyOut, DecisionMakerOut } from "./icp";
+
+/* How strongly research judged this company to sell what the seller sells.
+ * Mirrors the competitor_identified penalty scale in
+ * backend/app/core/scoring_config.py: direct -20, strong -15, partial -10,
+ * minor -5. The company stays in the list - it only loses those points. */
+export type CompetitorStrength = "direct" | "strong" | "partial" | "minor";
+
+export const COMPETITOR_PENALTY: Record<CompetitorStrength, number> = {
+  direct: 20,
+  strong: 15,
+  partial: 10,
+  minor: 5,
+};
+
+/* Per-company re-research + re-score ("Refresh selected"): queued -> running
+ * -> done | failed. null = never refreshed. */
+export type RefreshStatus = "queued" | "running" | "done" | "failed";
 
 export type CompanyListItemOut = {
   company_id: string;
@@ -24,6 +41,11 @@ export type CompanyListItemOut = {
   best_offering: string | null;
   why_now: string | null;
   expected_deal_value_usd: number | null;
+  competitor_strength: CompetitorStrength | null;
+  refresh_status: RefreshStatus | null;
+  refresh_requested_at: string | null;
+  /* Set while a recently refreshed company is in its 48h cooldown. */
+  refresh_available_at: string | null;
 };
 
 export type CompanyListOut = {
@@ -124,8 +146,43 @@ export async function exportCompanies(organisationId: string, importBatchId?: st
   return blob;
 }
 
-export function getCompany(organisationId: string, companyId: string): Promise<CompanyOut> {
-  return apiGet<CompanyOut>(`/organisations/${organisationId}/companies/${companyId}${workspaceQuery()}`);
+/* The detail endpoint returns CompanyOut plus the per-company refresh state. */
+export type CompanyDetailOut = CompanyOut & {
+  refresh_status: RefreshStatus | null;
+  refresh_requested_at: string | null;
+  /* Set while a recently refreshed company is in its 48h cooldown. */
+  refresh_available_at: string | null;
+  search_signals_fetched_at: string | null;
+};
+
+export function getCompany(organisationId: string, companyId: string): Promise<CompanyDetailOut> {
+  return apiGet<CompanyDetailOut>(`/organisations/${organisationId}/companies/${companyId}${workspaceQuery()}`);
+}
+
+/* Server-side cap on one refresh request - more is a 422. */
+export const MAX_REFRESH_SELECTION = 25;
+
+export type CompanyRefreshOut = {
+  accepted: string[];
+  /* Already refreshing, or not in this workspace. */
+  skipped: string[];
+  /* Refreshed successfully within the last cooldown_hours - not re-queued. */
+  cooling_down: { company_id: string; available_at: string }[];
+  cooldown_hours: number;
+};
+
+/* "in 31h" / "in 45m" until a cooled-down company can be refreshed again. */
+export function formatRefreshAvailable(availableAt: string): string {
+  const minutes = Math.max(1, Math.round((new Date(availableAt).getTime() - Date.now()) / 60000));
+  return minutes < 60 ? `in ${minutes}m` : `in ${Math.round(minutes / 60)}h`;
+}
+
+/* Re-research + re-score only these companies, in the background (202).
+ * Progress shows up as refresh_status on the list/detail endpoints. */
+export function refreshCompanies(organisationId: string, companyIds: string[]): Promise<CompanyRefreshOut> {
+  return apiPost<CompanyRefreshOut>(`/organisations/${organisationId}/companies/refresh${workspaceQuery()}`, {
+    company_ids: companyIds,
+  });
 }
 
 export function listDecisionMakers(organisationId: string, companyId: string): Promise<DecisionMakerOut[]> {

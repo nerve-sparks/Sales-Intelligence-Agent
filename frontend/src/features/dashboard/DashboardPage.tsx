@@ -29,6 +29,7 @@ import { getSignalStats, listSignals, type SignalStatsOut, type SignalWithCompan
 import { listImportBatches, type ImportBatchOut } from "../../api/icp";
 import { useCurrentUser } from "../../lib/CurrentUserContext";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
+import { LatestNewsCard } from "./LatestNewsCard";
 
 /* Exact upload timestamp, not a relative/rounded one - the user explicitly
  * wants to pick "the exact time" an Excel was uploaded, not a day bucket. */
@@ -1099,6 +1100,12 @@ export function DashboardPage() {
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
             <TopPriorityProspects prospects={prospects} />
             <RecentSignals signals={recentSignals} />
+          </div>
+
+          {/* Own full-width row - news items carry a headline, summary, why/pitch
+              lines and links, which need more width than a side column gives. */}
+          <div className="mt-[22px]">
+            <LatestNewsCard organisationId={getOrganisationId()} />
           </div>
 
         </main>

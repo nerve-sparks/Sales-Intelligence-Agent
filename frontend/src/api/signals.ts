@@ -48,6 +48,10 @@ export type SignalWithCompanyOut = SignalOut & {
   company_name: string;
 };
 
+/* Mirrors cfg.NEWS_GROUPS keys plus "all". competitor_at_prospect = the
+ * prospect chose another vendor (vendor_selected, a negative event). */
+export type SignalNewsGroup = "all" | "buying_signals" | "funding_budget" | "leadership" | "competitor_at_prospect";
+
 export type SignalListOut = {
   items: SignalWithCompanyOut[];
   total: number;
@@ -79,10 +83,18 @@ export function listSignals(
     event_type?: string;
     min_score?: number;
     sector?: string;
-    sort?: "date" | "oldest" | "score" | "company";
+    /* "discovered" = newest FOUND first (discovered_at). "newest" = newest
+     * NEWS first across all companies, by article date, else discovery date
+     * when undated - the dashboard's Latest News card. */
+    sort?: "date" | "oldest" | "score" | "company" | "discovered" | "newest";
     /* Period in days, filtered on the real event date - "last 30 days" means
      * the event happened then, not that we researched it then. */
     days?: number;
+    /* Dashboard Latest News tab -> event-type group (cfg.NEWS_GROUPS). */
+    group?: SignalNewsGroup;
+    /* Like days, but an undated event counts by its discovery date instead of
+     * being excluded - a news feed shouldn't hide fresh-but-undated finds. */
+    recent_days?: number;
   } = {},
 ): Promise<SignalListOut> {
   const query = new URLSearchParams();
@@ -95,6 +107,8 @@ export function listSignals(
   if (params.sector) query.set("sector", params.sector);
   if (params.sort) query.set("sort", params.sort);
   if (params.days !== undefined) query.set("days", String(params.days));
+  if (params.group) query.set("group", params.group);
+  if (params.recent_days !== undefined) query.set("recent_days", String(params.recent_days));
   const qs = withWorkspace(query).toString();
   return apiGet<SignalListOut>(`/organisations/${organisationId}/signals${qs ? `?${qs}` : ""}`);
 }

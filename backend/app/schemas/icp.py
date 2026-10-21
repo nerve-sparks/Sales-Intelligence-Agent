@@ -19,6 +19,17 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class UploadQuotaOut(BaseModel):
+    """Per-account Excel upload allowance (upload_quota)."""
+
+    message: str | None = None
+    limit: int
+    used: int
+    remaining: int
+    window_hours: int
+    next_available_at: datetime | None = None
+
+
 class ImportBatchOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

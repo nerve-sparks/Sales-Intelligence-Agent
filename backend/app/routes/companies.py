@@ -5,6 +5,7 @@ from app.controllers import companies as companies_controller
 from app.schemas.company import (
     CompanyInsightOut,
     CompanyListOut,
+    CompanyRefreshOut,
     CompanyStatsOut,
     CompanyWithDecisionMakersOut,
     DecisionMakerOut,
@@ -20,6 +21,7 @@ router.get("", response_model=CompanyListOut)(companies_controller.list_companie
 router.get("/stats", response_model=CompanyStatsOut)(companies_controller.stats)
 router.get("/insight", response_model=CompanyInsightOut)(companies_controller.insight)
 router.get("/export")(companies_controller.export)
+router.post("/refresh", status_code=202, response_model=CompanyRefreshOut)(companies_controller.refresh)
 router.get("/{company_id}", response_model=CompanyWithDecisionMakersOut)(companies_controller.get_company)
 router.get("/{company_id}/decision-makers", response_model=list[DecisionMakerOut])(
     companies_controller.list_decision_makers

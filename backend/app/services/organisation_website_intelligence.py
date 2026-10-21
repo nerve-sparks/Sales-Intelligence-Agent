@@ -12,6 +12,7 @@ import re
 from urllib.parse import urlparse
 
 from app.services import llm_client, you_client
+from app.services.competitor_matching import NAMED_COMPETITORS_RULE
 
 _URL_SCHEME = re.compile(r"^https?://", re.I)
 
@@ -140,6 +141,7 @@ async def prefill_from_website(website: str) -> dict:
                 "relevant_technologies": [],
                 "alternative_solutions": [{"category": "", "inferred": True}],
                 "accelerators": [],
+                "named_competitors": [{"name": "", "domain": ""}],
             },
         },
         indent=2,
@@ -151,7 +153,8 @@ async def prefill_from_website(website: str) -> dict:
         "- Leave fields empty or null when not supported by the snippets.\n"
         "- offering_profile describes what THIS company SELLS "
         "(products, services, problems solved, technologies) — not who they sell to.\n"
-        "- alternative_solutions are solution categories, not invented competitor names.\n\n"
+        "- alternative_solutions are solution categories, not invented competitor names.\n"
+        f"- {NAMED_COMPETITORS_RULE}\n\n"
         f"Respond with ONLY this JSON shape:\n{template}\n\n"
         f"Snippets:\n{snippets}"
     )

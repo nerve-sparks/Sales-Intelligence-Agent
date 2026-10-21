@@ -1,11 +1,14 @@
 import {
   BadgeCheck,
   ChevronRight,
+  ExternalLink,
   Facebook,
   Linkedin,
   Mail,
   Phone,
   Radio,
+  RefreshCw,
+  TriangleAlert,
   Twitter,
   Users,
 } from "lucide-react";
@@ -13,7 +16,14 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
 import { cn } from "../../lib/cn";
-import { getCompany } from "../../api/companies";
+import {
+  COMPETITOR_PENALTY,
+  formatRefreshAvailable,
+  getCompany,
+  refreshCompanies,
+  type CompanyDetailOut,
+} from "../../api/companies";
+import { ApiError } from "../../api/client";
 import { getScore, type LeadScoreOut, type NotScoredOut } from "../../api/scores";
 import { getSignals, type SignalOut } from "../../api/signals";
 import type { CompanyOut, DecisionMakerOut } from "../../api/icp";
@@ -122,14 +132,90 @@ function Card({ title, action, children, className }: { title: string; action?: 
 /* Header                                                              */
 /* ------------------------------------------------------------------ */
 
+/* Re-research + re-score just this company. The backend runs it in the
+ * background; the page polls refresh_status (see EnterpriseDetailPage). */
+function RefreshButton({
+  status,
+  availableAt,
+  requesting,
+  error,
+  disabled,
+  onClick,
+}: {
+  status: CompanyDetailOut["refresh_status"];
+  // Set during the 48h cooldown after a successful refresh.
+  availableAt: string | null;
+  requesting: boolean;
+  error: string | null;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const active = requesting || status === "queued" || status === "running";
+  const coolingDown = !active && Boolean(availableAt);
+  return (
+    <div className="flex flex-col items-end gap-[4px]">
+      <button
+        className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[14px] py-[8px] text-[13px] font-semibold text-[#334155] disabled:opacity-60"
+        disabled={disabled || active || coolingDown}
+        onClick={onClick}
+        title={coolingDown ? "Each company can be refreshed once every 48 hours" : undefined}
+        type="button"
+      >
+        <RefreshCw className={cn("size-[15px] text-[#64748b]", active && "animate-spin")} />
+        {active ? "Refreshing…" : "Refresh"}
+      </button>
+      {error ? (
+        <p className="m-0 text-[12px] font-medium text-[#ef4444]">{error}</p>
+      ) : coolingDown && availableAt ? (
+        <p className="m-0 text-[12px] font-medium text-[#94a3b8]">
+          Refreshed recently · available again {formatRefreshAvailable(availableAt)}
+        </p>
+      ) : (
+        !active && status === "failed" && <p className="m-0 text-[12px] font-medium text-[#94a3b8]">Last refresh failed</p>
+      )}
+    </div>
+  );
+}
+
+/* Research judged the company sells what the seller sells. It is not hidden -
+ * its score just loses the competitor penalty, explained here. */
+function CompetitorNotice({ score }: { score: LeadScoreOut }) {
+  const strength = score.competitor_strength;
+  if (!strength) return null;
+  const penalty = Math.round(score.competitor_detail?.penalty ?? COMPETITOR_PENALTY[strength]);
+  const sourceUrl = score.competitor_detail?.source_url ?? null;
+
+  return (
+    <div className="mt-[14px] flex items-start gap-[10px] rounded-[12px] border border-[#fed7aa] bg-[#fff7ed] px-[14px] py-[10px]">
+      <TriangleAlert className="mt-[2px] size-[15px] shrink-0 text-[#f97316]" />
+      <p className="m-0 text-[13px] leading-[19px] text-[#475569]">
+        <span className="font-semibold text-[#0f172a]">Possible competitor ({strength} overlap)</span> — research
+        suggests this company sells offerings similar to yours, so its score is reduced by {penalty} points.
+        {sourceUrl && (
+          <a
+            className="ml-[6px] inline-flex items-center gap-[4px] font-semibold text-[#2563eb] no-underline hover:underline"
+            href={sourceUrl}
+            rel="noreferrer"
+            target="_blank"
+          >
+            Source <ExternalLink className="size-[12px]" />
+          </a>
+        )}
+      </p>
+    </div>
+  );
+}
+
 function Header({
   company,
   score,
   companyId,
+  action,
 }: {
   company: CompanyOut | null;
   score: LeadScoreOut | NotScoredOut | null;
   companyId: string | null;
+  action?: ReactNode;
 }) {
   const name = company?.company_name ?? "Company";
   const industry = company?.industries?.[0] ?? company?.primary_industry?.[0] ?? "—";
@@ -147,6 +233,7 @@ function Header({
           <ChevronRight className="size-[14px] text-[#cbd5e1]" />
           <span className="font-semibold text-[#0f172a]">{name}</span>
         </nav>
+        {action}
       </div>
 
       <div className="mt-[16px] flex flex-col gap-[16px] 2xl:flex-row 2xl:items-start 2xl:justify-between">
@@ -234,6 +321,8 @@ function Header({
           <ChevronRight className="size-[18px] text-[#cbd5e1]" />
         </button>
       </div>
+
+      {scored && <CompetitorNotice score={score} />}
     </div>
   );
 }
@@ -491,10 +580,13 @@ function CompanySignals({ signals }: { signals: SignalOut[] }) {
 /* ------------------------------------------------------------------ */
 
 export function EnterpriseDetailPage() {
-  const [company, setCompany] = useState<CompanyOut | null>(null);
+  const [company, setCompany] = useState<CompanyDetailOut | null>(null);
   const [score, setScore] = useState<LeadScoreOut | NotScoredOut | null>(null);
   const [signals, setSignals] = useState<SignalOut[]>([]);
+  const [refreshRequesting, setRefreshRequesting] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const companyId = getCompanyIdFromUrl();
+  const refreshActive = company?.refresh_status === "queued" || company?.refresh_status === "running";
 
   useEffect(() => {
     const organisationId = getOrganisationId();
@@ -505,6 +597,50 @@ export function EnterpriseDetailPage() {
     getScore(organisationId, companyId).then(setScore).catch(() => setScore(null));
     getSignals(organisationId, companyId).then(setSignals).catch(() => setSignals([]));
   }, [companyId]);
+
+  // While a refresh is queued/running, poll the company every 5s; once it
+  // lands as done, reload the score + signals it re-computed. The poll stops
+  // itself because the fresh refresh_status flips refreshActive off.
+  useEffect(() => {
+    const organisationId = getOrganisationId();
+    if (!refreshActive || !organisationId || !companyId) {
+      return;
+    }
+    const interval = setInterval(() => {
+      getCompany(organisationId, companyId)
+        .then((next) => {
+          setCompany(next);
+          if (next.refresh_status === "done") {
+            getScore(organisationId, companyId).then(setScore).catch(() => {});
+            getSignals(organisationId, companyId).then(setSignals).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [refreshActive, companyId]);
+
+  const handleRefresh = async () => {
+    const organisationId = getOrganisationId();
+    if (!organisationId || !companyId) {
+      return;
+    }
+    setRefreshRequesting(true);
+    setRefreshError(null);
+    try {
+      const res = await refreshCompanies(organisationId, [companyId]);
+      if (res.accepted.includes(companyId)) {
+        // Show queued straight away - that starts the poll above.
+        setCompany((prev) => (prev ? { ...prev, refresh_status: "queued" } : prev));
+      } else {
+        // Skipped: most likely already refreshing - pick up its real status.
+        await getCompany(organisationId, companyId).then(setCompany).catch(() => {});
+      }
+    } catch (err) {
+      setRefreshError(err instanceof ApiError ? err.message : "Refresh failed. Please try again.");
+    }
+    setRefreshRequesting(false);
+  };
 
   return (
     <div className="flex min-h-screen" style={{ backgroundImage: pageBackground }}>
@@ -518,7 +654,21 @@ export function EnterpriseDetailPage() {
         />
 
         <main className="flex-1 overflow-x-hidden px-[28px] py-[22px]">
-          <Header company={company} companyId={companyId} score={score} />
+          <Header
+            action={
+              <RefreshButton
+                disabled={!company}
+                error={refreshError}
+                onClick={handleRefresh}
+                availableAt={company?.refresh_available_at ?? null}
+                requesting={refreshRequesting}
+                status={company?.refresh_status ?? null}
+              />
+            }
+            company={company}
+            companyId={companyId}
+            score={score}
+          />
 
           <div className="mt-[22px] grid grid-cols-1 gap-[20px] lg:grid-cols-3">
             <Firmographics company={company} />

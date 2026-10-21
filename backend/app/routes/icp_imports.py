@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.controllers import icp_imports as icp_imports_controller
 from app.core.auth import require_workspace_member
-from app.schemas.icp import ImportBatchOut
+from app.schemas.icp import ImportBatchOut, UploadQuotaOut
 from app.schemas.job import JobItemsOut, JobStatusOut, RetryFailedOut
 
 # Active prospect-import routes (brief section 7): workspace-scoped, no ICP.
@@ -13,6 +13,7 @@ router = APIRouter(
 )
 router.post("/excel", response_model=ImportBatchOut)(icp_imports_controller.upload_prospects)
 router.get("", response_model=list[ImportBatchOut])(icp_imports_controller.import_history)
+router.get("/quota", response_model=UploadQuotaOut)(icp_imports_controller.get_upload_quota)
 # Registered after "/excel" and "" so those literal paths aren't swallowed by
 # the {import_batch_id} path param.
 router.get("/{import_batch_id}", response_model=JobStatusOut)(icp_imports_controller.get_status)

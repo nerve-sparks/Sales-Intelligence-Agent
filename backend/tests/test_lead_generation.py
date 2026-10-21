@@ -353,7 +353,7 @@ async def test_target_is_capped_regardless_of_what_is_asked_for(org_ctx, monkeyp
 
     monkeypatch.setattr(lead_generation.llm_client, "is_configured", lambda: True)
 
-    async def fake_propose(icp, offering, target, trace_user_id=None, exclude_names=None):
+    async def fake_propose(icp, offering, target, trace_user_id=None, exclude_names=None, competitor_names=None):
         seen_targets.append(target)
         return [], []
 
@@ -666,7 +666,7 @@ async def test_existing_companies_are_named_in_the_prompt(org_ctx, make_company,
 
     seen_excludes: list[list[str]] = []
 
-    async def fake_propose(icp, offering, target, trace_user_id=None, exclude_names=None):
+    async def fake_propose(icp, offering, target, trace_user_id=None, exclude_names=None, competitor_names=None):
         seen_excludes.append(list(exclude_names or ()))
         return [], []
 

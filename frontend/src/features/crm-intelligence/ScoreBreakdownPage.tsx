@@ -54,6 +54,28 @@ function titleize(value: string | null | undefined): string {
     .join(" ");
 }
 
+/* competitor_identified's penalty_value encodes how strongly research judged
+ * the company to sell what the seller sells - mirrors the penalty scale in
+ * backend/app/core/scoring_config.py (direct 20, strong 15, partial 10,
+ * minor 5). */
+const COMPETITOR_STRENGTH_BY_PENALTY: Record<number, string> = {
+  20: "direct",
+  15: "strong",
+  10: "partial",
+  5: "minor",
+};
+
+/* event_type labels that read badly when merely titleized; everything else
+ * falls through to titleize. */
+function eventTypeLabel(event: BuyingEventOut): string {
+  if (event.event_type === "competitor_identified") {
+    const strength = COMPETITOR_STRENGTH_BY_PENALTY[Math.round(event.penalty_value ?? 0)];
+    return strength ? `Competitor (${strength} overlap)` : "Competitor";
+  }
+  if (event.event_type === "vendor_selected") return "Chose another vendor";
+  return titleize(event.event_type);
+}
+
 /* Mirrors backend/app/core/scoring_config.py's ECONOMIC_BUYER_TITLES /
  * RELEVANT_EXEC_TITLES + evidence_scorer._contact_tier - for DISPLAY only
  * (explaining why a contact landed in a tier), the backend's own
@@ -337,7 +359,7 @@ function Recommendation({ score }: { score: ScoreDetailOut }) {
           <div>
             <p className="m-0 text-[12px] font-semibold text-[#ef4444]">Risks / negative evidence</p>
             <ul className="m-0 mt-[4px] pl-[18px] text-[13px] text-[#475569]">
-              {risks.map((r) => <li key={r.buying_event_id}>{r.title || titleize(r.event_type)}</li>)}
+              {risks.map((r) => <li key={r.buying_event_id}>{r.title || eventTypeLabel(r)}</li>)}
             </ul>
           </div>
         )}
@@ -443,8 +465,8 @@ function EvidenceEvent({ event, weightIndex }: { event: BuyingEventOut; weightIn
       <div className="flex flex-wrap items-start justify-between gap-[8px]">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-[8px]">
-            <span className="text-[14px] font-bold text-[#0f172a]">{event.title || titleize(event.event_type)}</span>
-            <Badge label={titleize(event.event_type)} tone={event.is_negative ? "red" : "blue"} />
+            <span className="text-[14px] font-bold text-[#0f172a]">{event.title || eventTypeLabel(event)}</span>
+            <Badge label={eventTypeLabel(event)} tone={event.is_negative ? "red" : "blue"} />
             {!event.is_negative && (
               <Badge
                 label={

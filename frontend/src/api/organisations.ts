@@ -24,6 +24,10 @@ export type OrganisationOut = {
   offering_profile_source_url: string | null;
   offering_profile_status: string | null;
   offering_profile_synced_at: string | null;
+  // AI-identified on Offering Profile refresh - read-only; only keeps these
+  // out of Find companies and drives competitor news, never changes scores.
+  competitors: { name: string; domain: string | null }[] | null;
+  news_refreshed_at: string | null;
   created_at: string | null;
 };
 
@@ -72,6 +76,94 @@ export function seedOfferingProfile(
   payload: { profile: OfferingProfile; source_url: string },
 ): Promise<OfferingProfileSyncOut> {
   return apiPost<OfferingProfileSyncOut>(`/organisations/${organisationId}/offering-profile/seed`, payload);
+}
+
+/* Organisation-wide news about the tenant's own competitors (not prospects),
+ * refreshed automatically every 48h - not scoped to an upload. */
+export type CompetitorNewsCategory =
+  | "funding"
+  | "launch"
+  | "partnership"
+  | "customer_win"
+  | "hiring"
+  | "leadership"
+  | "other";
+
+export type CompetitorNewsItem = {
+  competitor_news_id: string;
+  competitor_name: string;
+  competitor_domain: string | null;
+  title: string;
+  summary: string | null;
+  why_it_matters: string | null;
+  category: CompetitorNewsCategory;
+  url: string;
+  source_domain: string | null;
+  published_at: string | null;
+  discovered_at: string;
+};
+
+export type CompetitorNewsListOut = {
+  items: CompetitorNewsItem[];
+  // Last automatic refresh; null until the scheduler has run once.
+  refreshed_at: string | null;
+  competitor_count: number;
+};
+
+export function listCompetitorNews(
+  organisationId: string,
+  params: { days?: number; limit?: number } = {},
+): Promise<CompetitorNewsListOut> {
+  const query = new URLSearchParams();
+  if (params.days !== undefined) query.set("days", String(params.days));
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  const qs = query.toString();
+  return apiGet<CompetitorNewsListOut>(`/organisations/${organisationId}/competitor-news${qs ? `?${qs}` : ""}`);
+}
+
+/* 202 - runs in the background; refetch listCompetitorNews afterwards. */
+export function refreshCompetitorNews(organisationId: string): Promise<{ status: string }> {
+  return apiPost<{ status: string }>(`/organisations/${organisationId}/competitor-news/refresh`);
+}
+
+/* Dashboard Latest News: news about the top 50 global AI companies, shared by
+ * every organisation (backend ai_market_news_service), refreshed every 72h. */
+export type AiNewsCategory = "product_launch" | "funding" | "press_briefing" | "buying_signal";
+
+export type AiNewsItem = {
+  ai_market_news_id: string;
+  company_name: string;
+  company_domain: string | null;
+  title: string;
+  summary: string | null;
+  category: AiNewsCategory;
+  url: string;
+  source_domain: string | null;
+  published_at: string | null;
+  discovered_at: string;
+};
+
+export type AiNewsListOut = {
+  items: AiNewsItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  refreshed_at: string | null;
+  refresh_interval_hours: number;
+  company_count: number;
+};
+
+export function listAiNews(
+  organisationId: string,
+  params: { days?: number; page?: number; page_size?: number; category?: AiNewsCategory } = {},
+): Promise<AiNewsListOut> {
+  const query = new URLSearchParams();
+  if (params.days !== undefined) query.set("days", String(params.days));
+  if (params.page !== undefined) query.set("page", String(params.page));
+  if (params.page_size !== undefined) query.set("page_size", String(params.page_size));
+  if (params.category) query.set("category", params.category);
+  const qs = query.toString();
+  return apiGet<AiNewsListOut>(`/organisations/${organisationId}/ai-news${qs ? `?${qs}` : ""}`);
 }
 
 export type OrganisationCreate = {

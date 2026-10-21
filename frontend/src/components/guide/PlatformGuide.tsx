@@ -238,6 +238,12 @@ const TOPICS: GuideTopic[] = [
         text:
           "The newest buying events across every company in scope, each with how long ago it was published, the company, the event type and the event score. Any row opens that signal in full; View All opens the Signal Feed.",
       },
+      { kind: "sub", text: "Latest News" },
+      {
+        kind: "text",
+        text:
+          "News from the last 30 days about the top 50 global AI companies, split into tabs - All, Product Launches, Funding, Press Briefings and Buying Signals & Deals. The card shows five stories; View all shows ten, with further stories on later pages. The list of companies and their news refresh automatically every 72 hours.",
+      },
     ],
   },
 
@@ -499,6 +505,10 @@ const TOPICS: GuideTopic[] = [
             term: "Export",
             text:
               "Downloads the list as a spreadsheet, respecting the upload filter, so a scored list can be handed to someone who does not use the platform.",
+          },
+          {
+            term: "Refresh selected",
+            text: "Re-researches and re-scores up to 25 companies you tick, without uploading them again. Each company can be refreshed once every 48 hours; a refresh that failed can be retried straight away.",
           },
         ],
       },
@@ -776,6 +786,7 @@ const TOPICS: GuideTopic[] = [
           "Candidates are proposed from your ICP and your offering profile.",
           "Every candidate is then checked against live web search, and only companies with a confirmed real website are saved. Anything that cannot be confirmed is discarded rather than stored.",
           "Companies you already have are skipped, so a run never re-adds them.",
+          "Companies the AI identified as your competitors are never suggested.",
           "The survivors are researched and scored exactly like uploaded companies, with the same progress, retry and cancel controls.",
         ],
       },
@@ -809,6 +820,11 @@ const TOPICS: GuideTopic[] = [
         kind: "text",
         text:
           "CSV and XLSX files, several at once. Every sheet in a workbook is read rather than just the first, and the header row is detected even when the file begins with a title or a blank row. Column names are matched by meaning rather than requiring an exact template, so ZoomInfo exports and hand-built sheets both work. A file with nothing but company names is still usable, though a website domain per row substantially improves research.",
+      },
+      {
+        kind: "note",
+        text:
+          "Excel uploads are limited to 2 files per account in any 24 hours, onboarding uploads included. Each file counts on its own, deleting an upload does not give the slot back, and a failed upload does not count. The upload area shows how many are left and when the next one becomes available.",
       },
       { kind: "sub", text: "What happens after the upload" },
       {
@@ -873,7 +889,7 @@ const TOPICS: GuideTopic[] = [
       {
         kind: "note",
         text:
-          "The offering profile never excludes a company. It changes how relevant an event is judged to be, and therefore the score, but it is not a filter and it cannot remove a company from your list.",
+          "The offering profile never excludes a company. It changes how relevant an event is judged to be, and therefore the score, but it is not a filter and it cannot remove a company from your list. Refreshing the profile also identifies your likely competitors, listed read-only on the card - used only to keep them out of Find companies and to track competitor news.",
       },
     ],
   },
@@ -1166,12 +1182,13 @@ const TOPICS: GuideTopic[] = [
           ["Severe financial distress", "50"],
           ["Strong contradictory signal", "20"],
           ["Unclassified negative", "20"],
+          ["Company is a competitor of yours (direct / strong / partial / minor)", "20 / 15 / 10 / 5"],
         ],
       },
       {
         kind: "text",
         text:
-          "A cancelled project zeroes the score on its own, and a competitor already selected very nearly does. These are the two findings that make a company genuinely not worth calling this quarter, however good the rest of the evidence looked.",
+          "A cancelled project zeroes the score on its own, and a competitor already selected very nearly does. These are the two findings that make a company genuinely not worth calling this quarter, however good the rest of the evidence looked. Research may also judge a company to be a competitor of yours: that costs 5 to 20 points depending on how much its offerings overlap with yours (direct 20, strong 15, partial 10, minor 5) and shows a Competitor badge - the company is never hidden.",
       },
       { kind: "sub", text: "Distress is checked against the source, not the summary" },
       {
@@ -1339,7 +1356,7 @@ const TOPICS: GuideTopic[] = [
           {
             term: "Why does this company score 0?",
             text:
-              "Either we found no qualifying evidence, or negative evidence floored it. Open Score Breakdown: if the Evidence Events card is empty the company is genuinely quiet, and if there is a penalty listed then something specific disqualified it.",
+              "Either we found no qualifying evidence, or negative evidence floored it. Open Score Breakdown: if the Evidence Events card is empty the company is genuinely quiet, and if there is a penalty listed then something specific disqualified it - including, for a company research judged to be your competitor, a 5-20 point competitor penalty and a Competitor badge.",
           },
           {
             term: "Why is the score a dash instead of a number?",
@@ -1447,7 +1464,7 @@ const TOPICS: GuideTopic[] = [
           {
             term: "Negative evidence",
             text:
-              "Findings that count against a company: a competitor selected, a project cancelled or completed, financial distress, or a strong contradictory signal.",
+              "Findings that count against a company: a competitor selected, a project cancelled or completed, financial distress, or a strong contradictory signal. Research may also judge the company to be a competitor of yours, which costs 5-20 points depending on offering overlap (direct −20, strong −15, partial −10, minor −5) and shows a Competitor badge - it is never hidden.",
           },
           {
             term: "Lead Score",

@@ -72,6 +72,10 @@ class LeadScoreOut(BaseModel):
     commercially_viable: bool | None = None
     evidence_summary: list | dict | None = None
     scoring_warnings: list | dict | None = None
+    # Research judged this company a competitor of the tenant (direct |
+    # strong | partial | minor); detail = {penalty, title, summary, source_url}.
+    competitor_strength: str | None = None
+    competitor_detail: dict | None = None
     scored_at: datetime | None = None
 
 
@@ -98,6 +102,7 @@ class RankedLeadScoreOut(BaseModel):
     expected_deal_min_usd: float | None = None
     expected_deal_max_usd: float | None = None
     expected_deal_value_usd: float | None = None
+    competitor_strength: str | None = None
     scored_at: datetime | None = None
     # Strongest reachable DecisionMaker - powers Dashboard "Contact Now" / mail.
     primary_contact_email: str | None = None

@@ -85,6 +85,11 @@ class LeadScore(Base):
     score_version: Mapped[int | None] = mapped_column(Numeric(6, 0))
     score_formula_version: Mapped[str | None] = mapped_column(Text)
     scoring_warnings: Mapped[list | dict | None] = mapped_column(JSONB)
+    # Set when research judged this company a competitor of the tenant
+    # (direct | strong | partial | minor); null otherwise. competitor_detail:
+    # {penalty, title, summary, source_url} of the strongest competitor event.
+    competitor_strength: Mapped[str | None] = mapped_column(Text)
+    competitor_detail: Mapped[dict | None] = mapped_column(JSONB)
 
     scored_at: Mapped[object | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")

@@ -337,7 +337,14 @@ def _build_prompt(company: dict, offering_profile: dict, items: list[dict], now:
         f"{offering_names_line}.\n"
         "is_negative=true for events that REDUCE buying likelihood for this seller; negative_type is one of: "
         "vendor_selected | relevant_project_completed | project_cancelled | severe_financial_distress "
-        "| strong_contradictory_signal (else null).\n"
+        "| strong_contradictory_signal | is_competitor (else null).\n"
+        f"is_competitor: ONLY when the source shows THIS company itself SELLS offerings substantially "
+        f"the same as {seller}'s listed offerings, to the same kind of buyers - i.e. it competes with "
+        f"{seller}. A company that uses, buys, budgets for, pilots or hires for such technology is a "
+        "PROSPECT, never a competitor. When negative_type is is_competitor, set competitor_strength to "
+        "how much its offerings overlap: direct (the same core offerings to the same buyers) | strong "
+        "(large overlap, somewhat different focus or market) | partial (overlaps on only some offerings) "
+        "| minor (adjacent, small overlap). Otherwise competitor_strength is null.\n"
         "public_budget_usd: ONLY when the text explicitly ties a budget/funding figure to a "
         "programme or procurement relevant to the offerings above; the numeric USD amount, else null. "
         "NEVER use unrelated funding rounds, company valuation, revenue, or contract totals as a "
@@ -365,7 +372,7 @@ def _build_prompt(company: dict, offering_profile: dict, items: list[dict], now:
         '"event_category":"buying_stage","event_summary":"","event_status":"active",'
         '"event_date":"2026-01-21","is_action":true,"seller_relevance":0.9,'
         f'"best_offering":{json.dumps(example_offering)},"relevance_reason":"",'
-        '"extraction_confidence":0.88,"is_negative":false,"negative_type":null,'
+        '"extraction_confidence":0.88,"is_negative":false,"negative_type":null,"competitor_strength":null,'
         '"public_budget_usd":null,"budget_currency":null,"budget_confidence":null,'
         '"canonical_subject":"","canonical_action":"","canonical_object":""}]\n'
         "A result carrying no real event at all still gets exactly one object, with "
@@ -494,6 +501,35 @@ def _forced_negative_reason(item: dict) -> str | None:
     return None
 
 
+def _apply_negative_type(cls: dict) -> dict | None:
+    """Gives competitor and vendor-selected negatives their own persisted
+    event_type (negative_type is not stored on buying_event), so the scorer
+    and the dashboard can recognise them later. Returns None to drop a
+    competitor judgement that is low-confidence or has no valid strength -
+    wrongly calling a prospect a competitor is worse than missing one."""
+    if not cls.get("is_negative"):
+        return cls
+    negative_type = cls.get("negative_type")
+    if negative_type == "is_competitor":
+        strength = str(cls.get("competitor_strength") or "").strip().lower()
+        confidence = _clamp01(cls.get("extraction_confidence"), 0.0)
+        summary = (cls.get("event_summary") or "")[:120]
+        if strength not in cfg.COMPETITOR_PENALTY_BY_STRENGTH:
+            print(f"[COMPETITOR] Dropped competitor read (invalid strength {cls.get('competitor_strength')!r}): {summary!r}")
+            return None
+        if confidence < cfg.COMPETITOR_MIN_CONFIDENCE:
+            print(f"[COMPETITOR] Dropped competitor read (confidence {confidence:.2f} < "
+                  f"{cfg.COMPETITOR_MIN_CONFIDENCE}): {summary!r}")
+            return None
+        print(f"[COMPETITOR] Competitor detected: strength={strength} "
+              f"(-{cfg.COMPETITOR_PENALTY_BY_STRENGTH[strength]}), confidence={confidence:.2f}: {summary!r}")
+        return {**cls, "event_type": cfg.COMPETITOR_EVENT_TYPE, "competitor_strength": strength}
+    if negative_type == "vendor_selected":
+        print(f"[NEWS] Prospect chose another vendor: {(cls.get('event_summary') or '')[:120]!r}")
+        return {**cls, "event_type": cfg.VENDOR_SELECTED_EVENT_TYPE}
+    return cls
+
+
 async def extract_events(
     company: dict, offering_profile: dict, evidence_items: list[dict], now: datetime, research_run_id=None,
 ) -> tuple[list[dict], dict]:
@@ -535,6 +571,9 @@ async def extract_events(
                           f"is_negative=True, negative_type=severe_financial_distress")
                     cls = {**cls, "is_negative": True, "negative_type": "severe_financial_distress"}
 
+                cls = _apply_negative_type(cls)
+                if cls is None:
+                    continue  # a competitor judgement too weak to act on
                 event_type = cls.get("event_type")
                 relevance = _relevance_from_cls(cls)
                 if relevance <= 0.0 and not cls.get("is_negative"):
@@ -592,7 +631,12 @@ def _build_canonical_events(
         event_score = compute_event_score(
             base_strength, relevance, freshness, source_quality, extraction_confidence, status_factor
         )
-        penalty = cfg.NEGATIVE_PENALTY.get(cls.get("negative_type"), cfg.DEFAULT_NEGATIVE_PENALTY) if is_negative else None
+        if not is_negative:
+            penalty = None
+        elif entry["event_type"] == cfg.COMPETITOR_EVENT_TYPE:
+            penalty = cfg.COMPETITOR_PENALTY_BY_STRENGTH.get(cls.get("competitor_strength"), cfg.COMPETITOR_PENALTY_MAX)
+        else:
+            penalty = cfg.NEGATIVE_PENALTY.get(cls.get("negative_type"), cfg.DEFAULT_NEGATIVE_PENALTY)
         budget = _clamp_budget(cls.get("public_budget_usd"))
 
         candidate = {
@@ -637,6 +681,11 @@ def _build_canonical_events(
 def _absorb(keeper: dict, other: dict) -> None:
     """Fold `other` into `keeper` (same real event): append evidence, keep the
     stronger-scored representative's multipliers, keep the larger budget."""
+    # Merged competitor reads keep the STRONGEST overlap, not whichever
+    # article happened to carry the higher event_score.
+    competitor_penalty = None
+    if keeper.get("event_type") == cfg.COMPETITOR_EVENT_TYPE and other.get("event_type") == cfg.COMPETITOR_EVENT_TYPE:
+        competitor_penalty = max(keeper.get("penalty_value") or 0, other.get("penalty_value") or 0)
     keeper_evidence = keeper["evidence"]
     for e in other["evidence"]:
         if e.get("url") not in {ev.get("url") for ev in keeper_evidence}:
@@ -653,6 +702,8 @@ def _absorb(keeper: dict, other: dict) -> None:
         keeper["budget_source_url"] = other["budget_source_url"]
         keeper["budget_confidence"] = other["budget_confidence"]
     keeper["evidence"] = keeper_evidence
+    if competitor_penalty is not None:
+        keeper["penalty_value"] = competitor_penalty
 
 
 def _token_jaccard(a: str, b: str) -> float:
@@ -745,7 +796,11 @@ def _suppress_positive_duplicates_of_negative(groups: dict[str, dict]) -> dict[s
     heuristic, not exact, and worth revisiting if it over- or under-fires in
     practice."""
     positives = [(k, v) for k, v in groups.items() if not v["is_negative"]]
-    negatives = [v for v in groups.values() if v["is_negative"]]
+    # A competitor judgement is about WHO the company is, not a reading of one
+    # event - it routinely comes from the same article as genuine positive
+    # events (e.g. a competitor's launch). Letting it suppress those would turn
+    # the deliberately small competitor penalty into a wipe-out.
+    negatives = [v for v in groups.values() if v["is_negative"] and v["event_type"] != cfg.COMPETITOR_EVENT_TYPE]
     if not positives or not negatives:
         return groups
 

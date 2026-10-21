@@ -21,6 +21,8 @@ from app.routes import (
     users,
     workspaces,
 )
+from app.services import news_scheduler
+from app.services.company_refresh_service import fail_interrupted_refreshes
 from app.services.job_recovery import stop_interrupted_jobs
 from app.services.langfuse_cost import ensure_langfuse_model_prices
 
@@ -37,11 +39,21 @@ async def lifespan(_app: FastAPI):
     # still-in-flight companies) as stopped/retryable instead - see
     # job_recovery.py.
     await stop_interrupted_jobs()
+    # Same for a "Refresh selected" run that was in flight.
+    await fail_interrupted_refreshes()
     # Registers priced Gemini aliases so Langfuse can infer USD cost on new
     # generations. Failures are swallowed inside the helper - Langfuse being
     # down must not block the API from serving.
     await asyncio.to_thread(ensure_langfuse_model_prices)
-    yield
+    # Refreshes dashboard news (competitor news + top prospects) every
+    # NEWS_REFRESH_INTERVAL_HOURS. In-process: the backend runs as a single
+    # uvicorn process, and the per-organisation claim in news_scheduler keeps
+    # a restart or a second instance from double-running it.
+    scheduler = news_scheduler.start()
+    try:
+        yield
+    finally:
+        await news_scheduler.stop(scheduler)
 
 
 app = FastAPI(title="SIGNAL Backend", lifespan=lifespan)

@@ -55,6 +55,19 @@ class Settings:
     # Exact browser origins allowed to call the API cross-origin (main.py's
     # CORSMiddleware), on top of any localhost/127.0.0.1 port for local dev.
     cors_allow_origins: list[str]
+    # "Refresh selected" on the Enterprise List: most companies per request.
+    max_refresh_selection: int = 25
+    # A company successfully refreshed can't be refreshed again for this long.
+    refresh_cooldown_hours: int = 48
+    # Dashboard news (news_scheduler / competitor_news_service).
+    news_refresh_enabled: bool = True
+    news_refresh_interval_hours: int = 72
+    news_refresh_max_companies: int = 20
+    news_list_max_items: int = 20
+    news_retention_days: int = 30
+    # Excel uploads per login account per rolling window (upload_quota).
+    upload_limit_files: int = 2
+    upload_limit_window_hours: int = 24
 
     @property
     def database_url_sync(self) -> str:
@@ -116,4 +129,13 @@ def get_settings() -> Settings:
             for origin in os.environ.get("CORS_ALLOW_ORIGINS", DEFAULT_CORS_ALLOW_ORIGINS).split(",")
             if origin.strip()
         ],
+        max_refresh_selection=int(os.environ.get("MAX_REFRESH_SELECTION", "25")),
+        refresh_cooldown_hours=int(os.environ.get("REFRESH_COOLDOWN_HOURS", "48")),
+        news_refresh_enabled=os.environ.get("NEWS_REFRESH_ENABLED", "true").lower() in ("1", "true", "yes"),
+        news_refresh_interval_hours=int(os.environ.get("NEWS_REFRESH_INTERVAL_HOURS", "72")),
+        news_refresh_max_companies=int(os.environ.get("NEWS_REFRESH_MAX_COMPANIES", "20")),
+        news_list_max_items=int(os.environ.get("NEWS_LIST_MAX_ITEMS", "20")),
+        news_retention_days=int(os.environ.get("NEWS_RETENTION_DAYS", "30")),
+        upload_limit_files=int(os.environ.get("UPLOAD_LIMIT_FILES", "2")),
+        upload_limit_window_hours=int(os.environ.get("UPLOAD_LIMIT_WINDOW_HOURS", "24")),
     )

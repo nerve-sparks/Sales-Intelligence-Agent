@@ -14,7 +14,7 @@ no D1-D7.
 """
 
 SCORE_VERSION = 2
-SCORE_FORMULA_VERSION = "trigger-v2"
+SCORE_FORMULA_VERSION = "trigger-v2.1"  # v2.1: graded competitor penalty
 
 # ---------------------------------------------------------------------------
 # Base strengths per event type (brief section 12). 0-100. The intrinsic
@@ -240,6 +240,27 @@ NEGATIVE_PENALTY_CAP = 100
 DEFAULT_NEGATIVE_PENALTY = 20
 
 # ---------------------------------------------------------------------------
+# Competitor penalty. Research can judge that a prospect itself SELLS what the
+# tenant sells (negative_type "is_competitor"). Deliberately mild and graded by
+# how much the offerings overlap - a competitor stays visible and keeps its
+# real evidence; it only loses a few points and gets a "Competitor" badge.
+# Never more than COMPETITOR_PENALTY_MAX in total, however many articles.
+#
+# Below COMPETITOR_MIN_CONFIDENCE the judgement is dropped entirely (no
+# penalty, no badge): wrongly calling a prospect a competitor is worse than
+# missing a competitor.
+#
+# Competitor and vendor-selected negatives get their own persisted event_type
+# (negative_type itself is not stored on buying_event), so the scorer, the
+# dashboard news tabs and dedup can tell them apart.
+# ---------------------------------------------------------------------------
+COMPETITOR_EVENT_TYPE = "competitor_identified"
+VENDOR_SELECTED_EVENT_TYPE = "vendor_selected"
+COMPETITOR_PENALTY_BY_STRENGTH = {"direct": 20, "strong": 15, "partial": 10, "minor": 5}
+COMPETITOR_PENALTY_MAX = 20
+COMPETITOR_MIN_CONFIDENCE = 0.7
+
+# ---------------------------------------------------------------------------
 # Sales classifications (brief section 17). Labels only - never gates. Every
 # company is scored and displayed regardless of band.
 #
@@ -306,3 +327,31 @@ FUNDING_MAX_BAND_BUMP = 1
 # Capturable share of an explicitly-identified public AI/procurement budget -
 # never assume the whole budget is XSparks' (brief section 19).
 PUBLIC_BUDGET_CAPTURABLE_SHARE = 0.10
+
+# ---------------------------------------------------------------------------
+# Dashboard "Latest News" tabs -> the event types each tab shows. Built from
+# BASE_STRENGTH's own keys (plus the vendor-selected negative), so the tabs can
+# never drift from the taxonomy the extraction prompt actually emits.
+# generic_technology_assessment and company_identity_update are deliberately
+# in no tab: they are not news a rep would act on.
+#
+# NEWS_NEGATIVE_GROUP_TYPES: groups whose event types are NEGATIVE events.
+# Every other group only ever returns non-negative events.
+# ---------------------------------------------------------------------------
+NEWS_GROUPS = {
+    "buying_signals": [
+        "rfp_published", "procurement_process", "vendor_replacement", "vendor_evaluation",
+        "active_pilot", "transformation_program", "pilot_program_announced", "new_tech_mandate",
+        "solution_adoption", "relevant_hiring", "plant_expansion", "operational_inefficiency",
+        "quality_control_problem", "supply_chain_disruption", "regulatory_compliance_pressure",
+        "labour_shortage",
+    ],
+    "funding_budget": [
+        "funding_without_buying_evidence", "explicit_solution_budget", "technology_budget",
+        "acquisition_or_merger",
+    ],
+    "leadership": ["leadership_change"],
+    # A prospect chose another vendor - shown under Competitor News.
+    "competitor_at_prospect": [VENDOR_SELECTED_EVENT_TYPE],
+}
+NEWS_NEGATIVE_GROUP_TYPES = {"competitor_at_prospect"}

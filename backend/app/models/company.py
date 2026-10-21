@@ -128,6 +128,30 @@ class Company(Base):
     # distinction as SignalExtractionCheck.
     search_signals_fetched_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
 
+    # Manual / scheduled "refresh selected" (company_refresh_service). Tracked
+    # on the company rather than company_import_batch because a refresh is not
+    # tied to any one upload - a company can belong to several. Null = never
+    # refreshed outside an upload.
+    refresh_status: Mapped[str | None] = mapped_column(Text)  # queued | running | done | failed
+    refresh_requested_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    @property
+    def refresh_available_at(self):
+        """When this company can be refreshed again, or None if it can be now.
+        Only a SUCCESSFUL refresh starts the REFRESH_COOLDOWN_HOURS cooldown -
+        a failed one changed nothing, so it can be retried straight away."""
+        from datetime import datetime, timedelta, timezone
+
+        from app.core.config import get_settings
+
+        if self.refresh_status != "done" or self.refresh_requested_at is None:
+            return None
+        requested = self.refresh_requested_at
+        if requested.tzinfo is None:
+            requested = requested.replace(tzinfo=timezone.utc)
+        available = requested + timedelta(hours=get_settings().refresh_cooldown_hours)
+        return available if available > datetime.now(timezone.utc) else None
+
     # Relationships
     organisation: Mapped["Organisation"] = relationship()
     decision_makers: Mapped[list["DecisionMaker"]] = relationship(

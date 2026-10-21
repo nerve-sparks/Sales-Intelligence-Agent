@@ -17,9 +17,10 @@ from collections import Counter
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import case, func, select, text
+from sqlalchemy import and_, case, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import scoring_config as cfg
 from app.models import BuyingEvent, Company, CompanyImportBatch, DecisionMaker
 
 # Relevance tiers (BuyingEvent.relevance is the LLM's xsparks_relevance, 0-1) -
@@ -39,12 +40,14 @@ def _in_batch(import_batch_id: UUID):
     )
 
 
-def _base_stmt(workspace_id: UUID, include_stale: bool = False):
+def _base_stmt(workspace_id: UUID, include_stale: bool = False, include_negative: bool = False):
     stmt = (
         select(BuyingEvent, Company.company_name)
         .join(Company, Company.company_id == BuyingEvent.company_id)
-        .where(Company.workspace_id == workspace_id, BuyingEvent.is_negative.is_(False))
+        .where(Company.workspace_id == workspace_id)
     )
+    if not include_negative:
+        stmt = stmt.where(BuyingEvent.is_negative.is_(False))
     if not include_stale:
         stmt = stmt.where(BuyingEvent.is_stale.is_(False))
     return stmt
@@ -55,7 +58,25 @@ def _base_stmt(workspace_id: UUID, include_stale: bool = False):
 # find evidence that is about to age out of the freshness bands (anything past
 # 545 days scores 0), and how you audit the far end of the backfill. Without it
 # the tail of the data is unreachable, since paging to it by hand is impractical.
-SORT_KEYS = ("date", "oldest", "score", "company")
+SORT_KEYS = ("date", "oldest", "score", "company", "discovered", "newest")
+
+# Dashboard "Latest News" groups (scoring_config.NEWS_GROUPS) plus "all".
+NEWS_GROUP_KEYS = ("all", *cfg.NEWS_GROUPS.keys())
+
+
+def _news_group_condition(group: str):
+    """Event-type filter for a dashboard news tab. Negative groups (a prospect
+    chose another vendor) match ONLY negative events of their types; every
+    other group matches only non-negative events. "all" is the union."""
+    groups = list(cfg.NEWS_GROUPS) if group == "all" else [group]
+    positive_types = [t for g in groups if g not in cfg.NEWS_NEGATIVE_GROUP_TYPES for t in cfg.NEWS_GROUPS[g]]
+    negative_types = [t for g in groups if g in cfg.NEWS_NEGATIVE_GROUP_TYPES for t in cfg.NEWS_GROUPS[g]]
+    clauses = []
+    if positive_types:
+        clauses.append(and_(BuyingEvent.event_type.in_(positive_types), BuyingEvent.is_negative.is_(False)))
+    if negative_types:
+        clauses.append(and_(BuyingEvent.event_type.in_(negative_types), BuyingEvent.is_negative.is_(True)))
+    return or_(*clauses)
 
 
 async def list_events(
@@ -70,8 +91,25 @@ async def list_events(
     sector: str | None = None,
     sort: str = "date",
     days: int | None = None,
+    group: str | None = None,
+    recent_days: int | None = None,
 ):
-    stmt = _base_stmt(workspace_id)
+    # Negatives only ever enter through a news group that asks for them.
+    stmt = _base_stmt(workspace_id, include_negative=group is not None)
+    if group is not None:
+        stmt = stmt.where(_news_group_condition(group))
+    if recent_days is not None:
+        # Dashboard news window: published within N days, or - when the
+        # article date is unknown (~20% of events) - FOUND within N days.
+        # A future published_at is an extraction mistake, never "recent".
+        cutoff = func.now() - text(f"interval '{int(recent_days)} days'")
+        stmt = stmt.where(
+            or_(
+                and_(BuyingEvent.published_at.isnot(None), BuyingEvent.published_at >= cutoff,
+                     BuyingEvent.published_at <= func.now()),
+                and_(BuyingEvent.published_at.is_(None), BuyingEvent.created_at >= cutoff),
+            )
+        )
     if category:
         stmt = stmt.where(BuyingEvent.category == category)
     if import_batch_id is not None:
@@ -116,6 +154,16 @@ async def list_events(
         order = (BuyingEvent.event_score.desc().nulls_last(), published.desc().nulls_last())
     elif sort == "company":
         order = (Company.company_name.asc(), published.desc().nulls_last())
+    elif sort == "discovered":
+        # Newest-FOUND first: freshly researched news leads even when its
+        # article date is missing or wrong.
+        order = (BuyingEvent.created_at.desc(), published.desc().nulls_last())
+    elif sort == "newest":
+        # Dashboard news: the newest NEWS first across every company - by the
+        # article's own date, falling back to when research found it only for
+        # undated items. Sorting by discovery alone let whichever companies were
+        # researched last crowd out newer news about everyone else.
+        order = (func.coalesce(published, BuyingEvent.created_at).desc(), BuyingEvent.created_at.desc())
     else:
         order = (published.desc().nulls_last(), BuyingEvent.created_at.desc())
 

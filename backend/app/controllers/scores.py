@@ -115,6 +115,7 @@ async def ranked(
                 "expected_deal_min_usd": float(ls.expected_deal_min_usd) if ls.expected_deal_min_usd is not None else None,
                 "expected_deal_max_usd": float(ls.expected_deal_max_usd) if ls.expected_deal_max_usd is not None else None,
                 "expected_deal_value_usd": float(ls.expected_deal_value_usd) if ls.expected_deal_value_usd is not None else None,
+                "competitor_strength": ls.competitor_strength,
                 "scored_at": ls.scored_at,
                 "primary_contact_email": email,
                 "primary_contact_name": contact_name,

@@ -58,6 +58,11 @@ class CompanyOut(BaseModel):
     competitors: list | dict | None = None
     technologies: list[str] | None = None
     products: list[str] | None = None
+    refresh_status: str | None = None
+    refresh_requested_at: datetime | None = None
+    # When a recently refreshed company can be refreshed again (48h cooldown); null = now.
+    refresh_available_at: datetime | None = None
+    search_signals_fetched_at: datetime | None = None
 
 
 class CompanyWithDecisionMakersOut(CompanyOut):
@@ -93,6 +98,32 @@ class CompanyListItemOut(BaseModel):
     best_offering: str | None = None
     why_now: str | None = None
     expected_deal_value_usd: float | None = None
+    competitor_strength: str | None = None
+    # "Refresh selected" progress: queued | running | done | failed (or null).
+    refresh_status: str | None = None
+    refresh_requested_at: datetime | None = None
+    # When a recently refreshed company can be refreshed again (48h cooldown); null = now.
+    refresh_available_at: datetime | None = None
+
+
+class CompanyRefreshIn(BaseModel):
+    company_ids: list[UUID]
+
+
+class CompanyRefreshCooldownOut(BaseModel):
+    company_id: UUID
+    available_at: datetime
+
+
+class CompanyRefreshOut(BaseModel):
+    """accepted = queued for re-research; skipped = already refreshing or not
+    in this workspace; cooling_down = refreshed successfully within the last
+    cooldown_hours, with when each can be refreshed again."""
+
+    accepted: list[UUID]
+    skipped: list[UUID]
+    cooling_down: list[CompanyRefreshCooldownOut] = []
+    cooldown_hours: int = 48
 
 
 class CompanyListOut(BaseModel):

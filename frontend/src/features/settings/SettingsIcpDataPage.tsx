@@ -19,7 +19,14 @@ import {
   type JobStatusOut,
 } from "../../api/icp";
 import { exportCompanies } from "../../api/companies";
-import { uploadProspects } from "../../api/prospectImports";
+import {
+  describeUploadQuota,
+  getUploadQuota,
+  uploadErrorMessage,
+  uploadProspects,
+  uploadQuotaBlockReason,
+  type UploadQuota,
+} from "../../api/prospectImports";
 import {
   createWorkspace,
   listWorkspaces,
@@ -106,19 +113,45 @@ function ExcelUploadButton({
   workspaceId,
   onUploadStart,
   onUploadComplete,
+  onUploadFailed,
 }: {
   workspaceId: string | null;
   onUploadStart: () => void;
   onUploadComplete: (batch: ImportBatchOut) => void;
+  onUploadFailed: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadedLabel, setUploadedLabel] = useState<string | null>(null);
+  const [quota, setQuota] = useState<UploadQuota | null>(null);
   const ready = Boolean(workspaceId);
+  const limitReached = quota !== null && quota.remaining <= 0;
+
+  // Refetched after every upload attempt, success or failure - the server is
+  // the only one who knows what counted (failed uploads don't).
+  const loadQuota = () => {
+    if (!workspaceId) return;
+    getUploadQuota(workspaceId)
+      .then(setQuota)
+      .catch(() => {
+        // Quota is advisory here; the upload itself still enforces it (429).
+      });
+  };
+
+  useEffect(() => {
+    loadQuota();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
 
   const handleFiles = async (files: File[]) => {
     if (!workspaceId || files.length === 0) {
+      return;
+    }
+    // Blocked before sending so a too-big selection never burns a request.
+    const blockReason = uploadQuotaBlockReason(quota, files.length);
+    if (blockReason) {
+      setError(blockReason);
       return;
     }
     setUploading(true);
@@ -133,9 +166,11 @@ function ExcelUploadButton({
       setUploadedLabel(files.length === 1 ? files[0].name : `${files.length} files`);
       onUploadComplete(batch);
     } catch (err) {
-      setError(err instanceof ApiError ? String(err.detail) : "Upload failed. Please try again.");
+      setError(uploadErrorMessage(err));
+      onUploadFailed();
     }
     setUploading(false);
+    loadQuota();
   };
 
   return (
@@ -144,6 +179,7 @@ function ExcelUploadButton({
         <input
           accept=".csv,.xlsx"
           className="hidden"
+          disabled={limitReached}
           multiple
           onChange={(e) => {
             const files = Array.from(e.target.files ?? []);
@@ -157,9 +193,9 @@ function ExcelUploadButton({
         />
         <button
           className="flex h-[36px] items-center gap-[7px] rounded-[8px] border border-[#e2e8f0] bg-white px-[16px] font-['Inter'] text-[12px] font-bold text-[#0f1f6f] disabled:opacity-50"
-          disabled={!ready || uploading}
+          disabled={!ready || uploading || limitReached}
           onClick={() => fileInputRef.current?.click()}
-          title="Upload one or more prospect CSV/XLSX files"
+          title={limitReached ? "Upload limit reached" : "Upload one or more prospect CSV/XLSX files"}
           type="button"
         >
           <img alt="" className="size-[14px]" src={icons.upload} />
@@ -170,6 +206,14 @@ function ExcelUploadButton({
       {!error && uploadedLabel && (
         <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#16a34a]">
           Uploaded {uploadedLabel} — research &amp; scoring in the background
+        </p>
+      )}
+      {quota && !limitReached && (
+        <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#64748b]">{describeUploadQuota(quota)}</p>
+      )}
+      {limitReached && !error && (
+        <p className="m-0 font-['Inter'] text-[11px] font-medium text-[#f97316]">
+          {uploadQuotaBlockReason(quota, 1)}
         </p>
       )}
     </div>
@@ -1129,6 +1173,7 @@ export function SettingsIcpDataPage() {
                   <div className="flex flex-wrap items-end gap-[10px]">
                     <ExcelUploadButton
                       onUploadComplete={handleUploadComplete}
+                      onUploadFailed={() => setUploadResult("idle")}
                       onUploadStart={() => setUploadResult("uploading")}
                       workspaceId={workspaceId}
                     />

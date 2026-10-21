@@ -1,5 +1,15 @@
 /* Mirrors backend/app/routes/scores.py - evidence-based pipeline (no gates/D1-D7/ICP) */
 import { apiGet, apiPost, workspaceQuery } from "./client";
+import type { CompetitorStrength } from "./companies";
+
+/* The competitor_identified event behind competitor_strength - penalty is the
+ * points it took off the lead score. */
+export type CompetitorDetailOut = {
+  penalty: number;
+  title: string | null;
+  summary: string | null;
+  source_url: string | null;
+};
 
 export type EvidenceSource = {
   url: string | null;
@@ -61,6 +71,8 @@ export type ScoreDetailOut = {
   evidence_summary: unknown;
   scoring_warnings: unknown;
   scored_at: string | null;
+  competitor_strength: CompetitorStrength | null;
+  competitor_detail: CompetitorDetailOut | null;
   events: BuyingEventOut[];
 };
 
@@ -87,6 +99,7 @@ export type RankedLeadScoreOut = {
   expected_deal_max_usd: number | null;
   expected_deal_value_usd: number | null;
   scored_at: string | null;
+  competitor_strength: CompetitorStrength | null;
   primary_contact_email: string | null;
   primary_contact_name: string | null;
 };

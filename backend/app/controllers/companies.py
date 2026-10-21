@@ -1,18 +1,22 @@
 from uuid import UUID
 
-from fastapi import Depends, HTTPException
+from fastapi import BackgroundTasks, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.db import get_db
-from app.models import Company, CompanyImportBatch, Organisation
-from app.services import company_directory, excel_pipeline, llm_client, signal_directory
+from app.models import Company, CompanyImportBatch, Organisation, Workspace
+from app.services import company_directory, company_refresh_service, excel_pipeline, llm_client, signal_directory
 from app.services.offering_profile_service import profile_for_scoring
 from app.schemas.company import (
     CompanyInsightOut,
     CompanyListItemOut,
     CompanyListOut,
+    CompanyRefreshCooldownOut,
+    CompanyRefreshIn,
+    CompanyRefreshOut,
     CompanyStatsOut,
     SectorCountOut,
     CountryLeadScoreOut,
@@ -60,10 +64,48 @@ async def list_companies(
             best_offering=ls.best_offering if ls else None,
             why_now=ls.why_now if ls else None,
             expected_deal_value_usd=_num(ls.expected_deal_value_usd) if ls else None,
+            competitor_strength=ls.competitor_strength if ls else None,
+            refresh_status=company.refresh_status,
+            refresh_requested_at=company.refresh_requested_at,
+            refresh_available_at=company.refresh_available_at,
         )
         for company, ls in rows
     ]
     return CompanyListOut(items=items, total=total, page=page, page_size=page_size)
+
+
+async def refresh(
+    organisation_id: UUID,
+    workspace_id: UUID,
+    payload: CompanyRefreshIn,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> CompanyRefreshOut:
+    """Re-research + re-score only the selected companies ("Refresh
+    selected"). Capped per request because each company costs a web search
+    and several LLM calls; returns at once and runs in the background."""
+    ids = list(dict.fromkeys(payload.company_ids))
+    print(f"[REFRESH] POST /companies/refresh - {len(ids)} compan{'y' if len(ids) == 1 else 'ies'} selected")
+    if not ids:
+        raise HTTPException(status_code=422, detail="Select at least one company to refresh.")
+    limit = get_settings().max_refresh_selection
+    if len(ids) > limit:
+        raise HTTPException(status_code=422, detail=f"You can refresh at most {limit} companies at a time.")
+    workspace = await db.get(Workspace, workspace_id)
+    if workspace is None or workspace.organisation_id != organisation_id:
+        raise HTTPException(status_code=404, detail="workspace not found")
+
+    accepted, skipped, cooling_down = await company_refresh_service.queue_refresh(db, workspace_id, ids)
+    if accepted:
+        background_tasks.add_task(
+            company_refresh_service.refresh_companies_in_background, organisation_id, workspace_id, accepted
+        )
+    return CompanyRefreshOut(
+        accepted=accepted,
+        skipped=skipped,
+        cooling_down=[CompanyRefreshCooldownOut(company_id=cid, available_at=at) for cid, at in cooling_down.items()],
+        cooldown_hours=get_settings().refresh_cooldown_hours,
+    )
 
 
 async def stats(

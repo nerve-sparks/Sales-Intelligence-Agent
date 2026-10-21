@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  RefreshCw,
   Search,
   Settings,
   ShieldCheck,
@@ -13,9 +14,21 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 import { Sidebar } from "../../components/layout/Sidebar";
 import { TopBar } from "../../components/layout/TopBar";
+import { Checkbox } from "../../components/ui/Checkbox";
 import { FLAT_LINE, Sparkline } from "../../components/ui/dataviz";
 import { cn } from "../../lib/cn";
-import { exportCompanies, getCompanyStats, listCompanies, type CompanyStatsOut } from "../../api/companies";
+import {
+  COMPETITOR_PENALTY,
+  MAX_REFRESH_SELECTION,
+  exportCompanies,
+  getCompanyStats,
+  listCompanies,
+  formatRefreshAvailable,
+  refreshCompanies,
+  type CompanyStatsOut,
+  type CompetitorStrength,
+  type RefreshStatus,
+} from "../../api/companies";
 import { ApiError } from "../../api/client";
 import { listImportBatches, type ImportBatchOut } from "../../api/icp";
 import { getOrganisationId, getWorkspaceId } from "../../lib/session";
@@ -217,6 +230,10 @@ type Enterprise = {
   dealValue: string;
   revenue: string;
   employees: string;
+  competitorStrength: CompetitorStrength | null;
+  refreshStatus: RefreshStatus | null;
+  // Set while a recently refreshed company is in its 48h cooldown.
+  refreshAvailableAt: string | null;
 };
 
 const LOGO_COLORS = ["#16a34a", "#2563eb", "#7c3aed", "#0d9488", "#ef4444", "#6366f1", "#10b981", "#3b82f6", "#334155", "#f97316"];
@@ -243,6 +260,9 @@ type CompanyLike = {
   best_offering: string | null;
   why_now: string | null;
   expected_deal_value_usd: number | null;
+  competitor_strength: CompetitorStrength | null;
+  refresh_status: RefreshStatus | null;
+  refresh_available_at: string | null;
 };
 
 // Sales-status band -> dot colour (brief section 17).
@@ -292,17 +312,91 @@ function toEnterprise(company: CompanyLike): Enterprise {
     dealValue: formatDealValue(company.expected_deal_value_usd),
     revenue: company.revenue_range ?? "—",
     employees: company.employee_range ?? "—",
+    competitorStrength: company.competitor_strength,
+    refreshStatus: company.refresh_status,
+    refreshAvailableAt: company.refresh_available_at,
   };
 }
 
-const cols =
-  "grid-cols-[minmax(0,1.6fr)_1.1fr_1fr_0.9fr_minmax(0,1.6fr)_1fr]";
+function isRefreshing(status: RefreshStatus | null): boolean {
+  return status === "queued" || status === "running";
+}
 
-function EnterpriseTable({ enterprises }: { enterprises: Enterprise[] }) {
+/* A row can be ticked for "Refresh selected" unless it is mid-refresh or
+ * still inside its 48h cooldown after a successful refresh. */
+function canSelectForRefresh(e: Enterprise): boolean {
+  return !isRefreshing(e.refreshStatus) && !e.refreshAvailableAt;
+}
+
+/* Research judged the company sells what the seller sells. It stays in the
+ * list - the badge just explains why its score lost points. */
+function CompetitorBadge({ strength }: { strength: CompetitorStrength }) {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center whitespace-nowrap rounded-[6px] bg-[#fff1e3] px-[8px] py-[3px] text-[11px] font-semibold text-[#f97316]"
+      title={`Research suggests this company sells what you sell (−${COMPETITOR_PENALTY[strength]} points)`}
+    >
+      Competitor · {strength.charAt(0).toUpperCase() + strength.slice(1)}
+    </span>
+  );
+}
+
+function RefreshChip({ status, availableAt }: { status: RefreshStatus | null; availableAt: string | null }) {
+  if (isRefreshing(status)) {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-[4px] whitespace-nowrap rounded-[6px] bg-[#eef1ff] px-[8px] py-[3px] text-[11px] font-semibold text-[#5b3df5]">
+        <RefreshCw className="size-[11px] animate-spin" />
+        Refreshing…
+      </span>
+    );
+  }
+  if (status === "failed") {
+    return <span className="whitespace-nowrap text-[11px] font-medium text-[#94a3b8]">Refresh failed</span>;
+  }
+  if (availableAt) {
+    return (
+      <span
+        className="whitespace-nowrap text-[11px] font-medium text-[#94a3b8]"
+        title="Each company can be refreshed once every 48 hours"
+      >
+        Refreshed · again {formatRefreshAvailable(availableAt)}
+      </span>
+    );
+  }
+  return null;
+}
+
+const cols =
+  "grid-cols-[24px_minmax(0,1.6fr)_1.1fr_1fr_0.9fr_minmax(0,1.6fr)_1fr]";
+
+function EnterpriseTable({
+  enterprises,
+  selectedIds,
+  onToggle,
+  onToggleAll,
+}: {
+  enterprises: Enterprise[];
+  selectedIds: Set<string>;
+  onToggle: (companyId: string) => void;
+  onToggleAll: () => void;
+}) {
+  const selectable = enterprises.filter(canSelectForRefresh);
+  const allSelected = selectable.length > 0 && selectable.every((e) => selectedIds.has(e.companyId));
+
   return (
     <div className="overflow-x-auto">
       <div className="min-w-[960px]">
         <div className={cn("grid items-center gap-[12px] border-b border-[#eef1f6] px-[8px] pb-[12px] text-[12px] font-semibold text-[#94a3b8]", cols)}>
+          {/* Checkbox's label is visible text, so it stays empty here and the
+              accessible name comes from aria-label instead. */}
+          <Checkbox
+            aria-label="Select all companies on this page"
+            checked={allSelected}
+            disabled={selectable.length === 0}
+            id="enterprise-select-all"
+            label=""
+            onChange={onToggleAll}
+          />
           <span>Company</span>
           <span className="flex items-center gap-[4px]">Lead Score <ChevronDown className="size-[13px]" /></span>
           <span>Sales Status</span>
@@ -327,6 +421,25 @@ function EnterpriseTable({ enterprises }: { enterprises: Enterprise[] }) {
                 role="button"
                 tabIndex={0}
               >
+                {/* stopPropagation: ticking the box must not open the company. */}
+                <div
+                  onClick={(ev) => ev.stopPropagation()}
+                  title={
+                    e.refreshAvailableAt
+                      ? `Refreshed recently - can be refreshed again ${formatRefreshAvailable(e.refreshAvailableAt)}`
+                      : undefined
+                  }
+                >
+                  <Checkbox
+                    aria-label={`Select ${e.name}`}
+                    checked={selectedIds.has(e.companyId)}
+                    disabled={!canSelectForRefresh(e)}
+                    id={`enterprise-select-${e.companyId}`}
+                    label=""
+                    onChange={() => onToggle(e.companyId)}
+                  />
+                </div>
+
                 <div className="flex min-w-0 items-center gap-[10px]">
                   <span className="flex size-[34px] shrink-0 items-center justify-center rounded-[9px] text-[11px] font-bold text-white" style={{ backgroundColor: e.bg }}>
                     {e.logo}
@@ -344,10 +457,14 @@ function EnterpriseTable({ enterprises }: { enterprises: Enterprise[] }) {
                   </span>
                 </div>
 
-                <span className="flex items-center gap-[6px] text-[13px] font-medium text-[#334155]">
-                  <span className="size-[7px] rounded-full" style={{ backgroundColor: e.statusColor }} />
-                  {e.salesStatus}
-                </span>
+                <div className="flex flex-wrap items-center gap-[6px]">
+                  <span className="flex items-center gap-[6px] text-[13px] font-medium text-[#334155]">
+                    <span className="size-[7px] rounded-full" style={{ backgroundColor: e.statusColor }} />
+                    {e.salesStatus}
+                  </span>
+                  {e.competitorStrength && <CompetitorBadge strength={e.competitorStrength} />}
+                  <RefreshChip availableAt={e.refreshAvailableAt} status={e.refreshStatus} />
+                </div>
 
                 <span className="text-[13px] text-[#475569]">{e.confidence}</span>
 
@@ -485,10 +602,19 @@ export function EnterpriseListPage() {
   const [total, setTotal] = useState(0);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  // "Refresh selected" - ids ticked on the CURRENT page only.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<{ text: string; error: boolean } | null>(null);
 
   const handleBatchChange = (batchId: string) => setSelectedBatchId(batchId);
 
   const anyScoring = batches.some((b) => b.scoring_status === "pending");
+  // A queued/running per-company refresh re-scores that row in the
+  // background, so poll the same way a scoring batch does.
+  const anyRefreshing = enterprises.some((e) => isRefreshing(e.refreshStatus));
+  const shouldPoll = anyScoring || anyRefreshing;
+  const overRefreshLimit = selectedIds.size > MAX_REFRESH_SELECTION;
 
   // Debounce the search box so a keystroke doesn't fire a request each time.
   useEffect(() => {
@@ -525,20 +651,26 @@ export function EnterpriseListPage() {
           // No backend/org yet - keep the zero stat cards.
         });
     load();
-    if (!anyScoring) return;
+    if (!shouldPoll) return;
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
-  }, [anyScoring]);
+  }, [shouldPoll]);
 
   // Reset to page 1 whenever the filter or search changes.
   useEffect(() => {
     setPage(1);
   }, [selectedBatchId, search]);
 
+  // Selection is per page - drop it when the rows it refers to go away.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [selectedBatchId, search, page]);
+
   // Every scored company, paginated + searched server-side, ordered by lead
   // score. selectedBatchId narrows to one upload's companies. No ICP filter -
   // every company appears (brief section 26). Poll while a batch is scoring
-  // so ranks update as re-research against the current Offering Profile lands.
+  // or a visible row is refreshing, so ranks update as re-research against
+  // the current Offering Profile lands.
   useEffect(() => {
     const organisationId = getOrganisationId();
     if (!organisationId) {
@@ -557,10 +689,60 @@ export function EnterpriseListPage() {
         })
         .catch(() => setEnterprises([]));
     load();
-    if (!anyScoring) return;
+    if (!shouldPoll) return;
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
-  }, [selectedBatchId, page, search, anyScoring]);
+  }, [selectedBatchId, page, search, shouldPoll]);
+
+  const toggleSelected = (companyId: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(companyId)) next.delete(companyId);
+      else next.add(companyId);
+      return next;
+    });
+
+  // Ticks every row on this page, or clears them if they're all ticked already.
+  const toggleAllSelected = () =>
+    setSelectedIds((prev) =>
+      enterprises.filter(canSelectForRefresh).every((e) => prev.has(e.companyId))
+        ? new Set()
+        : new Set(enterprises.filter(canSelectForRefresh).map((e) => e.companyId)),
+    );
+
+  // Re-research + re-score just the ticked companies in the background.
+  const handleRefresh = async () => {
+    const organisationId = getOrganisationId();
+    if (!organisationId || selectedIds.size === 0 || overRefreshLimit) {
+      return;
+    }
+    setRefreshing(true);
+    setRefreshMessage(null);
+    try {
+      const res = await refreshCompanies(organisationId, [...selectedIds]);
+      const accepted = new Set(res.accepted);
+      const skipped = res.skipped.length ? ` (${res.skipped.length} already refreshing or unavailable)` : "";
+      const cooling = res.cooling_down.length
+        ? ` ${res.cooling_down.length} skipped - refreshed in the last ${res.cooldown_hours}h.`
+        : "";
+      setRefreshMessage({
+        text: `Refreshing ${accepted.size} ${accepted.size === 1 ? "company" : "companies"}…${skipped}${cooling}`,
+        error: false,
+      });
+      setSelectedIds(new Set());
+      // Mark the accepted rows queued right away - that flips anyRefreshing,
+      // which starts the list poll that picks up their real status.
+      setEnterprises((prev) =>
+        prev.map((e) => (accepted.has(e.companyId) ? { ...e, refreshStatus: "queued" } : e)),
+      );
+    } catch (err) {
+      setRefreshMessage({
+        text: err instanceof ApiError ? err.message : "Refresh failed. Please try again.",
+        error: true,
+      });
+    }
+    setRefreshing(false);
+  };
 
   // Exports the companies currently shown, with evidence-based score columns.
   const handleExport = async () => {
@@ -607,6 +789,15 @@ export function EnterpriseListPage() {
               <div className="flex flex-wrap items-center gap-[10px]">
                 <button
                   className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155] disabled:opacity-60"
+                  disabled={refreshing || selectedIds.size === 0 || overRefreshLimit}
+                  onClick={handleRefresh}
+                  type="button"
+                >
+                  <RefreshCw className={cn("size-[16px] text-[#64748b]", refreshing && "animate-spin")} />
+                  {`Refresh selected${selectedIds.size ? ` (${selectedIds.size})` : ""}`}
+                </button>
+                <button
+                  className="flex items-center gap-[8px] rounded-[10px] border border-[#e9edf5] bg-white px-[16px] py-[10px] text-[14px] font-semibold text-[#334155] disabled:opacity-60"
                   disabled={exporting}
                   onClick={handleExport}
                   type="button"
@@ -615,6 +806,14 @@ export function EnterpriseListPage() {
                   {exporting ? "Exporting..." : "Export"}
                 </button>
               </div>
+              {overRefreshLimit && (
+                <p className="m-0 text-[12px] font-medium text-[#64748b]">Max {MAX_REFRESH_SELECTION} at a time</p>
+              )}
+              {refreshMessage && (
+                <p className={cn("m-0 text-[12px] font-medium", refreshMessage.error ? "text-[#ef4444]" : "text-[#64748b]")}>
+                  {refreshMessage.text}
+                </p>
+              )}
               {exportError && <p className="m-0 text-[12px] font-medium text-[#ef4444]">{exportError}</p>}
             </div>
           </div>
@@ -637,7 +836,12 @@ export function EnterpriseListPage() {
             </div>
 
             <div className="mt-[16px]">
-              <EnterpriseTable enterprises={enterprises} />
+              <EnterpriseTable
+                enterprises={enterprises}
+                onToggle={toggleSelected}
+                onToggleAll={toggleAllSelected}
+                selectedIds={selectedIds}
+              />
             </div>
 
             <div className="mt-[18px] border-t border-[#f1f5f9] pt-[18px]">

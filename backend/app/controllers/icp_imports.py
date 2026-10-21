@@ -6,11 +6,12 @@ from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import require_workspace_member
 from app.core.db import get_db
-from app.models import IcpImportBatch, Workspace
-from app.schemas.icp import ImportBatchOut
+from app.models import IcpImportBatch, User, Workspace
+from app.schemas.icp import ImportBatchOut, UploadQuotaOut
 from app.schemas.job import JobItemOut, JobItemsOut, JobStatusOut, RetryFailedOut
-from app.services import company_batch_status, excel_pipeline, table_mapper
+from app.services import company_batch_status, excel_pipeline, table_mapper, upload_quota
 from app.services.excel_pipeline import list_import_batches
 from app.services.zoominfo_mapper import read_rows
 
@@ -97,9 +98,41 @@ async def upload_prospects(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     files: list[UploadFile] = File(...),
+    user: User = Depends(require_workspace_member),
 ) -> ImportBatchOut:
-    """Active prospect-data upload (brief section 7): no icp_id required."""
+    """Active prospect-data upload (brief section 7): no icp_id required.
+
+    Limited per login account (upload_quota: 2 files per 24h). The quota is
+    reserved in the same transaction as the upload, BEFORE parsing, so an
+    upload that then fails costs no quota."""
+    try:
+        await upload_quota.reserve(db, user.user_id, workspace_id, [f.filename or "" for f in files])
+    except upload_quota.UploadLimitExceeded as exc:
+        raise HTTPException(status_code=429, detail=_quota_detail(exc.quota, str(exc))) from exc
     return await _ingest_and_schedule(workspace_id, background_tasks, db, files)
+
+
+def _quota_detail(quota: upload_quota.Quota, message: str | None = None) -> dict:
+    return {
+        "message": message,
+        "limit": quota.limit,
+        "used": quota.used,
+        "remaining": quota.remaining,
+        "window_hours": quota.window_hours,
+        "next_available_at": quota.next_available_at.isoformat() if quota.next_available_at else None,
+    }
+
+
+async def get_upload_quota(
+    workspace_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_workspace_member),
+) -> UploadQuotaOut:
+    """How many Excel uploads this login account has left in the window."""
+    del workspace_id
+    quota = await upload_quota.quota_for(db, user.user_id)
+    print(f"[UPLOAD-QUOTA] Quota check for user {user.user_id}: {quota.remaining} of {quota.limit} upload(s) left")
+    return UploadQuotaOut(**_quota_detail(quota))
 
 
 async def import_history(workspace_id: UUID, db: AsyncSession = Depends(get_db)):

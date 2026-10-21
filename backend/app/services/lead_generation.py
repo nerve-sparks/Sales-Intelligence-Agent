@@ -46,6 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Company, IcpProfile, Organisation
 from app.services import (
     company_enrichment,
+    competitor_matching,
     llm_client,
     offering_profile_service,
     table_mapper,
@@ -67,6 +68,10 @@ EXCLUDE_NAME_LIMIT = 200
 # Hard cap on names echoed into a single prompt, covering this run's candidates
 # plus the owned-name steer.
 PROMPT_EXCLUDE_MAX = 300
+
+# Competitor names echoed into the prompt (Organisation.competitors holds at
+# most 15 today; this only guards against a much larger list).
+PROMPT_COMPETITOR_MAX = 50
 
 # Verification is one search per candidate, so this is the real cost driver.
 # Kept at/below the research stage's default concurrency to avoid being the
@@ -117,6 +122,7 @@ class GenerationResult:
     candidates_proposed: int = 0
     rejected_unresolvable: int = 0
     rejected_duplicate: int = 0
+    rejected_competitor: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -149,7 +155,17 @@ def _icp_summary(icp: IcpProfile) -> str:
     return "\n".join(lines) or "No specific constraints - any company that fits the seller's offering."
 
 
-def _build_prompt(icp: IcpProfile, offering_summary: str, count: int, exclude: list[str]) -> str:
+def _build_prompt(
+    icp: IcpProfile, offering_summary: str, count: int, exclude: list[str], competitors=()
+) -> str:
+    competitor_block = ""
+    if competitors:
+        # Its own block, ahead of the "already known" list, so truncation of
+        # that list can never drop a competitor - and so the model is told
+        # WHY (they compete), not that they are merely known.
+        shown = ", ".join(list(competitors)[:PROMPT_COMPETITOR_MAX])
+        competitor_block = f"\nThese are the seller's competitors - NEVER propose them:\n{shown}\n"
+
     exclusions = ""
     if exclude:
         # Cap the echoed list: the point is to steer away from repeats, and a
@@ -164,6 +180,7 @@ def _build_prompt(icp: IcpProfile, offering_summary: str, count: int, exclude: l
         "You are helping a B2B sales team find companies to approach.\n\n"
         f"What the seller offers:\n{offering_summary}\n\n"
         f"Their ideal customer profile:\n{_icp_summary(icp)}\n"
+        f"{competitor_block}"
         f"{exclusions}\n"
         f"Name {count} REAL companies that fit this profile and would plausibly buy what the "
         "seller offers.\n\n"
@@ -218,6 +235,7 @@ async def propose_candidates(
     target: int,
     trace_user_id: str | None = None,
     exclude_names: list[str] | None = None,
+    competitor_names: list[str] | None = None,
 ) -> tuple[list[Candidate], list[str]]:
     """Unverified LLM candidates for one ICP. Persists nothing.
 
@@ -252,7 +270,7 @@ async def propose_candidates(
         # stalls the loop. Owned names are the steer, not the correctness guard
         # - drop_existing_companies still backstops a model that ignores them.
         exclusions = [c.name for c in seen.values()] + owned
-        prompt = _build_prompt(icp, offering_summary, ask, exclusions)
+        prompt = _build_prompt(icp, offering_summary, ask, exclusions, competitor_names or ())
         try:
             raw = await llm_client.complete(
                 [{"role": "user", "content": prompt}],
@@ -448,6 +466,22 @@ async def drop_existing_companies(
     return kept, len(leads) - len(kept)
 
 
+def drop_competitors(leads: list, index: competitor_matching.CompetitorIndex) -> tuple[list, int]:
+    """Removes candidates or verified leads that are the tenant's competitors
+    (Organisation.competitors). The prompt already tells the model not to
+    propose them; this is the backstop for a model that ignores it."""
+    if not leads or not index:
+        return list(leads), 0
+    kept = [
+        lead for lead in leads
+        if index.match(lead.name, getattr(lead, "domain", None) or getattr(lead, "domain_guess", None)) is None
+    ]
+    dropped = [lead.name for lead in leads if lead not in kept]
+    if dropped:
+        print(f"[COMPETITOR] Find companies skipped {len(dropped)} competitor(s): {', '.join(dropped)}")
+    return kept, len(leads) - len(kept)
+
+
 # ── orchestration ─────────────────────────────────────────────────────────
 
 
@@ -472,6 +506,8 @@ async def generate_leads(
     # Dedup against THIS workspace's companies (the Offering Profile above is
     # still organisation-level, which is why both ids are needed here).
     owned = await existing_company_names(session, workspace_id, icp)
+    competitors = org.competitors if org is not None else None
+    competitor_index = competitor_matching.build_index(competitors)
 
     candidates, warnings = await propose_candidates(
         icp,
@@ -479,9 +515,14 @@ async def generate_leads(
         target,
         trace_user_id=str(organisation_id),
         exclude_names=owned,
+        competitor_names=competitor_matching.competitor_names(competitors),
     )
     result = GenerationResult(candidates_proposed=len(candidates), warnings=warnings)
+    # Drop obvious competitors BEFORE verification, so no search is paid for them.
+    candidates, early_competitors = drop_competitors(candidates, competitor_index)
     if not candidates:
+        result.rejected_competitor = early_competitors
+        _append_competitor_warning(result)
         return result
 
     verified, rejected = await verify_candidates(candidates)
@@ -489,6 +530,10 @@ async def generate_leads(
 
     kept, duplicates = await drop_existing_companies(session, workspace_id, verified)
     result.rejected_duplicate = duplicates
+
+    # Again on the RESOLVED domain, which the LLM's guess may have missed.
+    kept, late_competitors = drop_competitors(kept, competitor_index)
+    result.rejected_competitor = early_competitors + late_competitors
 
     # Highest-confidence first, so trimming to the target keeps the best
     # matches rather than an arbitrary slice.
@@ -505,7 +550,17 @@ async def generate_leads(
             f"{duplicates} proposed compan{'y' if duplicates == 1 else 'ies'} were already "
             "in your data and were skipped."
         )
+    _append_competitor_warning(result)
     return result
+
+
+def _append_competitor_warning(result: GenerationResult) -> None:
+    n = result.rejected_competitor
+    if n:
+        result.warnings.append(
+            f"{n} proposed compan{'y is' if n == 1 else 'ies are'} your competitor"
+            f"{'' if n == 1 else 's'} and {'was' if n == 1 else 'were'} skipped."
+        )
 
 
 def to_company_rows(leads: list[VerifiedLead]) -> list[dict]:

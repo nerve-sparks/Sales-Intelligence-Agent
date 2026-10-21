@@ -1,9 +1,11 @@
+from app.models.ai_market import AiMarketCompany, AiMarketNews, ScheduledJobRun
 from app.models.buying_event import BuyingEvent
 from app.models.company import Company
 from app.models.company_import_batch import CompanyImportBatch
 from app.models.company_intent import CompanyIntent
 from app.models.company_news import CompanyNews
 from app.models.company_scoop import CompanyScoop
+from app.models.competitor_news import CompetitorNews
 from app.models.decision_maker import PERSONA_VALUES, DecisionMaker
 from app.models.icp_import_batch import IcpImportBatch
 from app.models.icp_profile import IcpProfile
@@ -13,27 +15,33 @@ from app.models.signal import Signal
 from app.models.signal_extraction_check import SignalExtractionCheck
 from app.models.trigger_definition import TriggerDefinition
 from app.models.trigger_event import TriggerEvent
+from app.models.upload_quota_event import UploadQuotaEvent
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.models.workspace_member import WorkspaceMember
 
 __all__ = [
+    "AiMarketCompany",
+    "AiMarketNews",
     "BuyingEvent",
     "Company",
     "CompanyImportBatch",
     "CompanyIntent",
     "CompanyNews",
     "CompanyScoop",
+    "CompetitorNews",
     "DecisionMaker",
     "PERSONA_VALUES",
     "IcpImportBatch",
     "IcpProfile",
     "LeadScore",
     "Organisation",
+    "ScheduledJobRun",
     "Signal",
     "SignalExtractionCheck",
     "TriggerDefinition",
     "TriggerEvent",
+    "UploadQuotaEvent",
     "User",
     "Workspace",
     "WorkspaceMember",

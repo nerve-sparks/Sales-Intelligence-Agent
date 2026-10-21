@@ -77,19 +77,32 @@ async def list_all(
     sector: str | None = None,
     sort: str = "date",
     days: int | None = None,
+    group: str | None = None,
+    recent_days: int | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Signal Feed listing. Every sort is descending (see SORT_KEYS) - an
     unknown value falls back to date rather than erroring, so a stale bookmark
-    still returns a sensible feed."""
+    still returns a sensible feed.
+
+    group / recent_days serve the Dashboard "Latest News" tabs (see
+    scoring_config.NEWS_GROUPS): group picks the tab's event types, and
+    recent_days keeps only the last N days (by article date, else discovery
+    date)."""
     page_size = min(page_size, 100)
     if sort not in buying_event_directory.SORT_KEYS:
         sort = "date"
+    if group is not None and group not in buying_event_directory.NEWS_GROUP_KEYS:
+        raise HTTPException(status_code=422, detail=f"Unknown news group: {group}")
     rows, total = await buying_event_directory.list_events(
         db, workspace_id, page, page_size, category, import_batch_id,
         event_type=event_type, min_score=min_score, sector=sector, sort=sort, days=days,
+        group=group, recent_days=recent_days,
     )
     items = [_with_company(event, company_name) for event, company_name in rows]
+    if group is not None:
+        print(f"[NEWS] Latest News tab '{group}': {len(items)} of {total} prospect item(s) "
+              f"(last {recent_days} days, sort={sort})")
     return SignalListOut(items=items, total=total, page=page, page_size=page_size)
 
 

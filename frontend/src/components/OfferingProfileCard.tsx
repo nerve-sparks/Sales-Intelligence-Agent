@@ -4,6 +4,7 @@ import {
   getOrganisation,
   syncOfferingProfile,
   type OfferingProfile,
+  type OrganisationOut,
 } from "../api/organisations";
 import { getOrganisationId } from "../lib/session";
 import { cn } from "../lib/cn";
@@ -30,6 +31,7 @@ export function OfferingProfileCard() {
   const [status, setStatus] = useState<string | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
+  const [competitors, setCompetitors] = useState<OrganisationOut["competitors"]>(null);
   const [syncing, setSyncing] = useState(false);
 
   const load = () => {
@@ -41,6 +43,7 @@ export function OfferingProfileCard() {
         setStatus(org.offering_profile_status);
         setSyncedAt(org.offering_profile_synced_at);
         setSourceUrl(org.offering_profile_source_url);
+        setCompetitors(org.competitors);
       })
       .catch(() => {});
   };
@@ -64,6 +67,8 @@ export function OfferingProfileCard() {
       const result = await syncOfferingProfile(orgId);
       setProfile(result.profile);
       setStatus(result.status);
+      // The sync response carries the profile only - competitors are
+      // re-identified in the same refresh, so re-read the organisation.
       load();
     } catch {
       /* keep existing view */
@@ -121,6 +126,31 @@ export function OfferingProfileCard() {
           </div>
         </div>
       )}
+
+      {/* Read-only: produced by the AI on refresh, never user-edited. Only
+          keeps these companies out of Find companies and drives competitor
+          news - it never changes a score. */}
+      <div className="mt-[16px] border-t border-[#eef1f6] pt-[14px]">
+        <p className="m-0 text-[12px] font-semibold text-[#94a3b8]">Competitors (AI-identified)</p>
+        <p className="m-0 mt-[2px] text-[12px] text-[#64748b]">
+          Used to keep these companies out of Find companies and to track competitor news. Updated when you refresh the
+          Offering Profile.
+        </p>
+        {competitors && competitors.length > 0 ? (
+          <div className="mt-[8px] flex flex-wrap gap-[6px]">
+            {competitors.map((c) => (
+              <span className="rounded-[6px] bg-[#f1f5f9] px-[8px] py-[3px] text-[12px] text-[#475569]" key={`${c.name}-${c.domain ?? ""}`}>
+                {c.name}
+                {c.domain && <span className="ml-[4px] text-[#94a3b8]">{c.domain}</span>}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="m-0 mt-[8px] text-[12px] text-[#94a3b8]">
+            No competitors identified yet — refresh the Offering Profile.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

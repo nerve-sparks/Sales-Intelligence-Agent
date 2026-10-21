@@ -87,6 +87,25 @@ def negative_penalty(negative_penalties: list[float]) -> float:
     return round(min(cfg.NEGATIVE_PENALTY_CAP, sum(p for p in negative_penalties if p)), 2)
 
 
+def competitor_penalty(competitor_penalties: list[float]) -> float:
+    """A company is one competitor, however many articles say so: only the
+    strongest competitor read counts, capped at COMPETITOR_PENALTY_MAX."""
+    strongest = max((p for p in competitor_penalties if p), default=0.0)
+    return round(min(cfg.COMPETITOR_PENALTY_MAX, strongest), 2)
+
+
+def competitor_strength_for(penalty: float) -> str | None:
+    """Maps a stored competitor penalty back to its strength label (the label
+    itself isn't persisted on buying_event). Picks the strongest level the
+    penalty reaches, so it stays sensible if the scale is retuned later."""
+    if not penalty:
+        return None
+    reached = [(p, s) for s, p in cfg.COMPETITOR_PENALTY_BY_STRENGTH.items() if penalty >= p]
+    if not reached:
+        return min(cfg.COMPETITOR_PENALTY_BY_STRENGTH, key=cfg.COMPETITOR_PENALTY_BY_STRENGTH.get)
+    return max(reached)[1]
+
+
 # --------------------------------------------------------------------------
 # Final Lead Score (brief section 16)
 # --------------------------------------------------------------------------
@@ -296,8 +315,12 @@ async def score_company(session: AsyncSession, company: Company, now: datetime) 
               f"(not rediscovered in latest research)")
 
     positive = [e for e in events if not e.is_negative]
-    negatives = [e for e in events if e.is_negative]
-    print(f"[SCORING]     {len(positive)} positive event(s), {len(negatives)} negative event(s)")
+    # Competitor reads are scored separately (strongest only, capped small);
+    # every other negative keeps its existing additive penalty.
+    competitor_events = [e for e in events if e.is_negative and e.event_type == cfg.COMPETITOR_EVENT_TYPE]
+    negatives = [e for e in events if e.is_negative and e.event_type != cfg.COMPETITOR_EVENT_TYPE]
+    print(f"[SCORING]     {len(positive)} positive event(s), {len(negatives)} negative event(s), "
+          f"{len(competitor_events)} competitor read(s)")
     for e in sorted(positive, key=lambda e: float(e.event_score or 0), reverse=True)[:3]:
         print(f"[SCORING]       top event: [{e.event_type}] score={e.event_score} "
               f"(base={e.base_strength} x rel={e.relevance} x fresh={e.freshness} "
@@ -311,7 +334,8 @@ async def score_company(session: AsyncSession, company: Company, now: datetime) 
             for c in contacts
         ]
     )
-    neg = negative_penalty([float(e.penalty_value or 0) for e in negatives])
+    comp = competitor_penalty([float(e.penalty_value or 0) for e in competitor_events])
+    neg = negative_penalty([float(e.penalty_value or 0) for e in negatives] + [comp])
     score = final_lead_score(be, ca, neg)
     status = sales_status(score)
     print(f"[SCORING] <<< '{company.company_name}': Buying Evidence={be} + Contact Access={ca} "
@@ -377,6 +401,21 @@ async def score_company(session: AsyncSession, company: Company, now: datetime) 
     if company.revenue_usd is None:
         warnings.append("unknown_revenue")
 
+    strongest_competitor = max(competitor_events, key=lambda e: float(e.penalty_value or 0), default=None)
+    competitor_strength = competitor_strength_for(comp) if strongest_competitor is not None else None
+    competitor_detail = None
+    if strongest_competitor is not None:
+        print(f"[COMPETITOR] '{company.company_name}' scored as a {competitor_strength} competitor: "
+              f"-{comp} points (from {len(competitor_events)} competitor read(s))")
+        warnings.append("possible_competitor")
+        sources = strongest_competitor.evidence or []
+        competitor_detail = {
+            "penalty": comp,
+            "title": strongest_competitor.title,
+            "summary": strongest_competitor.summary,
+            "source_url": sources[0].get("url") if sources else None,
+        }
+
     values = dict(
         # New pipeline
         buying_evidence_score=be,
@@ -400,6 +439,8 @@ async def score_company(session: AsyncSession, company: Company, now: datetime) 
         score_version=cfg.SCORE_VERSION,
         score_formula_version=cfg.SCORE_FORMULA_VERSION,
         scoring_warnings=warnings or None,
+        competitor_strength=competitor_strength,
+        competitor_detail=competitor_detail,
         # Legacy gate/D1-D7 columns explicitly NULLed (brief section 20)
         gate_check_1=None, gate_check_2=None, gate_check_3=None, gate_check_4=None, gate_check_5=None,
         gate_passed=None, gate_status=None,

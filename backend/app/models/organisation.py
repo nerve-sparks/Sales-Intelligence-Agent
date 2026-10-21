@@ -52,6 +52,16 @@ class Organisation(Base):
     offering_profile_status: Mapped[str | None] = mapped_column(Text)
     offering_profile_synced_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
 
+    # AI-identified competitors of the tenant ([{name, domain}]), written by the
+    # Offering Profile sync. Kept OUT of offering_profile so the profile's own
+    # shape is unchanged. Used only to keep competitors out of ICP lead
+    # generation and to drive competitor news - it never penalises a score
+    # (the research-time competitor judgement does that).
+    competitors: Mapped[list | None] = mapped_column(JSONB)
+    # Last automatic news refresh (news_scheduler) - also the claim marker that
+    # stops two runs refreshing the same organisation at once.
+    news_refreshed_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
+
     created_at: Mapped[object | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")
     )

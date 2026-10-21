@@ -6,6 +6,11 @@ Crucially, the Offering Profile NEVER excludes a company - it only informs the
 LLM's relevance judgement (xsparks_relevance, best_offering). Every uploaded
 company is still scored regardless.
 
+The same sync also asks for named_competitors, stored separately on
+Organisation.competitors (see pop_named_competitors). That list only keeps
+competitors out of ICP lead generation and feeds competitor news; it never
+changes a score.
+
 sync flow: research the organisation's website via you.com -> ask the LLM for
 structured JSON -> validate -> store on Organisation. If research or the LLM
 is unavailable, fall back to XSPARKS_FALLBACK_PROFILE and record an honest
@@ -21,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Organisation
 from app.services import llm_client, you_client
+from app.services.competitor_matching import NAMED_COMPETITORS_RULE, clean_competitors
 from app.services.organisation_website_intelligence import (
     _normalize_website,
     gather_website_research_text,
@@ -198,6 +204,13 @@ def profile_for_scoring(org: Organisation | None) -> dict:
     return fallback_profile()
 
 
+def pop_named_competitors(profile: dict) -> tuple[dict, list[dict]]:
+    """Splits the LLM's named_competitors out of a raw profile, so they are
+    stored on Organisation.competitors and never inside offering_profile."""
+    profile = dict(profile)
+    return profile, clean_competitors(profile.pop("named_competitors", None))
+
+
 def _build_extraction_prompt(scraped_text: str, company_name: str, source_url: str) -> str:
     template = json.dumps(
         {
@@ -210,6 +223,7 @@ def _build_extraction_prompt(scraped_text: str, company_name: str, source_url: s
             "relevant_technologies": [],
             "alternative_solutions": [{"category": "", "inferred": True}],
             "accelerators": [],
+            "named_competitors": [{"name": "", "domain": ""}],
         },
         indent=2,
     )
@@ -239,6 +253,7 @@ def _build_extraction_prompt(scraped_text: str, company_name: str, source_url: s
         "- alternative_solutions must be solution CATEGORIES (e.g. 'Internal AI development', "
         "'Legacy RPA'), never invented named competitors. Mark each with inferred:true unless "
         "the page explicitly names it.\n"
+        f"- {NAMED_COMPETITORS_RULE}\n"
         "- Do not invent offerings not supported by the content.\n"
         "- buying_signals should describe the kind of company event that would indicate a need "
         "for that offering.\n\n"
@@ -321,13 +336,21 @@ async def sync_offering_profile(session: AsyncSession, organisation_id) -> dict:
     now = datetime.now(timezone.utc)
     extracted = await _research_and_extract(source_url, company_name, organisation_id)
 
+    values: dict = {}
     if extracted is not None:
+        extracted, competitors = pop_named_competitors(extracted)
         extracted = normalize_profile(extracted)
         extracted["source_url"] = source_url
         extracted["synced_at"] = now.isoformat()
         extracted["version"] = OFFERING_PROFILE_VERSION
         profile, status = extracted, STATUS_SYNCED
+        # Each successful sync replaces the list (it is AI-maintained only);
+        # a failed sync leaves the previous list alone.
+        values["competitors"] = competitors
+        print(f"[COMPETITOR] Offering Profile sync identified {len(competitors)} competitor(s): "
+              f"{', '.join(c['name'] for c in competitors) or 'none'}")
     else:
+        print("[COMPETITOR] Offering Profile sync failed - keeping the previous competitor list")
         profile = fallback_profile()
         status = STATUS_SYNC_FAILED
 
@@ -339,6 +362,7 @@ async def sync_offering_profile(session: AsyncSession, organisation_id) -> dict:
             offering_profile_source_url=source_url,
             offering_profile_status=status,
             offering_profile_synced_at=now if status == STATUS_SYNCED else None,
+            **values,
         )
     )
     await session.commit()
@@ -353,7 +377,10 @@ async def seed_offering_profile(
 ) -> dict:
     """Apply a profile already extracted during onboarding (no second LLM call)."""
     now = datetime.now(timezone.utc)
-    seeded = normalize_profile(json.loads(json.dumps(profile)))
+    seeded, competitors = pop_named_competitors(json.loads(json.dumps(profile)))
+    print(f"[COMPETITOR] Onboarding seed identified {len(competitors)} competitor(s): "
+          f"{', '.join(c['name'] for c in competitors) or 'none'}")
+    seeded = normalize_profile(seeded)
     seeded["source_url"] = source_url
     seeded["synced_at"] = now.isoformat()
     seeded["version"] = OFFERING_PROFILE_VERSION
@@ -365,6 +392,7 @@ async def seed_offering_profile(
             offering_profile_source_url=source_url,
             offering_profile_status=STATUS_SYNCED,
             offering_profile_synced_at=now,
+            competitors=competitors,
         )
     )
     await session.commit()
