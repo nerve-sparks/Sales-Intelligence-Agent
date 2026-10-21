@@ -13,10 +13,10 @@ import {
   getJobStatus,
   listIcps,
   updateIcp,
+  type IcpCompaniesOut,
   type IcpCreate,
   type IcpOptionsOut,
   type IcpOut,
-  type ImportBatchOut,
   type JobStatusOut,
 } from "../../api/icp";
 import { getWorkspaceId } from "../../lib/session";
@@ -368,10 +368,11 @@ const TARGET_OPTIONS = [10, 25, 50, 100];
 
 /* "Find companies" for one ICP.
  *
- * The run itself is slow and inherently uncertain - one LLM pass plus one
- * verification search per candidate - so the button stays busy until the
- * verified companies exist. After that the batch behaves exactly like an
- * upload: the same job polling, the same retry/cancel, the same export. */
+ * Each ICP keeps ONE saved company list per set of criteria: running it again
+ * returns the same companies instantly, and only a larger count searches for
+ * the missing ones. Searching is slow and uncertain - one LLM pass plus one
+ * verification search per candidate - so the button stays busy until the new
+ * companies exist; they are then researched like an upload (same job polling). */
 function GeneratePanel({
   icp,
   workspaceId,
@@ -385,8 +386,16 @@ function GeneratePanel({
   const [target, setTarget] = useState(25);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [batch, setBatch] = useState<ImportBatchOut | null>(null);
+  const [result, setResult] = useState<IcpCompaniesOut | null>(null);
   const [job, setJob] = useState<JobStatusOut | null>(null);
+  const batch = result?.new_batch ?? null;
+  const saved = icp.saved_company_count ?? 0;
+  const runLabel =
+    target <= saved
+      ? `Show ${target} saved companies`
+      : saved > 0
+        ? `Find ${target - saved} more (${saved} saved)`
+        : `Find ${target} companies`;
 
   // Research + scoring continue server-side after the response, so poll the
   // existing job endpoint until it settles rather than leaving the count
@@ -425,8 +434,8 @@ function GeneratePanel({
     setError(null);
     setJob(null);
     try {
-      const created = await generateLeads(workspaceId, icp.icp_id, target);
-      setBatch(created);
+      const out = await generateLeads(workspaceId, icp.icp_id, target);
+      setResult(out);
       onGenerated();
     } catch (err) {
       setError(
@@ -440,19 +449,29 @@ function GeneratePanel({
 
   return (
     <div className="mt-[15px] border-t border-[#f1f5f9] pt-[14px]">
-      {!open && !batch ? (
-        <button
-          className="flex h-[34px] items-center gap-[7px] rounded-[8px] border border-[#e2e8f0] bg-white px-[14px] font-['Inter'] text-[12px] font-bold text-[#4f46e5] transition hover:bg-[#f8fafc] disabled:opacity-50"
-          disabled={!workspaceId}
-          onClick={() => setOpen(true)}
-          type="button"
-        >
-          <Sparkles className="size-[14px]" strokeWidth={2} />
-          Find companies
-        </button>
+      {!open && !result ? (
+        <div className="flex flex-wrap items-center gap-[12px]">
+          <button
+            className="flex h-[34px] items-center gap-[7px] rounded-[8px] border border-[#e2e8f0] bg-white px-[14px] font-['Inter'] text-[12px] font-bold text-[#4f46e5] transition hover:bg-[#f8fafc] disabled:opacity-50"
+            disabled={!workspaceId}
+            onClick={() => setOpen(true)}
+            type="button"
+          >
+            <Sparkles className="size-[14px]" strokeWidth={2} />
+            {saved > 0 ? "Show companies" : "Find companies"}
+          </button>
+          {saved > 0 && (
+            <a
+              className="font-['Inter'] text-[12px] font-semibold text-[#64748b] no-underline hover:text-[#4f46e5]"
+              href={`/enterprise-list?icp_id=${icp.icp_id}`}
+            >
+              Saved list: {saved} compan{saved === 1 ? "y" : "ies"} →
+            </a>
+          )}
+        </div>
       ) : null}
 
-      {open && !batch && (
+      {open && !result && (
         <div className="flex flex-col gap-[10px]">
           <div className="flex flex-wrap items-center gap-[8px]">
             <span className="font-['Inter'] text-[12px] font-semibold text-[#334155]">
@@ -476,8 +495,10 @@ function GeneratePanel({
             ))}
           </div>
           <p className="m-0 font-['Inter'] text-[11px] leading-[16px] text-[#94a3b8]">
-            Each candidate is checked against live web search before it is saved, so this takes a
-            minute and usually returns fewer than requested. Companies found this way have no
+            This ICP keeps one saved list: running it again shows the same companies, and asking for
+            more only searches for the extra ones. Editing the ICP's criteria starts a fresh list.
+            New candidates are checked against live web search before they are saved, so a search
+            takes a minute and can return fewer than requested. Companies found this way have no
             contacts yet, which caps their Lead Score below companies you upload.
           </p>
           <div className="flex items-center gap-[8px]">
@@ -488,7 +509,7 @@ function GeneratePanel({
               type="button"
             >
               <Sparkles className="size-[14px]" strokeWidth={2} />
-              {running ? "Finding companies…" : `Find ${target} companies`}
+              {running ? "Finding companies…" : runLabel}
             </button>
             {!running && (
               <button
@@ -510,35 +531,57 @@ function GeneratePanel({
         <p className="m-0 mt-[8px] font-['Inter'] text-[11px] font-medium text-[#ef4444]">{error}</p>
       )}
 
-      {batch && (
+      {result && (
         <div className="flex flex-col gap-[6px]">
           <p className="m-0 font-['Inter'] text-[12px] font-semibold text-[#16a34a]">
-            Found {batch.companies_ingested} verified compan
-            {batch.companies_ingested === 1 ? "y" : "ies"}.
+            {batch
+              ? `Found ${batch.companies_ingested} new verified compan${batch.companies_ingested === 1 ? "y" : "ies"} · ${result.total_saved} saved for this ICP.`
+              : `Showing ${result.companies.length} of your ${result.total_saved} saved compan${result.total_saved === 1 ? "y" : "ies"} for this ICP.`}
           </p>
-          <p className="m-0 font-['Inter'] text-[11px] text-[#64748b]">
-            {settled
-              ? "Research and scoring finished — see them in the Enterprise List."
-              : `Researching and scoring… ${job?.progress_percentage ?? 0}%`}
-          </p>
-          {batch.processing_warnings?.length ? (
+          {batch && (
+            <p className="m-0 font-['Inter'] text-[11px] text-[#64748b]">
+              {settled
+                ? "Research and scoring finished — see them in the Enterprise List."
+                : `Researching and scoring the new ones… ${job?.progress_percentage ?? 0}%`}
+            </p>
+          )}
+          {result.warnings.length ? (
             <ul className="m-0 flex flex-col gap-[2px] pl-[16px] font-['Inter'] text-[11px] text-[#94a3b8]">
-              {batch.processing_warnings.map((warning) => (
+              {result.warnings.map((warning) => (
                 <li key={warning}>{warning}</li>
               ))}
             </ul>
           ) : null}
+          {result.companies.length > 0 && (
+            <ul className="m-0 mt-[4px] flex max-h-[220px] list-none flex-col divide-y divide-[#f1f5f9] overflow-y-auto rounded-[8px] border border-[#eef1f6] p-0">
+              {result.companies.map((company) => (
+                <li className="flex items-center justify-between gap-[10px] px-[10px] py-[7px]" key={company.company_id}>
+                  <a
+                    className="min-w-0 truncate font-['Inter'] text-[12px] font-semibold text-[#0f172a] no-underline hover:text-[#4f46e5]"
+                    href={`/enterprise-detail?id=${company.company_id}`}
+                  >
+                    {company.company_name}
+                  </a>
+                  <span className="shrink-0 font-['Inter'] text-[11px] text-[#94a3b8]">
+                    {company.lead_score !== null
+                      ? `${Math.round(company.lead_score)} · ${company.sales_status ?? "—"}`
+                      : "Scoring…"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="mt-[2px] flex items-center gap-[10px]">
             <a
               className="font-['Inter'] text-[12px] font-bold text-[#4f46e5] no-underline"
-              href={`/enterprise-list?import_batch_id=${batch.import_batch_id}`}
+              href={`/enterprise-list?icp_id=${icp.icp_id}`}
             >
               View these companies →
             </a>
             <button
               className="font-['Inter'] text-[12px] font-semibold text-[#64748b]"
               onClick={() => {
-                setBatch(null);
+                setResult(null);
                 setJob(null);
                 setOpen(false);
               }}

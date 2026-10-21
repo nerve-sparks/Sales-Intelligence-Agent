@@ -276,6 +276,10 @@ async def propose_candidates(
                 [{"role": "user", "content": prompt}],
                 generation_name="generate-icp-leads",
                 trace_user_id=trace_user_id,
+                # Same criteria -> as close to the same companies as the
+                # provider allows (the saved list does the rest; see
+                # controllers/icp.generate).
+                temperature=0,
             )
         except Exception as exc:
             warnings.append(f"Candidate generation call failed: {type(exc).__name__}: {exc}")

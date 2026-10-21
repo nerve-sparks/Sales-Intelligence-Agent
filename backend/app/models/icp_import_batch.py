@@ -35,6 +35,7 @@ class IcpImportBatch(Base):
     __table_args__ = (
         CheckConstraint("source IN ('upload', 'generated')", name="icp_import_batch_source_check"),
         Index("idx_icp_import_batch_icp_id", "icp_id"),
+        Index("idx_icp_import_batch_icp_criteria", "icp_id", "criteria_hash"),
         Index("idx_icp_import_batch_workspace_id", "workspace_id"),
     )
 
@@ -57,6 +58,11 @@ class IcpImportBatch(Base):
     # capped lower than an uploaded company's - the label is what stops that
     # structural difference reading as "worse prospects".
     source: Mapped[str] = mapped_column(Text, nullable=False, server_default="upload")
+    # For a generated batch: icp_service.criteria_fingerprint of the ICP's
+    # criteria when it ran. Batches whose hash matches the ICP's CURRENT
+    # criteria form that ICP's saved company list; editing the criteria starts
+    # a fresh one. NULL for uploads (and generated batches made before this).
+    criteria_hash: Mapped[str | None] = mapped_column(Text)
 
     file_names: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     files_processed: Mapped[int] = mapped_column(Integer, nullable=False)

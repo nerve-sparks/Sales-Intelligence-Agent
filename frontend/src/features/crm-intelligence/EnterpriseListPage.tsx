@@ -595,6 +595,17 @@ export function EnterpriseListPage() {
   const [selectedBatchId, setSelectedBatchId] = useState(
     () => new URLSearchParams(window.location.search).get("import_batch_id") ?? "all",
   );
+  /* ?icp_id=... - the ICP page's "View these companies": exactly that ICP's
+     saved company list. Cleared with the chip above the table. */
+  const [icpFilter, setIcpFilter] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get("icp_id"),
+  );
+  const clearIcpFilter = () => {
+    setIcpFilter(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("icp_id");
+    window.history.replaceState(null, "", url.toString());
+  };
   const [statCards, setStatCards] = useState<StatCard[]>(emptyStats);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -659,12 +670,12 @@ export function EnterpriseListPage() {
   // Reset to page 1 whenever the filter or search changes.
   useEffect(() => {
     setPage(1);
-  }, [selectedBatchId, search]);
+  }, [selectedBatchId, search, icpFilter]);
 
   // Selection is per page - drop it when the rows it refers to go away.
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [selectedBatchId, search, page]);
+  }, [selectedBatchId, search, page, icpFilter]);
 
   // Every scored company, paginated + searched server-side, ordered by lead
   // score. selectedBatchId narrows to one upload's companies. No ICP filter -
@@ -682,6 +693,7 @@ export function EnterpriseListPage() {
         page_size: PAGE_SIZE,
         search: search || undefined,
         import_batch_id: selectedBatchId !== "all" ? selectedBatchId : undefined,
+        icp_id: icpFilter ?? undefined,
       })
         .then((res) => {
           setTotal(res.total);
@@ -692,7 +704,7 @@ export function EnterpriseListPage() {
     if (!shouldPoll) return;
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
-  }, [selectedBatchId, page, search, shouldPoll]);
+  }, [selectedBatchId, page, search, shouldPoll, icpFilter]);
 
   const toggleSelected = (companyId: string) =>
     setSelectedIds((prev) => {
@@ -834,6 +846,22 @@ export function EnterpriseListPage() {
                 selectedBatchId={selectedBatchId}
               />
             </div>
+
+            {icpFilter && (
+              <div className="mt-[12px] flex items-center gap-[8px]">
+                <span className="inline-flex items-center gap-[8px] rounded-[8px] bg-[#eef1ff] px-[10px] py-[5px] text-[12px] font-semibold text-[#4f46e5]">
+                  Showing an ICP's saved company list
+                  <button
+                    aria-label="Clear ICP filter"
+                    className="text-[#4f46e5] hover:text-[#312e81]"
+                    onClick={clearIcpFilter}
+                    type="button"
+                  >
+                    ✕
+                  </button>
+                </span>
+              </div>
+            )}
 
             <div className="mt-[16px]">
               <EnterpriseTable

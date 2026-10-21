@@ -510,7 +510,7 @@ async def test_generate_endpoint_creates_verified_companies_and_a_labelled_batch
 
         stored = (
             await session.execute(
-                select(IcpImportBatch).where(IcpImportBatch.import_batch_id == out.import_batch_id)
+                select(IcpImportBatch).where(IcpImportBatch.import_batch_id == out.new_batch.import_batch_id)
             )
         ).scalar_one()
 
@@ -520,13 +520,14 @@ async def test_generate_endpoint_creates_verified_companies_and_a_labelled_batch
     # Provenance, so the two populations stay comparable.
     assert stored.source == "generated"
     assert stored.icp_id == icp.icp_id
-    assert out.scoring_status == "pending"
+    assert out.new_batch.scoring_status == "pending"
+    assert out.reused is False and [c.company_name for c in out.companies] == ["Northwind Logistics"]
 
     # Handed to the SAME background task an upload uses - no parallel pipeline.
     assert len(background.tasks) == 1
     func, args, _kwargs = background.tasks[0]
     assert func is excel_pipeline.score_companies_in_background
-    assert args == (organisation_id, workspace_id, out.import_batch_id)
+    assert args == (organisation_id, workspace_id, out.new_batch.import_batch_id)
 
 
 async def test_re_running_the_same_icp_does_not_duplicate_companies(org_ctx, monkeypatch):
@@ -556,12 +557,11 @@ async def test_re_running_the_same_icp_does_not_duplicate_companies(org_ctx, mon
             workspace_id, icp.icp_id, GenerateLeadsIn(target=5), _FakeBackgroundTasks(), session
         )
 
-        # Second run: the company now already exists, so dedup rejects it and
-        # there is nothing new to create - which is itself the correct outcome.
-        with pytest.raises(Exception) as excinfo:
-            await icp_controller.generate(
-                workspace_id, icp.icp_id, GenerateLeadsIn(target=5), _FakeBackgroundTasks(), session
-            )
+        # Second run: nothing new can be found, so the saved list comes back
+        # (with a warning) instead of an error.
+        second = await icp_controller.generate(
+            workspace_id, icp.icp_id, GenerateLeadsIn(target=5), _FakeBackgroundTasks(), session
+        )
 
         companies = (
             await session.execute(
@@ -570,7 +570,132 @@ async def test_re_running_the_same_icp_does_not_duplicate_companies(org_ctx, mon
         ).scalars().all()
 
     assert len(companies) == 1, "re-running must not create a duplicate company"
-    assert "already in your data" in str(excinfo.value)
+    assert second.reused is True and [c.company_name for c in second.companies] == ["Northwind Logistics"]
+    assert any("stays at 1" in w for w in second.warnings)
+
+
+# ── one saved list per ICP ────────────────────────────────────────────────
+
+
+def _patch_generation(monkeypatch, names: list[str]):
+    """LLM proposes `names` (each verifiable as <slug>.com); records calls."""
+    calls: list[int] = []
+    monkeypatch.setattr(lead_generation.llm_client, "is_configured", lambda: True)
+    monkeypatch.setattr(lead_generation.you_client, "is_configured", lambda: True)
+
+    async def fake_complete(messages, **kwargs):
+        calls.append(1)
+        import json as _json
+        return _json.dumps([{"name": n, "country": "United States", "domain": None} for n in names])
+
+    monkeypatch.setattr(lead_generation.llm_client, "complete", fake_complete)
+    monkeypatch.setattr(
+        lead_generation.you_client, "search_query",
+        _fake_search({n: n.lower().replace(" ", "") + ".com" for n in names}),
+    )
+    return calls
+
+
+async def _generate(session, workspace_id, icp, target):
+    from app.controllers import icp as icp_controller
+    from app.schemas.icp import GenerateLeadsIn
+
+    return await icp_controller.generate(
+        workspace_id, icp.icp_id, GenerateLeadsIn(target=target), _FakeBackgroundTasks(), session
+    )
+
+
+async def test_same_icp_returns_the_saved_list_without_searching_again(org_ctx, monkeypatch):
+    _org, workspace_id = org_ctx
+    calls = _patch_generation(monkeypatch, ["Alpha Freight", "Beta Freight", "Gamma Freight"])
+    async with async_session_maker() as session:
+        icp = await create_icp(session, workspace_id, {"name": "Freight", "industries": ["Transportation"]})
+        first = await _generate(session, workspace_id, icp, 3)
+        calls_after_first = len(calls)
+        second = await _generate(session, workspace_id, icp, 3)
+        fewer = await _generate(session, workspace_id, icp, 2)
+
+    ids = [c.company_id for c in first.companies]
+    assert len(ids) == 3 and first.reused is False
+    assert second.reused is True and [c.company_id for c in second.companies] == ids
+    assert fewer.reused is True and [c.company_id for c in fewer.companies] == ids[:2]
+    assert len(calls) == calls_after_first, "a saved list must not trigger another LLM call"
+
+
+async def test_asking_for_more_keeps_the_saved_ones_and_finds_only_the_rest(org_ctx, monkeypatch):
+    _org, workspace_id = org_ctx
+    async with async_session_maker() as session:
+        icp = await create_icp(session, workspace_id, {"name": "Freight", "industries": ["Transportation"]})
+        _patch_generation(monkeypatch, ["Alpha Freight", "Beta Freight"])
+        first = await _generate(session, workspace_id, icp, 2)
+
+        asked: list[int] = []
+        real_generate = lead_generation.generate_leads
+
+        async def spy(session_, org_id, ws_id, icp_, target):
+            asked.append(target)
+            return await real_generate(session_, org_id, ws_id, icp_, target)
+
+        monkeypatch.setattr(lead_generation, "generate_leads", spy)
+        _patch_generation(monkeypatch, ["Delta Freight", "Echo Freight", "Foxtrot Freight"])
+        more = await _generate(session, workspace_id, icp, 5)
+
+    assert asked == [3], "only the missing companies are searched for"
+    names = [c.company_name for c in more.companies]
+    assert names[:2] == [c.company_name for c in first.companies], "saved companies come first"
+    assert set(names[2:]) == {"Delta Freight", "Echo Freight", "Foxtrot Freight"}
+    assert more.total_saved == 5 and more.reused is False
+
+
+async def test_editing_criteria_starts_a_fresh_list_but_renaming_does_not(org_ctx, monkeypatch):
+    from app.services.icp_service import criteria_fingerprint, update_icp
+
+    _org, workspace_id = org_ctx
+    _patch_generation(monkeypatch, ["Alpha Freight"])
+    async with async_session_maker() as session:
+        icp = await create_icp(session, workspace_id, {"name": "Freight", "industries": ["Transportation"]})
+        await _generate(session, workspace_id, icp, 1)
+        base = {"industries": ["Transportation"], "countries": [], "technologies": [], "departments": [],
+                "buying_committee_personas": [], "employee_min": None, "employee_max": None,
+                "revenue_min_usd": None, "revenue_max_usd": None}
+
+        renamed = await update_icp(session, workspace_id, icp.icp_id, {**base, "name": "Freight renamed"})
+        from app.services.icp_service import saved_company_count
+        assert await saved_company_count(session, workspace_id, renamed) == 1
+        before = criteria_fingerprint(renamed)
+
+        edited = await update_icp(session, workspace_id, icp.icp_id, {**base, "name": "Freight", "industries": ["Retail"]})
+        assert await saved_company_count(session, workspace_id, edited) == 0
+    assert criteria_fingerprint(edited) != before
+
+
+def test_fingerprint_ignores_order_and_case():
+    from types import SimpleNamespace
+
+    from app.services.icp_service import criteria_fingerprint
+
+    def icp(**kw):
+        base = dict(industries=[], countries=[], technologies=[], departments=[], buying_committee_personas=[],
+                    employee_min=None, employee_max=None, revenue_min_usd=None, revenue_max_usd=None)
+        return SimpleNamespace(**{**base, **kw})
+
+    assert criteria_fingerprint(icp(industries=["Retail", "Banking"])) == criteria_fingerprint(icp(industries=["banking ", "RETAIL"]))
+    assert criteria_fingerprint(icp(employee_min=50)) != criteria_fingerprint(icp(employee_min=51))
+
+
+async def test_enterprise_list_icp_filter_shows_exactly_the_saved_list(org_ctx, make_company, monkeypatch):
+    from app.controllers import companies as companies_controller
+
+    organisation_id, workspace_id = org_ctx
+    await make_company(company_name="Uploaded Unrelated Co")
+    _patch_generation(monkeypatch, ["Alpha Freight", "Beta Freight"])
+    async with async_session_maker() as session:
+        icp = await create_icp(session, workspace_id, {"name": "Freight", "industries": ["Transportation"]})
+        await _generate(session, workspace_id, icp, 2)
+        listed = await companies_controller.list_companies(
+            organisation_id, workspace_id, icp_id=icp.icp_id, db=session
+        )
+    assert sorted(i.company_name for i in listed.items) == ["Alpha Freight", "Beta Freight"]
 
 
 async def test_generate_reports_a_configuration_problem_distinctly(org_ctx, monkeypatch):

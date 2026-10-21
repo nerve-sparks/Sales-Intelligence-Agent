@@ -35,6 +35,7 @@ async def list_companies(
     page_size: int,
     search: str | None = None,
     import_batch_id: UUID | None = None,
+    company_ids: list[UUID] | None = None,
 ):
     stmt = (
         select(Company, LeadScore)
@@ -45,6 +46,9 @@ async def list_companies(
         stmt = stmt.where(Company.company_name.ilike(f"%{search}%"))
     if import_batch_id is not None:
         stmt = stmt.where(_in_batch(import_batch_id))
+    if company_ids is not None:
+        # An ICP's saved list (icp_service.saved_company_ids).
+        stmt = stmt.where(Company.company_id.in_(company_ids))
 
     total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
 

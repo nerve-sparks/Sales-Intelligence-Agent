@@ -123,6 +123,8 @@ class IcpOut(IcpBase):
     auto_generated: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # Companies in this ICP's saved list for its CURRENT criteria.
+    saved_company_count: int = 0
 
 
 class IcpOptionsOut(BaseModel):
@@ -160,3 +162,25 @@ class GenerateLeadsIn(BaseModel):
     """
 
     target: int = Field(default=25, ge=1, le=MAX_GENERATION_TARGET)
+
+
+class IcpSavedCompanyOut(BaseModel):
+    company_id: UUID
+    company_name: str
+    company_domain: str | None = None
+    lead_score: float | None = None
+    sales_status: str | None = None
+
+
+class IcpCompaniesOut(BaseModel):
+    """"Find companies" result: the ICP's saved list (top `requested`).
+    reused = nothing new was searched for; new_batch = the batch of newly
+    found companies being researched, for progress polling."""
+
+    icp_id: UUID
+    reused: bool
+    requested: int
+    total_saved: int
+    companies: list[IcpSavedCompanyOut]
+    new_batch: ImportBatchOut | None = None
+    warnings: list[str] = []

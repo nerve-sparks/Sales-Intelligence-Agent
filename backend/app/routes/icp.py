@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.controllers import icp as icp_controller
 from app.core.auth import require_workspace_member
-from app.schemas.icp import IcpOptionsOut, IcpOut, ImportBatchOut
+from app.schemas.icp import IcpCompaniesOut, IcpOptionsOut, IcpOut, ImportBatchOut
 
 # ICP definitions: workspace-scoped, same tenancy guard as every other
 # workspace route. Distinct from /workspaces/{id}/imports (routes/icp_imports.py),
@@ -24,6 +24,6 @@ router.delete("/{icp_id}", status_code=204)(icp_controller.delete)
 # Discovers new companies from this ICP and hands them to the existing
 # research/scoring pipeline. Returns the same ImportBatchOut an upload does, so
 # the frontend polls the existing job endpoints rather than anything new.
-router.post("/{icp_id}/generate", response_model=ImportBatchOut, status_code=201)(
+router.post("/{icp_id}/generate", response_model=IcpCompaniesOut)(
     icp_controller.generate
 )

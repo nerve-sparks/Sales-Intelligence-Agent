@@ -57,13 +57,15 @@ export type CompanyListOut = {
 
 export function listCompanies(
   organisationId: string,
-  params: { page?: number; page_size?: number; search?: string; import_batch_id?: string } = {},
+  params: { page?: number; page_size?: number; search?: string; import_batch_id?: string; icp_id?: string } = {},
 ): Promise<CompanyListOut> {
   const query = new URLSearchParams();
   if (params.page) query.set("page", String(params.page));
   if (params.page_size) query.set("page_size", String(params.page_size));
   if (params.search) query.set("search", params.search);
   if (params.import_batch_id) query.set("import_batch_id", params.import_batch_id);
+  // An ICP's saved company list ("View these companies" from the ICP page).
+  if (params.icp_id) query.set("icp_id", params.icp_id);
   const qs = withWorkspace(query).toString();
   return apiGet<CompanyListOut>(`/organisations/${organisationId}/companies${qs ? `?${qs}` : ""}`);
 }

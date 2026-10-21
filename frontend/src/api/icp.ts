@@ -226,6 +226,8 @@ export type IcpOut = {
   auto_generated: boolean;
   created_at: string | null;
   updated_at: string | null;
+  /* Companies in this ICP's saved list for its current criteria. */
+  saved_company_count: number;
 };
 
 export type IcpCreate = {
@@ -276,19 +278,39 @@ export function deleteIcp(workspaceId: string, icpId: string): Promise<void> {
   return apiDelete<void>(`/workspaces/${workspaceId}/icp/${icpId}`);
 }
 
-/* Discovers new companies from an ICP: an LLM proposes candidates, each is
- * verified against live web search, and only the verified ones become
- * companies. Returns the SAME ImportBatchOut an upload does, with
- * scoring_status "pending" - poll the existing job endpoints (getJobStatus /
- * getJobItems / retryFailedJobItems / cancelJob) exactly as for an upload.
+export type IcpSavedCompany = {
+  company_id: string;
+  company_name: string;
+  company_domain: string | null;
+  lead_score: number | null;
+  sales_status: string | null;
+};
+
+/* "Find companies" result: the ICP's saved list (top `requested`).
+ * reused = nothing new was searched for; new_batch = newly found companies
+ * still being researched - poll it with the existing job endpoints. */
+export type IcpCompaniesOut = {
+  icp_id: string;
+  reused: boolean;
+  requested: number;
+  total_saved: number;
+  companies: IcpSavedCompany[];
+  new_batch: ImportBatchOut | null;
+  warnings: string[];
+};
+
+/* One saved company list per ICP: the same ICP (same criteria) returns the
+ * same companies instantly. Only when more are requested than are saved does
+ * an LLM propose candidates (verified against live web search) for the
+ * missing ones. Editing the ICP's criteria starts a fresh list.
  *
- * Slow by nature (one search per candidate) and can legitimately fail with:
+ * Slow when it has to search, and can legitimately fail with:
  *   503 - the LLM or search service isn't configured
- *   422 - nothing new could be verified (all invented, or all already owned) */
+ *   422 - nothing could be verified and there is no saved list yet */
 export function generateLeads(
   workspaceId: string,
   icpId: string,
   target: number,
-): Promise<ImportBatchOut> {
-  return apiPost<ImportBatchOut>(`/workspaces/${workspaceId}/icp/${icpId}/generate`, { target });
+): Promise<IcpCompaniesOut> {
+  return apiPost<IcpCompaniesOut>(`/workspaces/${workspaceId}/icp/${icpId}/generate`, { target });
 }

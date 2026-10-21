@@ -492,6 +492,7 @@ async def record_import_batch(
     ingest_warnings: list[str] | None = None,
     source: str = "upload",
     icp_id: UUID | None = None,
+    criteria_hash: str | None = None,
 ) -> IcpImportBatch:
     """Persists one batch event for the Settings prospect-data history (and
     Enterprise List's per-batch filter) - a permanent audit record, scoped to
@@ -513,6 +514,7 @@ async def record_import_batch(
         workspace_id=workspace_id,
         icp_id=icp_id,
         source=source,
+        criteria_hash=criteria_hash,
         file_names=file_names,
         files_processed=len(file_names),
         total_rows=total_rows,

@@ -11,12 +11,66 @@ would reintroduce the design the pipeline deliberately moved away from; see
 ICP_LEAD_GENERATION_INTENT.md and evidence_scorer.py.
 """
 
+import hashlib
+import json
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import DecisionMaker, IcpProfile, Workspace
+from app.models import Company, CompanyImportBatch, DecisionMaker, IcpImportBatch, IcpProfile, Workspace
+
+# The ICP fields that drive company discovery (the same set
+# lead_generation._icp_summary puts in the prompt). `name` is deliberately
+# absent: renaming an ICP doesn't change which companies fit it.
+_CRITERIA_LIST_FIELDS = ("industries", "countries", "technologies", "departments", "buying_committee_personas")
+_CRITERIA_NUMBER_FIELDS = ("employee_min", "employee_max", "revenue_min_usd", "revenue_max_usd")
+
+
+def criteria_fingerprint(icp: IcpProfile) -> str:
+    """Stable hash of the ICP's discovery criteria - ignores list order, case
+    and stray whitespace, so only a real criteria change produces a new one."""
+    data = {
+        field: sorted({str(v).strip().lower() for v in (getattr(icp, field) or []) if str(v).strip()})
+        for field in _CRITERIA_LIST_FIELDS
+    }
+    for field in _CRITERIA_NUMBER_FIELDS:
+        data[field] = getattr(icp, field)
+    return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _saved_list_stmt(workspace_id: UUID, icp: IcpProfile):
+    """Membership rows of the ICP's saved list: companies from its generated
+    batches whose criteria match the ICP as it is NOW."""
+    return (
+        select(CompanyImportBatch.company_id, func.min(CompanyImportBatch.created_at).label("first_saved"))
+        .join(IcpImportBatch, IcpImportBatch.import_batch_id == CompanyImportBatch.import_batch_id)
+        .join(Company, Company.company_id == CompanyImportBatch.company_id)
+        .where(
+            IcpImportBatch.icp_id == icp.icp_id,
+            IcpImportBatch.source == "generated",
+            IcpImportBatch.criteria_hash == criteria_fingerprint(icp),
+            Company.workspace_id == workspace_id,
+        )
+        .group_by(CompanyImportBatch.company_id)
+    )
+
+
+async def saved_company_ids(session: AsyncSession, workspace_id: UUID, icp: IcpProfile) -> list[UUID]:
+    """The ICP's saved company list, in the order the companies were first
+    found (then by name, for a stable order within one run)."""
+    saved = _saved_list_stmt(workspace_id, icp).subquery()
+    stmt = (
+        select(saved.c.company_id)
+        .join(Company, Company.company_id == saved.c.company_id)
+        .order_by(saved.c.first_saved, Company.company_name)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def saved_company_count(session: AsyncSession, workspace_id: UUID, icp: IcpProfile) -> int:
+    saved = _saved_list_stmt(workspace_id, icp).subquery()
+    return (await session.execute(select(func.count()).select_from(saved))).scalar_one()
 
 
 async def create_icp(session: AsyncSession, workspace_id: UUID, values: dict) -> IcpProfile:

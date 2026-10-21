@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.models import Company, CompanyImportBatch, Organisation, Workspace
 from app.services import company_directory, company_refresh_service, excel_pipeline, llm_client, signal_directory
+from app.services.icp_service import get_icp, saved_company_ids
 from app.services.offering_profile_service import profile_for_scoring
 from app.schemas.company import (
     CompanyInsightOut,
@@ -32,11 +33,19 @@ async def list_companies(
     page_size: int = 25,
     search: str | None = None,
     import_batch_id: UUID | None = None,
+    icp_id: UUID | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     page_size = min(page_size, 100)
+    company_ids = None
+    if icp_id is not None:
+        # "View these companies" from an ICP: exactly its saved list.
+        icp = await get_icp(db, workspace_id, icp_id)
+        if icp is None:
+            raise HTTPException(status_code=404, detail="icp not found")
+        company_ids = await saved_company_ids(db, workspace_id, icp)
     rows, total = await company_directory.list_companies(
-        db, workspace_id, page, page_size, search, import_batch_id
+        db, workspace_id, page, page_size, search, import_batch_id, company_ids=company_ids
     )
     def _num(v):
         return float(v) if v is not None else None
